@@ -1,0 +1,23 @@
+# Belt and braces: the app's own .gitignore covers these too, but a rule at the
+# root means a stray copy anywhere in the tree is still kept out.
+
+# secrets
+.env
+.env.*
+!.env.example
+
+# client data - uploaded ledgers, exports, generated fixtures
+storage/
+**/storage/
+
+# dependencies and build output
+node_modules/
+.next/
+out/
+build/
+*.tsbuildinfo
+
+# editor / OS
+.DS_Store
+Thumbs.db
+*.pem

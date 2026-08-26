@@ -1,0 +1,120 @@
+@import "tailwindcss";
+
+/* ============================================================
+   Design tokens.
+   Restrained navy-on-paper palette. Colour is reserved for
+   meaning - variances, insights, status - never decoration.
+   ============================================================ */
+@theme {
+  /* surfaces */
+  --color-paper: #fbfaf8;
+  --color-surface: #ffffff;
+  --color-surface-sunk: #f5f3f0;
+
+  /* ink */
+  --color-ink: #16263c;
+  --color-ink-muted: #64717f;
+  --color-ink-faint: #98a1ac;
+  --color-ink-invert: #f7f8fa;
+
+  /* rules and edges */
+  --color-line: #e8e5e0;
+  --color-line-strong: #d4d0c9;
+
+  /* brand */
+  --color-navy: #1e3a5f;
+  --color-navy-deep: #16263c;
+  --color-navy-tint: #edf1f6;
+  --color-navy-tint-strong: #dbe4ee;
+
+  /* semantics - deliberately desaturated */
+  --color-positive: #2f6f5b;
+  --color-positive-tint: #eaf2ef;
+  --color-negative: #a8443b;
+  --color-negative-tint: #f9edec;
+  --color-caution: #8a6a3b;
+  --color-caution-tint: #faf4e9;
+
+  /* snapshot tiles - a soft wash of the tile's own semantic colour, so a row of
+     headline figures reads as one set instead of six white boxes. Paler than
+     the notice tints: a tile is read at a glance, not stopped at. */
+  --color-tile-navy: #e8eff8;
+  --color-tile-positive: #e5f0eb;
+  --color-tile-caution: #f8f0e0;
+  --color-tile-negative: #f9e9e6;
+
+  /* categorical series for charts - muted, distinguishable, colourblind-safe order */
+  --color-series-1: #1e3a5f;
+  --color-series-2: #4a7a96;
+  --color-series-3: #79a8ae;
+  --color-series-4: #8a6a3b;
+  --color-series-5: #a8756b;
+  --color-series-6: #5c6b8a;
+  --color-series-7: #2f6f5b;
+  --color-series-8: #9b8fa8;
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-display: var(--font-serif), Georgia, "Times New Roman", serif;
+
+  --radius-card: 0.625rem;
+}
+
+/* ============================================================
+   Base
+   ============================================================ */
+html {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--color-paper);
+}
+
+/* Figures must line up in columns. Applied to every numeric cell. */
+.num {
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  letter-spacing: -0.01em;
+}
+
+/* Negative figures in statements are shown in brackets, the accounting way. */
+.num-negative::before {
+  content: "(";
+}
+.num-negative::after {
+  content: ")";
+}
+
+/* A hairline that reads as a rule, not a border. */
+.rule {
+  border-color: var(--color-line);
+}
+
+/* Sticky first column for wide statement tables on small screens.
+   Deliberately no background here: this rule is unlayered, so it would beat
+   Tailwind's layered bg-* utilities and leave the label cells transparent.
+   Each cell sets its own opaque background instead. */
+.sticky-label {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+}
+
+/* Give the scroll container a soft edge so users can see there is more to the right. */
+.scroll-fade {
+  -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 24px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 24px), transparent 100%);
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  html,
+  body {
+    background: #fff;
+  }
+}

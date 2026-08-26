@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "akshayam-fpa",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "akshayam-fpa", "run", "dev"],
+      "port": 3000
+    }
+  ]
+}
