@@ -9,12 +9,20 @@ const TABS = [
   { href: "/settings/verticals", label: "Verticals" },
 ];
 
-/** Sub-navigation for the settings area. */
-export function SettingsTabs() {
+/**
+ * Sub-navigation for the settings area.
+ *
+ * People is an admin-only tab, so it is appended rather than listed above -
+ * a contributor should not be shown a tab that would only turn them away.
+ */
+export function SettingsTabs({ canManageUsers = false }: { canManageUsers?: boolean }) {
   const pathname = usePathname();
+  const tabs = canManageUsers
+    ? [...TABS, { href: "/settings/users", label: "People" }]
+    : TABS;
   return (
     <div className="no-print mb-6 flex gap-1 border-b border-line">
-      {TABS.map((tab) => {
+      {tabs.map((tab) => {
         const active = pathname.startsWith(tab.href);
         return (
           <Link

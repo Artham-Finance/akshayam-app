@@ -15,6 +15,7 @@ import { getEntity, getVerticals, verticalScope } from "@/lib/entity";
 import { compactINR, dateLabel, money, percent, share } from "@/lib/format";
 import { withParams } from "@/lib/href";
 import { isDrill, runDrill } from "@/lib/reports/drilldowns";
+import { requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +61,7 @@ export default async function ReceivablesPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  await requireEntityAccess();
   const params = await searchParams;
 
   try {

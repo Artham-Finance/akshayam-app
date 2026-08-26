@@ -3,6 +3,7 @@ import { UploadForm, type UploadKindInfo } from "@/components/UploadForm";
 import { CompanyOnly, Notice, PageHeader } from "@/components/ui";
 import { query } from "@/lib/db";
 import { getEntity } from "@/lib/entity";
+import { requirePermissionAndEntity } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -83,6 +84,7 @@ const KINDS: Omit<UploadKindInfo, "lastUpload">[] = [
 ];
 
 export default async function UploadPage() {
+  await requirePermissionAndEntity("data.upload");
   try {
     const entity = await getEntity();
     if (entity.isGroup) {

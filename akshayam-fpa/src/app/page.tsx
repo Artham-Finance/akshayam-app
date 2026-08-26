@@ -12,10 +12,12 @@ import { compactINR, dateLabel, percent, share } from "@/lib/format";
 import { fyLabel } from "@/lib/period";
 import { ledgerWrittenTo, resolvePeriod } from "@/lib/reporting-period";
 import { buildProfitAndLoss } from "@/lib/reports/statements";
+import { requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
 export default async function OverviewPage() {
+  await requireEntityAccess();
   try {
     const entity = await getEntity();
     const [availableYears, unmapped, uploadCount] = await Promise.all([

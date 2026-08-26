@@ -253,6 +253,9 @@ interface FileMeta {
   byteSize: number;
   sha256: string;
   storedPath?: string | null;
+  /** Who sent it. Carried on the meta so every commit path records it without
+   *  each of them growing an extra argument. */
+  uploadedBy?: number | null;
 }
 
 async function createUpload(
@@ -268,8 +271,8 @@ async function createUpload(
   const result = await client.query<{ id: number }>(
     `insert into uploads
        (entity_id, kind, original_name, stored_path, byte_size, sha256,
-        period_start, period_end, row_count, status, notes)
-     values ($1, $2::upload_kind, $3, $4, $5, $6, $7, $8, $9, 'committed', $10)
+        period_start, period_end, row_count, status, notes, uploaded_by)
+     values ($1, $2::upload_kind, $3, $4, $5, $6, $7, $8, $9, 'committed', $10, $11)
      returning id`,
     [
       entityId,
@@ -282,6 +285,7 @@ async function createUpload(
       periodEnd,
       rowCount,
       JSON.stringify(notes ?? {}),
+      meta.uploadedBy ?? null,
     ],
   );
   return result.rows[0].id;

@@ -19,6 +19,7 @@ import { parseGeneralLedger } from "@/lib/parse/gl";
 import { parseRetainers } from "@/lib/parse/retainers";
 import { parseArAging, parseCreditNotes, parseInvoices, parsePayments } from "@/lib/parse/sales";
 import { parseTrialBalance, type TbBasis } from "@/lib/parse/tb";
+import { apiGuard } from "@/lib/auth/dal";
 
 export const runtime = "nodejs";
 // Ledger exports can be large and parsing is CPU-bound; give it room.
@@ -35,6 +36,9 @@ function isKind(value: string): value is Kind {
 }
 
 export async function POST(request: Request) {
+  const { user, denied } = await apiGuard("data.upload");
+  if (denied) return denied;
+
   let form: FormData;
   try {
     form = await request.formData();
@@ -78,7 +82,13 @@ export async function POST(request: Request) {
     storedPath = null; // not fatal - the parsed data is what matters
   }
 
-  const meta = { originalName: file.name, byteSize: bytes.byteLength, sha256, storedPath };
+  const meta = {
+    originalName: file.name,
+    byteSize: bytes.byteLength,
+    sha256,
+    storedPath,
+    uploadedBy: user.id,
+  };
 
   try {
     const entity = await getEntity();

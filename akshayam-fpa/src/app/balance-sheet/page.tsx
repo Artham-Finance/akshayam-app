@@ -18,6 +18,7 @@ import { withParams } from "@/lib/href";
 import { money } from "@/lib/format";
 import { fyLabel, fyStartYearOf } from "@/lib/period";
 import { buildBalanceSheet } from "@/lib/reports/statements";
+import { requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,7 @@ export default async function BalanceSheetPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  await requireEntityAccess();
   const params = await searchParams;
 
   try {

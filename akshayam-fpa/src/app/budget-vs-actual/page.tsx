@@ -22,6 +22,7 @@ import { fyLabel, fyMonths, type QuarterNo } from "@/lib/period";
 import { ledgerWrittenTo } from "@/lib/reporting-period";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
 import { buildExpenseDetail } from "@/lib/reports/expense-detail";
+import { requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,7 @@ export default async function BudgetVsActualPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  await requireEntityAccess();
   const params = await searchParams;
 
   try {

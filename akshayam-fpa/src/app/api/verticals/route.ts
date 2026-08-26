@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { queryOne, transaction } from "@/lib/db";
 import { getEntity } from "@/lib/entity";
+import { apiGuard } from "@/lib/auth/dal";
 
 export const runtime = "nodejs";
 
@@ -32,6 +33,9 @@ const BodySchema = z.discriminatedUnion("action", [
 ]);
 
 export async function POST(request: Request) {
+  const { denied } = await apiGuard("verticals.manage");
+  if (denied) return denied;
+
   let payload: unknown;
   try {
     payload = await request.json();

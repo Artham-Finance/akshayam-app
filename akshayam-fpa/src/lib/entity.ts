@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { query, queryOne } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth/dal";
 
 /**
  * Entity resolution.
@@ -13,6 +14,13 @@ import { query, queryOne } from "@/lib/db";
  * Every report therefore reads `memberIds` - one company for a company, both
  * for the group - and filters on `entity_id = any(...)`. No page needs to know
  * which case it is looking at, and adding a third company would need no code.
+ *
+ * Access control rides on the same idea. Every page already resolves its
+ * entity through `getEntity`, so restricting *that* restricts the whole
+ * application at once: a user who was never granted RAJA cannot select it,
+ * cannot land on it from a stale cookie, and cannot reach its figures by
+ * guessing a URL. Putting the check anywhere else would mean remembering it on
+ * each of nine report pages, and the one that got forgotten would be the leak.
  */
 
 export interface Entity {
@@ -102,9 +110,30 @@ function hydrate(row: EntityRow): Entity {
   };
 }
 
-export async function listEntities(): Promise<Entity[]> {
+/**
+ * Every entity in the database, ignoring who is asking.
+ *
+ * For scripts and for the admin screens that must offer entities a user has
+ * not been granted - you cannot grant access to a company the picker refuses
+ * to list. Pages should call `listEntities`.
+ */
+export async function listAllEntities(): Promise<Entity[]> {
   const rows = await query<EntityRow>(`${ENTITY_SELECT} order by id`);
   return rows.map(hydrate);
+}
+
+/**
+ * The entities the current user may see.
+ *
+ * Falls back to everything when there is no user in scope at all, which means
+ * a script or the build - not an anonymous visitor, who has no route into a
+ * page that calls this without passing `requireUser` first.
+ */
+export async function listEntities(): Promise<Entity[]> {
+  const all = await listAllEntities();
+  const user = await getCurrentUser();
+  if (!user) return all;
+  return all.filter((e) => user.entityIds.includes(e.id));
 }
 
 /** The slug requested by the cookie, when we are inside a request. */
@@ -118,21 +147,49 @@ async function slugFromCookie(): Promise<string | null> {
   }
 }
 
+/** Raised when a user is signed in but has been granted no companies at all. */
+export class NoEntityAccessError extends Error {
+  constructor() {
+    super("You have not been given access to any company yet.");
+    this.name = "NoEntityAccessError";
+  }
+}
+
+/**
+ * The active entity, honouring both the cookie and the user's grants.
+ *
+ * A cookie naming a company the user may not see is ignored rather than
+ * refused: the usual way to hold one is to have had access withdrawn, or to
+ * share a laptop, and neither deserves an error page. They land on the first
+ * company they *are* entitled to instead.
+ */
 export async function getEntity(slug?: string): Promise<Entity> {
+  const user = await getCurrentUser();
+  const permitted = user ? new Set(user.entityIds) : null;
+  const allowed = (e: Entity) => permitted === null || permitted.has(e.id);
+
   const wanted = slug ?? (await slugFromCookie());
 
   if (wanted) {
     const match = await queryOne<EntityRow>(`${ENTITY_SELECT} where slug = $1`, [wanted]);
-    if (match) return hydrate(match);
+    if (match) {
+      const entity = hydrate(match);
+      if (allowed(entity)) return entity;
+    }
   }
 
-  const first = await queryOne<EntityRow>(`${ENTITY_SELECT} order by id limit 1`);
+  const all = await listAllEntities();
+  const first = all.find(allowed);
   if (!first) {
-    throw new Error(
-      'No companies are set up. Run "npm run db:migrate" to create the schema and seed data.',
-    );
+    if (all.length === 0) {
+      throw new Error(
+        'No companies are set up. Run "npm run db:migrate" to create the schema and seed data.',
+      );
+    }
+    // Companies exist; this user was simply granted none of them.
+    throw new NoEntityAccessError();
   }
-  return hydrate(first);
+  return first;
 }
 
 /**

@@ -1,0 +1,54 @@
+[
+  {
+    "ParameterKey": "AvailabilityZone",
+    "ParameterValue": "ap-south-1b"
+  },
+  {
+    "ParameterKey": "BundleId",
+    "ParameterValue": "nano_2_1"
+  },
+  {
+    "ParameterKey": "SshPublicKey",
+    "ParameterValue": "ssh-rsa AAAA... your-key-here"
+  },
+  {
+    "ParameterKey": "SshPublicKey2",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "GithubRepository",
+    "ParameterValue": "Artham-Finance/akshayam-app"
+  },
+  {
+    "ParameterKey": "GithubBranch",
+    "ParameterValue": "main"
+  },
+  {
+    "ParameterKey": "GithubToken",
+    "ParameterValue": "ghp_xxxxxxxxxxxxxxxxxxxx"
+  },
+  {
+    "ParameterKey": "Domain",
+    "ParameterValue": "akshayam.artham.app"
+  },
+  {
+    "ParameterKey": "CertbotEmail",
+    "ParameterValue": "admin@artham.app"
+  },
+  {
+    "ParameterKey": "DbPassword",
+    "ParameterValue": "change-me-alphanumeric-password"
+  },
+  {
+    "ParameterKey": "BasicAuthUser",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "BasicAuthPassword",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "AllocateStaticIp",
+    "ParameterValue": "false"
+  }
+]

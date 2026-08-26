@@ -25,6 +25,7 @@ import { ledgerWrittenTo } from "@/lib/reporting-period";
 import { buildApportionment } from "@/lib/reports/apportionment";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
 import { buildProfitAndLoss } from "@/lib/reports/statements";
+import { requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,7 @@ export default async function ProfitAndLossPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  await requireEntityAccess();
   const params = await searchParams;
 
   try {

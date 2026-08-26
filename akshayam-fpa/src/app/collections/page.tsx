@@ -21,6 +21,7 @@ import { fyBounds, fyLabel, fyMonths } from "@/lib/period";
 import { ledgerWrittenTo, resolvePeriod } from "@/lib/reporting-period";
 import { buildBudgetVsActual } from "@/lib/reports/budget";
 import { isDrill, runDrill, UNTRACEABLE_RECEIPT } from "@/lib/reports/drilldowns";
+import { requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +40,7 @@ export default async function CollectionsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  await requireEntityAccess();
   const params = await searchParams;
 
   try {

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { query } from "@/lib/db";
 import { getEntity } from "@/lib/entity";
+import { apiGuard } from "@/lib/auth/dal";
 
 export const runtime = "nodejs";
 
@@ -36,6 +37,9 @@ const Remove = z.object({
 const Body = z.discriminatedUnion("action", [Create, Remove]);
 
 export async function POST(request: Request) {
+  const { denied } = await apiGuard("expenses.record");
+  if (denied) return denied;
+
   let parsed: z.infer<typeof Body>;
   try {
     parsed = Body.parse(await request.json());

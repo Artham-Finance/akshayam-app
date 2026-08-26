@@ -11,7 +11,8 @@
     "db:migrate": "node --env-file-if-exists=.env.local db/migrate.mjs",
     "db:reset": "node --env-file-if-exists=.env.local db/migrate.mjs --reset",
     "fixtures": "node scripts/make-fixtures.mjs ./storage/fixtures",
-    "test:parsers": "tsx scripts/check-parsers.mts ./storage/fixtures"
+    "test:parsers": "tsx scripts/check-parsers.mts ./storage/fixtures",
+    "seed:admin": "node --env-file-if-exists=.env.local db/seed-admin.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

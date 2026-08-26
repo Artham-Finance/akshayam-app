@@ -3,10 +3,12 @@ import { VerticalMapper, type VerticalRow } from "@/components/VerticalMapper";
 import { CompanyOnly, EmptyState, Notice, PageHeader } from "@/components/ui";
 import { query } from "@/lib/db";
 import { getEntity } from "@/lib/entity";
+import { requirePermissionAndEntity } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
 export default async function VerticalSettingsPage() {
+  await requirePermissionAndEntity("verticals.manage");
   try {
     const entity = await getEntity();
     if (entity.isGroup) {

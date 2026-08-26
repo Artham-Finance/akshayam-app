@@ -1,0 +1,373 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Akshayam FP&A Production — Lightsail nano_2_1 (512 MB RAM), on-box PostgreSQL,
+  PM2, nginx, certbot, static IP. Region: ap-south-1
+
+Parameters:
+  AvailabilityZone:
+    Type: String
+    Default: ap-south-1b
+    Description: Lightsail AZ (must be in ap-south-1; try a different AZ if a plan reports no capacity)
+
+  BundleId:
+    Type: String
+    Default: nano_2_1
+    Description: >
+      Lightsail bundle — nano_2_1 = 512 MB RAM / 1 vCPU / 20 GB SSD.
+      512 MB is tight for `next build`; the bootstrap adds 4 GB swap to compensate.
+
+  SshPublicKey:
+    Type: String
+    Description: SSH public key content (e.g. from ~/.ssh/id_rsa.pub) for SSH access
+
+  SshPublicKey2:
+    Type: String
+    Default: ""
+    Description: Optional second SSH public key (e.g. a laptop on a different key)
+
+  # ── GitHub ─────────────────────────────────────────────────────────────────
+  GithubRepository:
+    Type: String
+    Default: "Artham-Finance/akshayam-app"
+    Description: "GitHub repo in org/repo format"
+
+  GithubBranch:
+    Type: String
+    Default: "main"
+
+  GithubToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub Personal Access Token with repo read access (for git clone)
+
+  # ── App config ─────────────────────────────────────────────────────────────
+  Domain:
+    Type: String
+    Default: "akshayam.artham.app"
+    Description: Public hostname for the app
+
+  CertbotEmail:
+    Type: String
+    Default: "admin@artham.app"
+    Description: Contact email for Let's Encrypt / certbot
+
+  DbPassword:
+    Type: String
+    NoEcho: true
+    Description: Password for the on-box PostgreSQL 'akshayam' role (alphanumeric recommended)
+
+  # ── Gate ───────────────────────────────────────────────────────────────────
+  # The app itself has NO login. nginx HTTP Basic Auth is the only thing between
+  # the internet and the financials, so it is on by default.
+  BasicAuthUser:
+    Type: String
+    Default: "akshayam"
+    Description: nginx basic-auth username (set to empty string to disable the gate entirely)
+
+  BasicAuthPassword:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: nginx basic-auth password. Required unless BasicAuthUser is empty.
+
+  # ── Networking ─────────────────────────────────────────────────────────────
+  AllocateStaticIp:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Attach a Lightsail static IP. The account quota is 5 per region and all 5
+      are currently in use, so this defaults to false — the instance uses its
+      dynamic public IP, which survives reboots but changes on stop/start.
+      Flip to true once a static IP is free (or the quota is raised).
+
+Conditions:
+  UseBasicAuth: !Not [!Equals [!Ref BasicAuthUser, ""]]
+  UseStaticIp: !Equals [!Ref AllocateStaticIp, "true"]
+
+Resources:
+  # ── Lightsail Instance ─────────────────────────────────────────────────────
+  ProdInstance:
+    Type: AWS::Lightsail::Instance
+    Properties:
+      InstanceName: akshayam-prod
+      AvailabilityZone: !Ref AvailabilityZone
+      BlueprintId: ubuntu_22_04
+      BundleId: !Ref BundleId
+      # NOTE: no Tags — the deploy IAM user lacks lightsail:TagResource, and the
+      # InstanceName already identifies the resource.
+      Networking:
+        Ports:
+          - FromPort: 22
+            ToPort: 22
+            Protocol: tcp
+            AccessFrom: "0.0.0.0/0"
+          - FromPort: 80
+            ToPort: 80
+            Protocol: tcp
+            AccessFrom: "0.0.0.0/0"
+          - FromPort: 443
+            ToPort: 443
+            Protocol: tcp
+            AccessFrom: "0.0.0.0/0"
+      UserData: !Sub
+        - |
+          #!/bin/bash
+          set -e
+          exec > /var/log/akshayam-bootstrap.log 2>&1
+
+          APP_DIR=/app
+          WEB_DIR=/app/akshayam-fpa
+          UPLOAD_DIR=/var/lib/akshayam/uploads
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Akshayam FP&A Bootstrap — $(date)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          # ── SSH key ─────────────────────────────────────────────────────────
+          mkdir -p /home/ubuntu/.ssh
+          echo "${SshPublicKey}" >> /home/ubuntu/.ssh/authorized_keys
+          echo "${SshPublicKey2}" >> /home/ubuntu/.ssh/authorized_keys
+          sed -i '/^$/d' /home/ubuntu/.ssh/authorized_keys
+          chmod 700 /home/ubuntu/.ssh && chmod 600 /home/ubuntu/.ssh/authorized_keys
+          chown -R ubuntu:ubuntu /home/ubuntu/.ssh
+
+          # ── Swap FIRST — 512 MB alone cannot run `npm ci` or `next build` ───
+          fallocate -l 4G /swapfile
+          chmod 600 /swapfile
+          mkswap /swapfile
+          swapon /swapfile
+          echo '/swapfile none swap sw 0 0' >> /etc/fstab
+          sysctl -w vm.swappiness=20
+          echo 'vm.swappiness=20' >> /etc/sysctl.conf
+          echo "✅ 4 GB swap enabled"
+
+          # ── System packages ─────────────────────────────────────────────────
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y -qq curl git nginx certbot python3-certbot-nginx \
+            postgresql postgresql-contrib apache2-utils ca-certificates gnupg lsb-release unzip
+
+          # ── PostgreSQL (on-box) — trimmed for a 512 MB box ──────────────────
+          systemctl enable --now postgresql
+          PGCONF=$(sudo -u postgres psql -tAc "SHOW config_file;")
+          sed -i "s/^#*max_connections.*/max_connections = 40/" "$PGCONF"
+          sed -i "s/^#*shared_buffers.*/shared_buffers = 64MB/" "$PGCONF"
+          sed -i "s/^#*work_mem.*/work_mem = 4MB/" "$PGCONF"
+          sed -i "s/^#*maintenance_work_mem.*/maintenance_work_mem = 32MB/" "$PGCONF"
+          sed -i "s/^#*effective_cache_size.*/effective_cache_size = 256MB/" "$PGCONF"
+          systemctl restart postgresql
+
+          sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='akshayam'" | grep -q 1 || \
+            sudo -u postgres psql -c "CREATE USER akshayam WITH PASSWORD '${DbPassword}';"
+          sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='akshayam'" | grep -q 1 || \
+            sudo -u postgres psql -c "CREATE DATABASE akshayam OWNER akshayam;"
+          echo "✅ PostgreSQL ready (db: akshayam, user: akshayam)"
+
+          # ── Node.js 22 (Next 16 needs >= 20; 22 is current LTS) ─────────────
+          curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+          apt-get install -y -qq nodejs
+          echo "✅ Node $(node -v) | npm $(npm -v)"
+
+          # ── PM2 ─────────────────────────────────────────────────────────────
+          npm install -g pm2
+          pm2 startup systemd -u ubuntu --hp /home/ubuntu | grep "sudo env" | bash || true
+          echo "✅ PM2 $(pm2 -v)"
+
+          # ── Clone repo ──────────────────────────────────────────────────────
+          mkdir -p $APP_DIR
+          chown ubuntu:ubuntu $APP_DIR
+          sudo -u ubuntu git clone --branch ${GithubBranch} \
+            https://${GithubToken}@github.com/${GithubRepository}.git $APP_DIR
+          echo "✅ Repo cloned"
+
+          # ── Persist the GitHub token for future pulls ───────────────────────
+          sudo -u ubuntu git -C $APP_DIR config credential.helper store
+          echo "https://${GithubToken}:x-oauth-basic@github.com" > /home/ubuntu/.git-credentials
+          chown ubuntu:ubuntu /home/ubuntu/.git-credentials
+          chmod 600 /home/ubuntu/.git-credentials
+
+          # ── Uploads live outside the git tree so `git pull` never wipes them ─
+          mkdir -p $UPLOAD_DIR
+          chown -R ubuntu:ubuntu /var/lib/akshayam
+
+          # ── .env.local — read by `next start` and by db/migrate.mjs ─────────
+          cat > $WEB_DIR/.env.local << ENVEOF
+          NODE_ENV=production
+          PORT=3000
+          DATABASE_URL=postgres://akshayam:${DbPassword}@localhost:5432/akshayam
+          UPLOAD_DIR=$UPLOAD_DIR
+          ENVEOF
+          chown ubuntu:ubuntu $WEB_DIR/.env.local
+          chmod 600 $WEB_DIR/.env.local
+
+          # ── Install deps, migrate, build ────────────────────────────────────
+          # --max-old-space-size caps V8 so the build swaps instead of OOM-killing.
+          cd $WEB_DIR
+          sudo -u ubuntu env NODE_OPTIONS=--max-old-space-size=1024 npm ci
+          sudo -u ubuntu npm run db:migrate
+          sudo -u ubuntu env NODE_OPTIONS=--max-old-space-size=1024 npm run build
+          echo "✅ Deps + migrations + build complete"
+
+          # ── PM2 ecosystem ───────────────────────────────────────────────────
+          cat > $APP_DIR/ecosystem.config.cjs << 'PMEOF'
+          module.exports = {
+            apps: [{
+              name: 'akshayam',
+              script: 'node_modules/next/dist/bin/next',
+              args: 'start -p 3000',
+              cwd: '/app/akshayam-fpa',
+              instances: 1,
+              autorestart: true,
+              watch: false,
+              max_memory_restart: '450M',
+              node_args: '--max-old-space-size=384',
+              env: { NODE_ENV: 'production', PORT: '3000' },
+              error_file: '/home/ubuntu/.pm2/logs/akshayam-error.log',
+              out_file: '/home/ubuntu/.pm2/logs/akshayam-out.log',
+              log_date_format: 'YYYY-MM-DDTHH:mm:ss'
+            }]
+          }
+          PMEOF
+          chown ubuntu:ubuntu $APP_DIR/ecosystem.config.cjs
+
+          sudo -u ubuntu pm2 start $APP_DIR/ecosystem.config.cjs
+          sudo -u ubuntu pm2 save
+          echo "✅ PM2 started"
+
+          # ── Basic-auth credentials (skipped when BasicAuthUser is empty) ────
+          ${BasicAuthSetup}
+
+          # ── nginx reverse proxy ─────────────────────────────────────────────
+          cat > /etc/nginx/sites-available/akshayam << NGINXEOF
+          server {
+              listen 80;
+              server_name ${Domain};
+              client_max_body_size 50M;
+
+              location / {
+                  ${BasicAuthDirectives}
+                  proxy_pass http://localhost:3000;
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade \$http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host \$host;
+                  proxy_set_header X-Real-IP \$remote_addr;
+                  proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto \$scheme;
+                  proxy_cache_bypass \$http_upgrade;
+                  proxy_read_timeout 300s;
+              }
+          }
+          NGINXEOF
+
+          ln -sf /etc/nginx/sites-available/akshayam /etc/nginx/sites-enabled/akshayam
+          rm -f /etc/nginx/sites-enabled/default
+          nginx -t && systemctl restart nginx
+          systemctl enable nginx
+          echo "✅ nginx configured"
+
+          systemctl enable certbot.timer
+          systemctl start certbot.timer
+
+          # ── One-shot SSL script (run once DNS resolves) ─────────────────────
+          cat > $APP_DIR/init-ssl.sh << SSLEOF
+          #!/bin/bash
+          if [ "${Domain}" = "_" ]; then
+            echo "❌ No Domain set (server_name is the catch-all '_'). Set a real hostname first —"
+            echo "   see the AddDomainLater stack output."
+            exit 1
+          fi
+          certbot --nginx -d ${Domain} --non-interactive --agree-tos -m ${CertbotEmail} --redirect
+          echo "✅ SSL certificate issued for ${Domain}"
+          SSLEOF
+          chmod +x $APP_DIR/init-ssl.sh
+          chown ubuntu:ubuntu $APP_DIR/init-ssl.sh
+
+          # ── Redeploy script ─────────────────────────────────────────────────
+          cat > $APP_DIR/deploy.sh << 'DEPLOYEOF'
+          #!/bin/bash
+          set -e
+          cd /app
+          echo "→ Pulling latest code..."
+          git pull origin main
+          cd /app/akshayam-fpa
+          echo "→ Installing dependencies..."
+          NODE_OPTIONS=--max-old-space-size=1024 npm ci
+          echo "→ Applying migrations..."
+          npm run db:migrate
+          echo "→ Building..."
+          NODE_OPTIONS=--max-old-space-size=1024 npm run build
+          echo "→ Restarting PM2..."
+          pm2 restart akshayam --update-env
+          pm2 save
+          echo "✅ Deployed at $(date)"
+          DEPLOYEOF
+          chmod +x $APP_DIR/deploy.sh
+          chown ubuntu:ubuntu $APP_DIR/deploy.sh
+
+          # ── Nightly pg_dump, keep 7 days ────────────────────────────────────
+          mkdir -p /var/backups/akshayam
+          chown ubuntu:ubuntu /var/backups/akshayam
+          cat > /etc/cron.daily/akshayam-db-backup << 'BAKEOF'
+          #!/bin/bash
+          set -e
+          STAMP=$(date +%F)
+          sudo -u postgres pg_dump akshayam | gzip > /var/backups/akshayam/akshayam-$STAMP.sql.gz
+          find /var/backups/akshayam -name 'akshayam-*.sql.gz' -mtime +7 -delete
+          BAKEOF
+          chmod +x /etc/cron.daily/akshayam-db-backup
+
+          echo ""
+          echo "═══════════════════════════════════════════════"
+          echo "✅ Bootstrap complete — app on port 3000, nginx on 80"
+          echo "   Point ${Domain} at this IP, then run /app/init-ssl.sh"
+          echo "═══════════════════════════════════════════════"
+        - BasicAuthSetup: !If
+            - UseBasicAuth
+            - !Sub "htpasswd -bc /etc/nginx/.htpasswd '${BasicAuthUser}' '${BasicAuthPassword}' && chmod 640 /etc/nginx/.htpasswd && chown root:www-data /etc/nginx/.htpasswd"
+            - "echo 'ℹ️  Basic auth disabled — the app is fully public.'"
+          BasicAuthDirectives: !If
+            - UseBasicAuth
+            - "auth_basic \"Akshayam\";\n            auth_basic_user_file /etc/nginx/.htpasswd;"
+            - "# basic auth disabled"
+
+  # ── Static IP ──────────────────────────────────────────────────────────────
+  ProdStaticIp:
+    Type: AWS::Lightsail::StaticIp
+    Condition: UseStaticIp
+    DependsOn: ProdInstance
+    Properties:
+      StaticIpName: akshayam-prod-ip
+      AttachedTo: akshayam-prod
+
+Outputs:
+  InstanceIp:
+    Description: Public IP of the production server
+    Value: !If [UseStaticIp, !GetAtt ProdStaticIp.IpAddress, !GetAtt ProdInstance.PublicIpAddress]
+
+  IpIsStatic:
+    Description: Whether the IP above is static (survives stop/start) or dynamic
+    Value: !If [UseStaticIp, "static", "dynamic — survives reboot, changes on stop/start"]
+
+  SshCommand:
+    Description: SSH into the production server
+    Value: !Sub
+      - "ssh ubuntu@${Ip}"
+      - Ip: !If [UseStaticIp, !GetAtt ProdStaticIp.IpAddress, !GetAtt ProdInstance.PublicIpAddress]
+
+  AppUrlHttp:
+    Description: Reach the app over plain HTTP (basic-auth prompt)
+    Value: !Sub
+      - "http://${Ip}"
+      - Ip: !If [UseStaticIp, !GetAtt ProdStaticIp.IpAddress, !GetAtt ProdInstance.PublicIpAddress]
+
+  BootstrapLog:
+    Description: Watch bootstrap progress (~10-15 min on a 512 MB box)
+    Value: !Sub
+      - "ssh ubuntu@${Ip} sudo tail -f /var/log/akshayam-bootstrap.log"
+      - Ip: !If [UseStaticIp, !GetAtt ProdStaticIp.IpAddress, !GetAtt ProdInstance.PublicIpAddress]
+
+  AddDomainLater:
+    Description: Once you have a hostname, point an A record at the IP then run this
+    Value: "ssh ubuntu@<ip> 'sudo sed -i \"s/server_name _;/server_name YOUR.DOMAIN;/\" /etc/nginx/sites-available/akshayam && sudo nginx -t && sudo systemctl reload nginx && sudo certbot --nginx -d YOUR.DOMAIN --non-interactive --agree-tos -m admin@artham.app --redirect'"

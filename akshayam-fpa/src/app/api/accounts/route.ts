@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { query, queryOne } from "@/lib/db";
 import { getEntity } from "@/lib/entity";
+import { apiGuard } from "@/lib/auth/dal";
 
 export const runtime = "nodejs";
 
@@ -16,6 +17,9 @@ const PatchSchema = z.object({
 });
 
 export async function PATCH(request: Request) {
+  const { denied } = await apiGuard("accounts.map");
+  if (denied) return denied;
+
   let payload: unknown;
   try {
     payload = await request.json();

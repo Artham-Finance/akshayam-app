@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
 import { EntitySwitcher } from "@/components/EntitySwitcher";
+import { UserMenu } from "@/components/UserMenu";
+import type { Permission, Role } from "@/lib/auth/permissions";
 
 /**
  * Primary navigation. One row of labelled tabs, scrollable on narrow screens.
@@ -22,21 +24,31 @@ const SECTIONS = [
   { href: "/collections", label: "Collections" },
 ];
 
-const UTILITY = [
-  { href: "/upload", label: "Upload" },
-  { href: "/settings", label: "Settings" },
+/**
+ * Utility links, each with the permission that makes it worth showing.
+ *
+ * Hiding a link is presentation, not protection - the page behind it does its
+ * own check. The point is that a viewer is not offered an Upload tab that
+ * turns them away the moment they click it.
+ */
+const UTILITY: { href: string; label: string; needs: Permission }[] = [
+  { href: "/upload", label: "Upload", needs: "data.upload" },
+  { href: "/settings", label: "Settings", needs: "accounts.map" },
 ];
 
 export function Nav({
   entityName,
   entities,
   currentSlug,
+  user,
 }: {
   entityName: string;
   entities: { slug: string; name: string }[];
   currentSlug: string;
+  user: { name: string | null; email: string; role: Role; permissions: Permission[] };
 }) {
   const pathname = usePathname();
+  const allowed = new Set(user.permissions);
 
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -58,7 +70,7 @@ export function Nav({
           <EntitySwitcher entities={entities} current={currentSlug} />
         </div>
         <nav className="ml-auto flex shrink-0 items-center gap-1">
-          {UTILITY.map((item) => (
+          {UTILITY.filter((item) => allowed.has(item.needs)).map((item) => (
             <Link
               key={item.href}
               href={item.href}
@@ -72,6 +84,7 @@ export function Nav({
               {item.label}
             </Link>
           ))}
+          <UserMenu name={user.name} email={user.email} role={user.role} />
         </nav>
       </div>
 

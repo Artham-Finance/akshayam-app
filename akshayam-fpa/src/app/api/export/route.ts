@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getEntity, getVerticals } from "@/lib/entity";
+import { apiGuard } from "@/lib/auth/dal";
 import { fyBounds, fyLabel, fyStartYearOf } from "@/lib/period";
 import { isDrill, runDrill, type DrillKind } from "@/lib/reports/drilldowns";
 import {
@@ -27,6 +28,9 @@ export const runtime = "nodejs";
 const DRILL_KINDS: DrillKind[] = ["collections", "receivables", "revenue"];
 
 export async function GET(request: Request) {
+  const { denied } = await apiGuard("reports.export");
+  if (denied) return denied;
+
   const url = new URL(request.url);
   const kind = String(url.searchParams.get("kind") ?? "");
   const drill = url.searchParams.get("drill");

@@ -23,6 +23,7 @@ import { ledgerWrittenTo, resolvePeriod } from "@/lib/reporting-period";
 import { buildBudgetVsActual } from "@/lib/reports/budget";
 import { isDrill, runDrill } from "@/lib/reports/drilldowns";
 import { buildRetainerBreakdown } from "@/lib/reports/retainers";
+import { requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +47,7 @@ export default async function RevenuePage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  await requireEntityAccess();
   const params = await searchParams;
 
   try {
