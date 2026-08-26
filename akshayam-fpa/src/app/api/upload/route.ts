@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { getEntity } from "@/lib/entity";
 import {
   commitArAging,
+  commitBudget,
   commitCreditNotes,
   commitGeneralLedger,
   commitInvoices,
@@ -13,6 +14,7 @@ import {
   commitTrialBalance,
   type CommitResult,
 } from "@/lib/ingest";
+import { parseBudgetWorkbook } from "@/lib/parse/budget";
 import { parseGeneralLedger } from "@/lib/parse/gl";
 import { parseRetainers } from "@/lib/parse/retainers";
 import { parseArAging, parseCreditNotes, parseInvoices, parsePayments } from "@/lib/parse/sales";
@@ -24,6 +26,7 @@ export const maxDuration = 300;
 
 const KINDS = [
   "gl", "opening_tb", "invoices", "payments", "ar_aging", "credit_notes", "retainers",
+  "budget",
 ] as const;
 type Kind = (typeof KINDS)[number];
 
@@ -79,7 +82,10 @@ export async function POST(request: Request) {
 
   try {
     const entity = await getEntity();
-    if (entity.isGroup) {
+    // The budget is the one file that is not a company's own book: the
+    // planning workbook budgets the group and both companies on separate
+    // sheets, and loads all of them whichever view it was dropped on.
+    if (entity.isGroup && kindRaw !== "budget") {
       return NextResponse.json(
         { error: "The consolidated view has no books of its own. Switch to a company first." },
         { status: 400 },
@@ -155,6 +161,20 @@ export async function POST(request: Request) {
         summary = {
           period: [parsed.periodStart, parsed.periodEnd],
           totalCredited: parsed.totalCredited,
+        };
+        break;
+      }
+      case "budget": {
+        const parsed = await parseBudgetWorkbook(bytes);
+        const committed = await commitBudget(parsed, meta);
+        result = committed;
+        warnings = parsed.warnings;
+        detected = parsed.detected;
+        summary = {
+          financialYear: `FY ${parsed.fyStartYear}-${String(parsed.fyStartYear + 1).slice(2)}`,
+          loaded: committed.loaded.map(
+            (l) => `${l.name}: ${l.pnlRows} P&L, ${l.expenseRows} expense line(s)`,
+          ),
         };
         break;
       }

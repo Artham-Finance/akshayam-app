@@ -9,6 +9,7 @@ import type {
   InvoiceParseResult,
   PaymentParseResult,
 } from "@/lib/parse/sales";
+import type { BudgetParseResult } from "@/lib/parse/budget";
 import type { RetainerParseResult } from "@/lib/parse/retainers";
 
 /**
@@ -803,5 +804,99 @@ export async function commitRetainers(
 
     await attributeSoleVertical(client, entityId);
     return { uploadId, rowsInserted, newAccounts: [], newVerticals, needsReview: [] };
+  });
+}
+
+/* ============================================================
+   The planning workbook
+   ============================================================ */
+
+/**
+ * Load the budgeted P&L and the Other-expenses breakdown.
+ *
+ * One file, three entities: the workbook budgets the group and both companies
+ * on separate sheets, and they are loaded together because they are one
+ * document and loading half of it would leave the consolidation disagreeing
+ * with its members.
+ *
+ * Everything for the year is replaced rather than merged. A budget is revised
+ * as a whole - a new version of the workbook restates every month - so adding
+ * to what is there would leave the previous version's figures underneath.
+ */
+export async function commitBudget(
+  parsed: BudgetParseResult,
+  meta: FileMeta,
+): Promise<CommitResult & { loaded: { slug: string; name: string; pnlRows: number; expenseRows: number }[] }> {
+  return transaction(async (client) => {
+    const fy = parsed.fyStartYear;
+    const loaded: { slug: string; name: string; pnlRows: number; expenseRows: number }[] = [];
+    let uploadId = 0;
+    let rowsInserted = 0;
+
+    for (const sheet of parsed.entities) {
+      const entity = (
+        await client.query<{ id: number; name: string }>(
+          "select id, name from entities where slug = $1",
+          [sheet.slug],
+        )
+      ).rows[0];
+      // A workbook naming a company this installation does not have is not an
+      // error - it is a sheet for someone else's books.
+      if (!entity) continue;
+
+      // The upload row is recorded against the first entity loaded, because an
+      // upload belongs to one; the others are named in its summary.
+      if (uploadId === 0) {
+        uploadId = await createUpload(
+          client, entity.id, "budget", meta,
+          `${fy}-04-01`, `${fy + 1}-03-31`,
+          parsed.entities.reduce((n, e) => n + e.pnl.length + e.expenses.length, 0),
+          { detected: parsed.detected, warnings: parsed.warnings },
+        );
+      }
+
+      await client.query(
+        "delete from budget_pnl where entity_id = $1 and fy_start_year = $2",
+        [entity.id, fy],
+      );
+      const pnlRows = await bulkInsert(
+        client,
+        "budget_pnl",
+        ["entity_id", "fy_start_year", "month", "group_code", "amount"],
+        sheet.pnl.map((r) => [entity.id, fy, r.month, r.groupCode, r.amount]),
+      );
+
+      await client.query(
+        "delete from expense_budget_lines where entity_id = $1 and fy_start_year = $2",
+        [entity.id, fy],
+      );
+      const expenseRows = await bulkInsert(
+        client,
+        "expense_budget_lines",
+        ["entity_id", "fy_start_year", "head", "label", "month", "amount", "sort_order"],
+        sheet.expenses.map((r) => [
+          entity.id, fy, r.head, r.label, r.month, r.amount, r.sortOrder,
+        ]),
+      );
+
+      rowsInserted += pnlRows + expenseRows;
+      loaded.push({ slug: sheet.slug, name: entity.name, pnlRows, expenseRows });
+    }
+
+    if (loaded.length === 0) {
+      throw new Error(
+        "None of the sheets in this workbook match a company in this installation.",
+      );
+    }
+
+    return {
+      uploadId,
+      rowsInserted,
+      newAccounts: [],
+      newVerticals: [],
+      // Unrecognised budget rows are worth chasing but do not block the load.
+      needsReview: parsed.entities.flatMap((e) => e.unmatched),
+      loaded,
+    };
   });
 }

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { BvaStatement } from "@/components/BvaTable";
 import { ExpenseDetailTable } from "@/components/ExpenseDetailTable";
 import { BvaControls } from "@/components/BvaControls";
@@ -167,10 +168,21 @@ export default async function BudgetVsActualPage({
 
         <div className="space-y-4">
           {!statement.hasBudget && (
-            <Notice tone="caution" title="No budget loaded for this year">
+            <Notice
+              tone="caution"
+              title="No budget loaded for this year"
+              action={
+                <Link
+                  href="/upload"
+                  className="whitespace-nowrap rounded-md border border-caution/30 px-2.5 py-1.5 text-[12px] font-medium hover:bg-caution/10"
+                >
+                  Upload budget
+                </Link>
+              }
+            >
               The actual column is live, but there is nothing to compare it
-              against. Load the planning workbook with{" "}
-              <span className="font-medium">scripts/load-budget.mts</span>.
+              against. Drop the planning workbook on the Budget tile of the
+              upload page and every figure here fills in beside it.
             </Notice>
           )}
 
