@@ -40,6 +40,11 @@ export function CurrencySplit({
   const cell = "border-b border-line px-3 py-2";
   const total = rows.reduce((s, r) => s + r.inr, 0);
 
+  // Foreign currencies whose own amount never made it into the database.
+  const missing = rows
+    .filter((r) => r.currency.toUpperCase() !== baseCurrency && r.foreign === null)
+    .map((r) => r.currency);
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-max border-collapse text-[13px]">
@@ -47,6 +52,14 @@ export function CurrencySplit({
           Amounts are shown in the currency they were denominated in and in
           rupees. The rate is what the two imply over the period, not a rate on
           any one transaction.
+          {missing.length > 0 && (
+            <span className="mt-1 block text-caution">
+              {missing.join(" and ")} {missing.length === 1 ? "shows" : "show"} no
+              amount in currency: those receipts were loaded before the app kept the
+              foreign column. Re-upload the file on the upload page and the figures
+              fill in — nothing else changes, the rupee totals are already right.
+            </span>
+          )}
         </caption>
         <thead>
           <tr>
@@ -81,8 +94,20 @@ export function CurrencySplit({
                 </th>
                 <td className={clsx(cell, "num text-right text-ink-muted")}>{row.count}</td>
                 <td className={clsx(cell, "num text-right text-ink")}>
-                  {isBase || row.foreign === null ? (
+                  {isBase ? (
+                    // The base currency has no second figure to give: the
+                    // rupee column already is the amount.
                     <span className="text-ink-faint">—</span>
+                  ) : row.foreign === null ? (
+                    // A foreign row with no figure means the file it came from
+                    // was read before the app kept the foreign column. Saying
+                    // so beats a dash the reader has to guess at.
+                    <span
+                      className="text-[11.5px] font-normal text-caution"
+                      title="This currency's own amount was not captured when the file was uploaded. Re-upload Customer Payments and it fills in."
+                    >
+                      not captured
+                    </span>
                   ) : (
                     money(row.foreign, 2)
                   )}

@@ -245,10 +245,15 @@ export async function parsePayments(input: Buffer | ArrayBuffer): Promise<Paymen
         : toNumber(
             pick(
               row,
+              // "amount - USD", "amount (USD)" and "USD amount" all normalise
+              // to one of these two, and the code is whatever the row says it
+              // is rather than a hard-coded USD.
               `amount_${currency.toLowerCase()}`,
+              `${currency.toLowerCase()}_amount`,
               "fcy_amount",
               "amount_fcy",
               "foreign_amount",
+              "amount_foreign",
               ...(hasSeparateBase ? ["amount"] : []),
             ),
           );
