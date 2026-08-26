@@ -40,6 +40,9 @@ const Update = z.object({
   role: z.enum(ROLES).optional(),
   isActive: z.boolean().optional(),
   entityIds: EntityIds.optional(),
+  /** Optional. Saving a new password alongside the other changes is the same
+   *  act to whoever is doing it, so it is the same request. */
+  password: z.string().optional(),
 });
 
 const ResetPassword = z.object({
@@ -87,9 +90,11 @@ export async function POST(request: Request) {
     const hash = await hashPassword(body.password);
 
     const created = await transaction(async (client) => {
+      // must_change_password stays false: there is no change-password screen
+      // yet, so setting it would promise a prompt that never comes.
       const { rows } = await client.query<{ id: number }>(
         `insert into users (email, name, password_hash, role, must_change_password)
-         values ($1, $2, $3, $4, true)
+         values ($1, $2, $3, $4, false)
          returning id`,
         [email, body.name?.trim() || null, hash, body.role],
       );
@@ -125,7 +130,22 @@ export async function POST(request: Request) {
       return bad("You cannot deactivate your own account.");
     }
 
+    // Validate before opening the transaction, so a bad password is a 400 and
+    // not a half-applied change.
+    let newHash: string | null = null;
+    if (body.password !== undefined && body.password !== "") {
+      const pwProblem = passwordProblem(body.password);
+      if (pwProblem) return bad(pwProblem);
+      newHash = await hashPassword(body.password);
+    }
+
     await transaction(async (client) => {
+      if (newHash) {
+        await client.query(
+          "update users set password_hash = $2, updated_at = now() where id = $1",
+          [body.id, newHash],
+        );
+      }
       if (body.name !== undefined || body.role !== undefined || body.isActive !== undefined) {
         await client.query(
           `update users
@@ -157,7 +177,12 @@ export async function POST(request: Request) {
     // A revoked role or a withdrawn company should bite now, not in a
     // fortnight. Signing the user out is the bluntest way to guarantee it and
     // costs them one login.
-    if (body.role !== undefined || body.isActive === false || body.entityIds !== undefined) {
+    if (
+      newHash ||
+      body.role !== undefined ||
+      body.isActive === false ||
+      body.entityIds !== undefined
+    ) {
       await destroyAllSessionsFor(body.id);
     }
 
@@ -167,6 +192,7 @@ export async function POST(request: Request) {
       role: body.role,
       isActive: body.isActive,
       entityIds: body.entityIds,
+      passwordChanged: Boolean(newHash),
     });
     return NextResponse.json({ ok: true });
   }

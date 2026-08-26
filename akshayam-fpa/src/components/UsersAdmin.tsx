@@ -210,13 +210,9 @@ export function UsersAdmin({
                         onSave={(payload) =>
                           post(
                             { action: "update", id: user.id, ...payload },
-                            `Saved ${user.name || user.email}.`,
-                          )
-                        }
-                        onResetPassword={(password) =>
-                          post(
-                            { action: "resetPassword", id: user.id, password },
-                            `New password set for ${user.email}. They will be signed out everywhere.`,
+                            payload.password
+                              ? `Saved ${user.email}, with a new password. They have been signed out everywhere.`
+                              : `Saved ${user.name || user.email}.`,
                           )
                         }
                       />
@@ -384,14 +380,17 @@ function EditPanel({
   isSelf,
   busy,
   onSave,
-  onResetPassword,
 }: {
   user: AdminUser;
   entities: EntityOption[];
   isSelf: boolean;
   busy: boolean;
-  onSave: (payload: { role: Role; isActive: boolean; entityIds: number[] }) => void;
-  onResetPassword: (password: string) => void;
+  onSave: (payload: {
+    role: Role;
+    isActive: boolean;
+    entityIds: number[];
+    password?: string;
+  }) => void;
 }) {
   const [role, setRole] = useState<Role>(user.role);
   const [isActive, setIsActive] = useState(user.isActive);
@@ -452,42 +451,42 @@ function EditPanel({
         />
       </div>
 
+      <div>
+        <label className="mb-1 block text-[11px] font-medium text-ink-muted">
+          New password <span className="text-ink-faint">(leave blank to keep the current one)</span>
+        </label>
+        <input
+          type="text"
+          value={password}
+          disabled={busy}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="at least 10 characters"
+          className={INPUT}
+        />
+      </div>
+
+      <p className="text-[10px] leading-relaxed text-ink-faint">
+        Saving a new password, a new role or a change of companies signs this
+        person out everywhere. They will need to sign in again.
+      </p>
+
       <div className="flex justify-end">
         <button
           type="button"
           disabled={busy}
-          onClick={() => onSave({ role, isActive, entityIds })}
+          onClick={() => {
+            onSave({
+              role,
+              isActive,
+              entityIds,
+              ...(password ? { password } : {}),
+            });
+            setPassword("");
+          }}
           className="rounded-md bg-navy px-3 py-1.5 text-[12px] font-semibold text-ink-invert hover:bg-navy-deep disabled:opacity-60"
         >
           Save changes
         </button>
-      </div>
-
-      <div className="border-t border-line pt-3">
-        <label className="mb-1 block text-[11px] font-medium text-ink-muted">
-          Set a new password
-        </label>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={password}
-            disabled={busy}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="at least 10 characters"
-            className={INPUT}
-          />
-          <button
-            type="button"
-            disabled={busy || password.length === 0}
-            onClick={() => {
-              onResetPassword(password);
-              setPassword("");
-            }}
-            className="shrink-0 rounded-md border border-line px-3 py-1.5 text-[12px] font-medium text-ink hover:bg-navy-tint disabled:opacity-50"
-          >
-            Set
-          </button>
-        </div>
       </div>
     </div>
   );
