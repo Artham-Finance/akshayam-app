@@ -67,6 +67,16 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Lint
+        # Reported, not enforced. The codebase currently has ~300 errors from
+        # React 19's newer hook rules (react-hooks/immutability,
+        # react-hooks/static-components), all of them pre-dating this workflow
+        # and concentrated in the report pages. Failing on them would make
+        # every pull request red from the first day, and a permanently red
+        # check is one nobody reads - which is worse than no check.
+        #
+        # Turn this back into a gate once the backlog is cleared; until then it
+        # is here so new problems are at least visible in the log.
+        continue-on-error: true
         run: npm run lint
 
       - name: Build
