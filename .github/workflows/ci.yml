@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  # Also on pushes to main, so a merge that somehow skipped review still gets
+  # checked - the deploy runs in parallel, but a red CI here says what broke.
+  push:
+    branches: [main]
+
+defaults:
+  run:
+    working-directory: akshayam-fpa
+
+jobs:
+  check:
+    name: Migrate, typecheck, lint, build
+    runs-on: ubuntu-latest
+
+    # A real PostgreSQL rather than a mock, because the thing most worth
+    # checking is that the migrations apply to an *empty* database. Production
+    # only ever sees them as an upgrade from the previous migration, so a seed
+    # that quietly depends on data an earlier upload happened to create looks
+    # fine there and is broken on every fresh install. That is exactly the bug
+    # 021_seed_missing_vertical_budgets had to go back and repair.
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: akshayam
+          POSTGRES_PASSWORD: akshayam
+          POSTGRES_DB: akshayam_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://akshayam:akshayam@localhost:5432/akshayam_ci
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: akshayam-fpa/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply migrations to an empty database
+        run: npm run db:migrate
+
+      - name: Seed the first admin
+        # Proves the seeder runs against a fresh schema. NODE_ENV is not
+        # production here, but DATABASE_URL points at localhost, so the
+        # development default applies - which is the path a new contributor
+        # takes on their own machine.
+        run: npm run seed:admin
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build

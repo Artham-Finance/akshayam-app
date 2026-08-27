@@ -1,0 +1,91 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  # A deploy you can trigger by hand, for re-running one that failed on
+  # something transient without having to push an empty commit.
+  workflow_dispatch:
+
+concurrency:
+  # One deploy at a time, and never cancel one mid-flight: the server pulls,
+  # migrates and rebuilds in place, so a half-finished run leaves the box in a
+  # state nobody chose. A queued run simply waits.
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy → Lightsail
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PROD_SERVER_HOST }}
+          username: ubuntu
+          key: ${{ secrets.PROD_SSH_KEY }}
+          # The build is the slow part: ~6 minutes on a 512 MB box, most of it
+          # npm ci and next build paging through swap. 20 minutes leaves room
+          # for a bad day without hanging the runner all afternoon.
+          command_timeout: 20m
+          script: |
+            set -euo pipefail
+
+            cd /app
+            echo "→ Pulling ${{ github.sha }} ..."
+            git fetch origin main
+            git reset --hard origin/main
+            git log --oneline -1
+
+            cd /app/akshayam-fpa
+
+            echo "→ Installing dependencies ..."
+            NODE_OPTIONS=--max-old-space-size=1024 npm ci
+
+            echo "→ Applying migrations ..."
+            npm run db:migrate
+
+            echo "→ Seeding first admin (create-only) ..."
+            npm run seed:admin
+
+            echo "→ Building ..."
+            NODE_OPTIONS=--max-old-space-size=1024 npm run build
+
+            echo "→ Restarting ..."
+            pm2 restart akshayam --update-env
+            pm2 save
+
+            echo "✅ Deployed ${{ github.sha }} at $(date -u)"
+
+      - name: Smoke test
+        # A green deploy step only means the commands exited 0. This asks the
+        # public URL whether the app is actually answering, and whether it is
+        # still refusing anonymous visitors - a deploy that accidentally
+        # removed the auth gate would otherwise pass quietly.
+        run: |
+          set -euo pipefail
+          URL="https://akshayam.artham.app"
+
+          echo "→ waiting for the app to come back ..."
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -m 10 -w "%{http_code}" "$URL/login" || echo 000)
+            [ "$code" = "200" ] && break
+            sleep 5
+          done
+
+          login=$(curl -s -o /dev/null -m 15 -w "%{http_code}" "$URL/login")
+          root=$(curl -s -o /dev/null -m 15 -w "%{http_code}" "$URL/")
+          api=$(curl -s -o /dev/null -m 15 -w "%{http_code}" -X POST "$URL/api/users")
+
+          echo "/login            -> $login  (want 200)"
+          echo "/ signed out      -> $root   (want 307)"
+          echo "POST /api/users   -> $api    (want 401)"
+
+          [ "$login" = "200" ] || { echo "::error::login page is not serving"; exit 1; }
+          [ "$root" = "307" ]  || { echo "::error::signed-out visitors are not being redirected"; exit 1; }
+          [ "$api" = "401" ]   || { echo "::error::the API is not refusing anonymous callers"; exit 1; }
+
+          echo "✅ smoke test passed"
