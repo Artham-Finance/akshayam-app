@@ -34,6 +34,9 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const kind = String(url.searchParams.get("kind") ?? "");
   const drill = url.searchParams.get("drill");
+  // A customer-filtered panel must export the customer it is showing, not the
+  // whole book under the same heading.
+  const customer = url.searchParams.get("customer") || null;
 
   try {
     const entity = await getEntity();
@@ -80,12 +83,14 @@ export async function GET(request: Request) {
       start,
       end,
       verticalId,
+      customer,
     });
     if (!result) return NextResponse.json({ error: "Nothing to export." }, { status: 404 });
 
     const context = [entity.name];
     if (kind !== "receivables") context.push(fyLabel(fy));
     if (verticalId) context.push("filtered to one vertical");
+    if (customer) context.push(customer);
     context.push(`${result.total} row${result.total === 1 ? "" : "s"}`);
 
     const workbook = createWorkbook();

@@ -16,7 +16,7 @@ export function drillColumns(
 ): Column[] {
   return columns.map((c) => ({
     header: c.header,
-    numeric: c.type === "money" || c.type === "days",
+    numeric: c.type === "money" || c.type === "days" || c.type === "percent",
     strong: c.strong,
   }));
 }
@@ -37,6 +37,7 @@ export function renderDrillRow(
     const type = columns[i]?.type;
     if (type === "date") return dateLabel(String(value));
     if (type === "days") return `${value}d`;
+    if (type === "percent") return `${Number(value).toFixed(2)}%`;
     if (type === "money") {
       const n = Number(value);
       return money(n, Number.isInteger(n) || Math.abs(n) >= 1 ? 0 : 2);

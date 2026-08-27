@@ -1,4 +1,6 @@
+import Link from "next/link";
 import { Bar, DataTable, drillColumns, renderDrillRow } from "@/components/DataTable";
+import { CustomerPicker } from "@/components/CustomerPicker";
 import { PeriodControls } from "@/components/PeriodControls";
 import { SetupRequired } from "@/components/SetupRequired";
 import {
@@ -14,7 +16,9 @@ import { query, queryOne } from "@/lib/db";
 import { getEntity, getVerticals, verticalScope } from "@/lib/entity";
 import { compactINR, dateLabel, money, percent, share } from "@/lib/format";
 import { withParams } from "@/lib/href";
-import { isDrill, runDrill } from "@/lib/reports/drilldowns";
+import { AR_BUCKETS, arBucketSelect, isDrill, runDrill } from "@/lib/reports/drilldowns";
+import { buildCustomerStatement, listCustomers } from "@/lib/reports/customer-statement";
+import { fyBounds, fyLabel, fyStartYearOf } from "@/lib/period";
 import { requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
@@ -29,20 +33,17 @@ const DRILL_LIMIT = 250;
  * due date is missing - measuring from the invoice date throughout would make
  * everything look older than it is and overstate the overdue tail.
  */
-const ageExpr = (t = "") => `(${t}as_of - coalesce(${t}due_date, ${t}invoice_date))`;
-const AGE_EXPR = ageExpr();
+/** The colour each shared ageing band is drawn in - presentation, nothing more. */
+const BUCKET_TONE: Record<string, string> = {
+  current: "bg-positive",
+  d30: "bg-navy",
+  d90: "bg-series-2",
+  d180: "bg-caution",
+  d365: "bg-series-5",
+  y1: "bg-negative",
+};
 
-const BUCKETS = [
-  { key: "current", label: "Not yet due", test: `${AGE_EXPR} <= 0`, tone: "bg-positive" },
-  { key: "d30", label: "1 - 30 days", test: `${AGE_EXPR} between 1 and 30`, tone: "bg-navy" },
-  { key: "d90", label: "31 - 90 days", test: `${AGE_EXPR} between 31 and 90`, tone: "bg-series-2" },
-  { key: "d180", label: "91 - 180 days", test: `${AGE_EXPR} between 91 and 180`, tone: "bg-caution" },
-  { key: "d181", label: "Over 180 days", test: `${AGE_EXPR} > 180`, tone: "bg-negative" },
-] as const;
-
-const bucketSelect = BUCKETS.map(
-  (b) => `coalesce(sum(case when ${b.test} then balance_base else 0 end),0)::numeric as ${b.key}`,
-).join(",\n            ");
+const bucketSelect = arBucketSelect();
 
 /**
  * Each company's own most recent snapshot, which need not be the same date.
@@ -95,9 +96,14 @@ export default async function ReceivablesPage({
     const verticalId = verticals.some((v) => v.id === requestedVertical) ? requestedVertical : null;
     const verticalName = verticals.find((v) => v.id === verticalId)?.name ?? null;
 
+    const customers = await listCustomers(entity, ["ar", "invoices", "payments"], verticalId);
+    const pickedCustomer = typeof params.customer === "string" ? params.customer : null;
+    const customer =
+      pickedCustomer && customers.includes(pickedCustomer) ? pickedCustomer : null;
+
     const scope = [entity.memberIds, verticalId, entity.verticalIds];
 
-    const [totals, byVertical, byClient, worstInvoices, unmatched, terms] = await Promise.all([
+    const [totals, byVertical, topTen, unmatched, terms] = await Promise.all([
       queryOne<Record<string, number>>(
         `select ${bucketSelect},
                 coalesce(sum(balance_base),0)::numeric total, count(*)::int n
@@ -107,53 +113,76 @@ export default async function ReceivablesPage({
         scope,
       ),
       query<Record<string, string | number | null>>(
-        `select v.code, v.name, ${bucketSelect},
+        `select v.id, v.code, v.name, ${arBucketSelect("a.")},
                 coalesce(sum(a.balance_base),0)::numeric total
            from ar_open_items a left join verticals v on v.id=a.vertical_id
           where (a.entity_id, a.as_of) in (
                   select entity_id, max(as_of) from ar_open_items
                    where entity_id = any($1::int[]) group by entity_id)
-            ${verticalScope("$2", "a.vertical_id")}
-          group by v.code, v.name order by 8 desc`,
-        [entity.memberIds, entity.verticalIds],
+            and ($2::int is null or a.vertical_id = $2)
+            ${verticalScope("$3", "a.vertical_id")}
+          group by v.id, v.code, v.name order by total desc`,
+        [entity.memberIds, verticalId, entity.verticalIds],
       ),
-      query<Record<string, string | number>>(
-        `select customer_name, ${bucketSelect},
-                coalesce(sum(balance_base),0)::numeric total,
-                coalesce(sum(case when ${AGE_EXPR} > 90 then balance_base else 0 end),0)::numeric over90
-           from ar_open_items
-          where ${LATEST_SNAPSHOT} and ($2::int is null or vertical_id=$2)
-            ${verticalScope("$3")}
-          group by customer_name order by 7 desc limit 12`,
-        scope,
-      ),
-      query<{
-        invoice_number: string | null; customer_name: string; salesperson: string | null;
-        invoice_date: string | null; due_date: string | null; age: number; balance_base: number;
-      }>(
-        `select invoice_number, customer_name, salesperson, invoice_date::text, due_date::text,
-                ${AGE_EXPR}::int as age, balance_base
-           from ar_open_items
-          where ${LATEST_SNAPSHOT} and ($2::int is null or vertical_id=$2)
-            ${verticalScope("$3")}
-            and ${AGE_EXPR} > 90
-          order by balance_base desc limit 20`,
+      /**
+       * What the ten largest customers come to, for the concentration tile.
+       * The names and their ageing are one click away; the tile only has to
+       * say how much of the book sits with them.
+       */
+      queryOne<{ v: number; n: number }>(
+        `select coalesce(sum(t.total),0)::numeric v, count(*)::int n from (
+                  select coalesce(sum(balance_base),0)::numeric total
+                    from ar_open_items
+                   where ${LATEST_SNAPSHOT} and ($2::int is null or vertical_id=$2)
+                     ${verticalScope("$3")}
+                   group by customer_name
+                   order by total desc limit 10) t`,
         scope,
       ),
       queryOne<{ n: number; v: number }>(
         `select count(*)::int n, coalesce(sum(balance_base),0)::numeric v
            from ar_open_items where ${LATEST_SNAPSHOT} and vertical_id is null
-             ${verticalScope("$2")}`,
-        [entity.memberIds, entity.verticalIds],
+             and $2::int is null
+             ${verticalScope("$3")}`,
+        [entity.memberIds, verticalId, entity.verticalIds],
       ),
       queryOne<{ with_terms: number; total: number }>(
         `select count(*) filter (where due_date > invoice_date)::int with_terms,
                 count(*)::int total
            from ar_open_items where ${LATEST_SNAPSHOT}
-             ${verticalScope("$2")}`,
-        [entity.memberIds, entity.verticalIds],
+             and ($2::int is null or vertical_id = $2)
+             ${verticalScope("$3")}`,
+        [entity.memberIds, verticalId, entity.verticalIds],
       ),
     ]);
+
+    /**
+     * The financial year the movements are measured over. Receivables are a
+     * snapshot rather than a period, so the page has no year picker - the year
+     * containing the snapshot is the only one a statement could mean.
+     */
+    const statementFy = fyStartYearOf(new Date(`${asOf}T00:00:00`));
+    const statement = customer
+      ? await buildCustomerStatement({
+          entity,
+          customer,
+          from: fyBounds(statementFy).start,
+          asOf,
+          verticalId,
+        })
+      : null;
+    const customerRows = customer
+      ? await runDrill({
+          kind: "receivables",
+          drill: "customer",
+          entity,
+          start: asOf,
+          end: asOf,
+          verticalId,
+          customer,
+          limit: DRILL_LIMIT,
+        })
+      : null;
 
     // The invoices behind a tile, from the same definition the Excel export uses.
     const drill = typeof params.drill === "string" ? params.drill : null;
@@ -172,8 +201,12 @@ export default async function ReceivablesPage({
       : null;
 
     const total = Number(totals?.total ?? 0);
-    const over90 = Number(totals?.d180 ?? 0) + Number(totals?.d181 ?? 0);
-    const peakBucket = Math.max(1, ...BUCKETS.map((b) => Number(totals?.[b.key] ?? 0)));
+    // Over 180 days is the two oldest bands together; over a year is the last
+    // of them on its own, and is therefore counted inside the 180-day figure.
+    const over180 = Number(totals?.d365 ?? 0) + Number(totals?.y1 ?? 0);
+    const overYear = Number(totals?.y1 ?? 0);
+    const topTenValue = Number(topTen?.v ?? 0);
+    const peakBucket = Math.max(1, ...AR_BUCKETS.map((b) => Number(totals?.[b.key] ?? 0)));
 
     return (
       <>
@@ -181,12 +214,15 @@ export default async function ReceivablesPage({
           title="Receivables"
           subtitle={`As at ${dateLabel(asOf)}${verticalName ? ` · ${verticalName}` : ""} · age measured from the due date`}
           actions={
-            <PeriodControls
-              financialYears={[]}
-              currentFy={0}
-              verticals={verticals.map((v) => ({ id: v.id, name: v.name }))}
-              currentVerticalId={verticalId}
-            />
+            <>
+              <PeriodControls
+                financialYears={[]}
+                currentFy={0}
+                verticals={verticals.map((v) => ({ id: v.id, name: v.name }))}
+                currentVerticalId={verticalId}
+              />
+              <CustomerPicker customers={customers} current={customer} />
+            </>
           }
         />
 
@@ -204,9 +240,15 @@ export default async function ReceivablesPage({
             {(
               [
                 { key: "total", label: "Total outstanding", value: total, note: `${totals?.n ?? 0} open invoices`, tone: "ink" },
-                { key: "current", label: "Not yet due", value: Number(totals?.current ?? 0), note: `${percent(share(Number(totals?.current ?? 0), total))} of book`, tone: "positive" },
-                { key: "over90", label: "Overdue over 90 days", value: over90, note: `${percent(share(over90, total))} of book`, tone: "caution" },
-                { key: "over180", label: "Overdue over 180 days", value: Number(totals?.d181 ?? 0), note: "Collection risk", tone: "negative" },
+                {
+                  key: "top10",
+                  label: `Top ${topTen?.n ?? 10} customers`,
+                  value: topTenValue,
+                  note: `${percent(share(topTenValue, total))} of the book — ageing and each share on click`,
+                  tone: "positive",
+                },
+                { key: "over180", label: "Overdue exceeding 180 days", value: over180, note: `${percent(share(over180, total))} of book`, tone: "caution" },
+                { key: "over365", label: "Overdue exceeding 1 year", value: overYear, note: `${percent(share(overYear, total))} of book · collection risk`, tone: "negative" },
               ] as const
             ).map((t) => (
               <KpiTile
@@ -222,6 +264,103 @@ export default async function ReceivablesPage({
               />
             ))}
           </div>
+
+          {statement && (
+            <Card padded={false}>
+              <div className="p-4 sm:p-5">
+                <CardTitle hint={`${fyLabel(statementFy)} · as at ${dateLabel(asOf)}`}>
+                  {statement.customer}
+                </CardTitle>
+                <DataTable
+                  columns={[{ header: "Movement" }, { header: "Amount", numeric: true }]}
+                  rows={[
+                    [`Opening balance as at ${dateLabel(statement.from)}`, money(statement.opening)],
+                    ["Add: invoices raised", statement.invoiced ? money(statement.invoiced) : "—"],
+                    [
+                      "Less: collections received",
+                      statement.collected ? `(${money(statement.collected)})` : "—",
+                    ],
+                    [
+                      "Less: credit notes issued",
+                      statement.credited ? `(${money(statement.credited)})` : "—",
+                    ],
+                    [
+                      <span key="c" className="font-semibold">
+                        Closing balance as at {dateLabel(asOf)}
+                      </span>,
+                      <span key="v" className="font-semibold">
+                        {money(statement.closing)}
+                      </span>,
+                    ],
+                  ]}
+                />
+                <div className="mt-4">
+                  <CardTitle hint={`${statement.openInvoices} open invoice(s)`}>
+                    Outstanding, by age
+                  </CardTitle>
+                  <div className="space-y-2">
+                    {AR_BUCKETS.map((b) => {
+                      const value = statement.ageing[b.key] ?? 0;
+                      return (
+                        <div key={b.key} className="flex items-center gap-3">
+                          <span className="w-32 shrink-0 text-[12px] text-ink-muted">{b.label}</span>
+                          <Bar
+                            max={Math.max(1, ...AR_BUCKETS.map((x) => statement.ageing[x.key] ?? 0))}
+                            segments={[
+                              { value, className: BUCKET_TONE[b.key], label: `${b.label} ${money(value)}` },
+                            ]}
+                          />
+                          <span className="num w-28 shrink-0 text-right text-[12.5px] font-medium text-ink">
+                            {value ? money(value) : "—"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                {/*
+                  Only the closing balance is a fact - it is the AR export,
+                  invoice by invoice. Working the year's movements back off it
+                  is the honest direction for the derivation, and it means any
+                  disagreement between the registers lands visibly in the
+                  opening balance rather than being spread across the year.
+                */}
+                <p className="mt-4 text-[11.5px] leading-relaxed text-ink-faint">
+                  The closing balance is the AR snapshot itself. Opening balance is what is left
+                  when the year&rsquo;s invoices, receipts and credit notes are worked back off
+                  it, so a large opening figure against a client who is new this year is a
+                  question about the uploaded registers rather than a debt.
+                </p>
+              </div>
+            </Card>
+          )}
+
+          {customerRows && (
+            <DrillPanel
+              title={`${customer} — outstanding invoices`}
+              subtitle={
+                <>
+                  As at {dateLabel(asOf)}
+                  {verticalName ? ` · ${verticalName}` : ""} · oldest invoice first
+                </>
+              }
+              closeHref={withParams("/receivables", params, { customer: null })}
+              downloadHref={withParams("/api/export", params, {
+                kind: "receivables",
+                drill: "customer",
+                vertical: verticalId,
+                customer,
+              })}
+              shown={customerRows.rows.length}
+              total={customerRows.total}
+            >
+              <DataTable
+                columns={drillColumns(customerRows.columns)}
+                rows={customerRows.rows.map((r) => renderDrillRow(r, customerRows.columns))}
+                emptyMessage="Nothing is outstanding from this customer."
+              />
+            </DrillPanel>
+          )}
 
           {chosen && (
             <DrillPanel
@@ -270,14 +409,16 @@ export default async function ReceivablesPage({
           <Card>
             <CardTitle hint={`${compactINR(total)} outstanding`}>Ageing</CardTitle>
             <div className="space-y-2">
-              {BUCKETS.map((b) => {
+              {AR_BUCKETS.map((b) => {
                 const value = Number(totals?.[b.key] ?? 0);
                 return (
                   <div key={b.key} className="flex items-center gap-3">
-                    <span className="w-28 shrink-0 text-[12px] text-ink-muted">{b.label}</span>
+                    <span className="w-32 shrink-0 text-[12px] text-ink-muted">{b.label}</span>
                     <Bar
                       max={peakBucket}
-                      segments={[{ value, className: b.tone, label: `${b.label} ${money(value)}` }]}
+                      segments={[
+                        { value, className: BUCKET_TONE[b.key], label: `${b.label} ${money(value)}` },
+                      ]}
                     />
                     <span className="num w-28 shrink-0 text-right text-[12.5px] font-medium text-ink">
                       {value ? money(value) : "—"}
@@ -293,67 +434,39 @@ export default async function ReceivablesPage({
 
           <Card padded={false}>
             <div className="p-4 sm:p-5">
-              <CardTitle>By vertical</CardTitle>
+              <CardTitle hint="click a vertical for its open invoices">By vertical</CardTitle>
             </div>
             <DataTable
               columns={[
                 { header: "Vertical" },
-                ...BUCKETS.map((b) => ({ header: b.label, numeric: true })),
                 { header: "Total", numeric: true, strong: true },
+                ...AR_BUCKETS.map((b) => ({ header: b.label, numeric: true })),
               ]}
               rows={byVertical.map((r) => [
-                (r.code as string) ?? "Unallocated",
-                ...BUCKETS.map((b) => (Number(r[b.key]) ? money(Number(r[b.key])) : "—")),
+                /*
+                  The vertical is the way into its invoices: filtering the page
+                  to it and opening the list in one click, which is also what
+                  points the Excel download at the same rows. Unallocated has
+                  no vertical to filter by, so it stays plain text - the notice
+                  above already says what it is.
+                */
+                r.id ? (
+                  <Link
+                    key="v"
+                    href={withParams("/receivables", params, {
+                      vertical: String(r.id),
+                      drill: "total",
+                      customer: null,
+                    })}
+                    className="font-medium text-navy hover:underline"
+                  >
+                    {(r.code as string) ?? (r.name as string)}
+                  </Link>
+                ) : (
+                  "Unallocated"
+                ),
                 money(Number(r.total)),
-              ])}
-            />
-          </Card>
-
-          <Card padded={false}>
-            <div className="p-4 sm:p-5">
-              <CardTitle hint="ranked by total outstanding">Clients driving the balance</CardTitle>
-            </div>
-            <DataTable
-              columns={[
-                { header: "Client" },
-                { header: "Not yet due", numeric: true },
-                { header: "1-90 days", numeric: true },
-                { header: "Over 90 days", numeric: true },
-                { header: "Total", numeric: true, strong: true },
-              ]}
-              rows={byClient.map((r) => [
-                r.customer_name as string,
-                Number(r.current) ? money(Number(r.current)) : "—",
-                money(Number(r.d30) + Number(r.d90)),
-                Number(r.over90) ? money(Number(r.over90)) : "—",
-                money(Number(r.total)),
-              ])}
-            />
-          </Card>
-
-          <Card padded={false}>
-            <div className="p-4 sm:p-5">
-              <CardTitle hint="largest 20, over 90 days">Invoice drill-down</CardTitle>
-            </div>
-            <DataTable
-              emptyMessage="Nothing is more than 90 days overdue."
-              columns={[
-                { header: "Invoice" },
-                { header: "Client" },
-                { header: "Salesperson" },
-                { header: "Due", numeric: false },
-                { header: "Days", numeric: true },
-                { header: "Balance", numeric: true, strong: true },
-              ]}
-              rows={worstInvoices.map((r) => [
-                r.invoice_number ?? "—",
-                r.customer_name,
-                r.salesperson?.split(/\s+-\s+/)[0] ?? "—",
-                dateLabel(r.due_date),
-                <span key="d" className={r.age > 180 ? "text-negative" : "text-caution"}>
-                  {r.age}
-                </span>,
-                money(Number(r.balance_base)),
+                ...AR_BUCKETS.map((b) => (Number(r[b.key]) ? money(Number(r[b.key])) : "—")),
               ])}
             />
           </Card>

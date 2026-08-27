@@ -16,7 +16,7 @@ import { verticalScope, type Entity } from "@/lib/entity";
 
 export type DrillKind = "collections" | "receivables" | "revenue";
 
-export type CellType = "text" | "date" | "money" | "days";
+export type CellType = "text" | "date" | "money" | "days" | "percent";
 
 export interface DrillColumn {
   header: string;
@@ -42,6 +42,8 @@ export interface DrillRequest {
   start: string;
   end: string;
   verticalId: number | null;
+  /** one customer's side of the page, when a customer has been picked */
+  customer?: string | null;
   /** omit for everything - the export wants the lot, the screen does not */
   limit?: number;
 }
@@ -53,15 +55,21 @@ const TITLES: Record<DrillKind, Record<string, string>> = {
     fee: "Fee receipts",
     ri: "Reimbursement recoveries",
     unmatched: "Receipts not traced to an invoice",
+    customer: "Receipts from one customer",
   },
   receivables: {
     total: "Every open invoice",
     current: "Not yet due",
     over90: "Overdue more than 90 days",
     over180: "Overdue more than 180 days",
+    over365: "Overdue more than 1 year",
+    top10: "Top 10 customers by balance",
+    customer: "Outstanding invoices for one customer",
   },
   revenue: {
     fee: "Fee invoices",
+    retainers: "Recurring retainership fee by customer",
+    customer: "Invoices raised on one customer",
     ri: "Reimbursement invoices",
     credit_notes: "Credit notes",
     excluded: "Void, rejected and draft invoices",
@@ -92,6 +100,32 @@ export const UNTRACEABLE_RECEIPT = "(a.vertical_id is null or a.basis = 'unmatch
 /** Age is measured from the due date, falling back to the invoice date. */
 const ageExpr = (t = "") => `(${t}as_of - coalesce(${t}due_date, ${t}invoice_date))`;
 
+/**
+ * The ageing bands, in one place.
+ *
+ * The page draws them, the vertical table columns them and the top-10 drill
+ * ages customers by them. Three copies of "between 181 and 365" is three
+ * chances for one of them to say 360, and the reader would have no way to tell
+ * which column was lying.
+ */
+export const AR_BUCKETS = [
+  { key: "current", label: "Not yet due", test: (t = "") => `${ageExpr(t)} <= 0` },
+  { key: "d30", label: "1 - 30 days", test: (t = "") => `${ageExpr(t)} between 1 and 30` },
+  { key: "d90", label: "31 - 90 days", test: (t = "") => `${ageExpr(t)} between 31 and 90` },
+  { key: "d180", label: "91 - 180 days", test: (t = "") => `${ageExpr(t)} between 91 and 180` },
+  { key: "d365", label: "181 days - 1 year", test: (t = "") => `${ageExpr(t)} between 181 and 365` },
+  { key: "y1", label: "Over 1 year", test: (t = "") => `${ageExpr(t)} > 365` },
+] as const;
+
+export type ArBucketKey = (typeof AR_BUCKETS)[number]["key"];
+
+/** The bucket columns of an aggregate query, aliased by key. */
+export function arBucketSelect(t = "", amount = "balance_base"): string {
+  return AR_BUCKETS.map(
+    (b) => `coalesce(sum(case when ${b.test(t)} then ${t}${amount} else 0 end),0)::numeric as ${b.key}`,
+  ).join(",\n            ");
+}
+
 export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
   const title = drillTitle(req.kind, req.drill);
   if (!title) return null;
@@ -113,21 +147,27 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
       fee: "not a.is_reimbursement",
       ri: "a.is_reimbursement",
       unmatched: UNTRACEABLE_RECEIPT,
+      // Every receipt from the picked customer; the customer clause below is
+      // what narrows it.
+      customer: "true",
     };
     const scope = `a.entity_id = any($1::int[]) and p.payment_date between $2 and $3
                    and ($4::int is null or a.vertical_id = $4)
                    ${verticalScope("$5", "a.vertical_id")}
+                   and ($6::text is null or p.customer_name = $6)
                    and ${where[req.drill]}`;
-    const args = [req.entity.memberIds, req.start, req.end, req.verticalId, req.entity.verticalIds];
+    const args = [
+      req.entity.memberIds, req.start, req.end, req.verticalId, req.entity.verticalIds,
+      req.customer ?? null,
+    ];
 
     const [rows, count] = await Promise.all([
       query<{
         payment_date: string; payment_number: string | null; company: string;
-        customer_name: string; mode: string | null; invoices: string | null;
+        customer_name: string; invoices: string | null;
         amount: number; unallocated: number;
       }>(
         `select p.payment_date::text, p.payment_number, e.name as company, p.customer_name,
-                p.mode,
                 string_agg(distinct a.invoice_number, ', ') as invoices,
                 sum(a.amount_base)::numeric as amount,
                 max(p.unallocated_base)::numeric as unallocated
@@ -135,8 +175,8 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
            join payments p on p.id = a.payment_id
            join entities e on e.id = p.entity_id
           where ${scope}
-          group by p.id, p.payment_date, p.payment_number, e.name, p.customer_name, p.mode
-          order by p.payment_date desc, sum(a.amount_base) desc
+          group by p.id, p.payment_date, p.payment_number, e.name, p.customer_name
+          order by p.payment_date, sum(a.amount_base) desc
           ${cap}`,
         args,
       ),
@@ -155,7 +195,6 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
         { header: "Receipt", type: "text" },
         ...company,
         { header: "Customer", type: "text" },
-        { header: "Mode", type: "text" },
         { header: "Invoices mapped", type: "text" },
         { header: "Amount", type: "money", strong: true },
         { header: "Unallocated", type: "money" },
@@ -165,12 +204,74 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
         r.payment_number,
         ...pickCompany(r),
         r.customer_name,
-        r.mode,
         r.invoices,
         Number(r.amount),
         Number(r.unallocated) || null,
       ]),
       total: Number(count?.n ?? 0),
+    };
+  }
+
+  if (req.kind === "receivables" && req.drill === "top10") {
+    /**
+     * Who the balance is actually with.
+     *
+     * Ranked by what is owed, aged across the same bands as everything else,
+     * and carrying each customer share of the whole book - concentration is
+     * the point of the list, and a share column is the only way to see that
+     * two names are half the ledger without doing arithmetic in your head.
+     *
+     * The share is of the *whole* book, not of the ten, so the column sums to
+     * the concentration figure on the tile rather than to 100%.
+     */
+    const scope = `(a.entity_id, a.as_of) in (
+                     select entity_id, max(as_of) from ar_open_items
+                      where entity_id = any($1::int[]) group by entity_id)
+                   and ($2::int is null or a.vertical_id = $2)
+                   ${verticalScope("$3", "a.vertical_id")}`;
+    const args = [req.entity.memberIds, req.verticalId, req.entity.verticalIds];
+
+    const [rows, book] = await Promise.all([
+      query<Record<string, string | number>>(
+        `select a.customer_name, ${arBucketSelect("a.")},
+                coalesce(sum(a.balance_base),0)::numeric as total,
+                count(*)::int as invoices
+           from ar_open_items a
+          where ${scope}
+          group by a.customer_name
+          order by total desc
+          limit 10`,
+        args,
+      ),
+      queryOne<{ v: number }>(
+        `select coalesce(sum(a.balance_base),0)::numeric v from ar_open_items a where ${scope}`,
+        args,
+      ),
+    ]);
+
+    const total = Number(book?.v ?? 0);
+    return {
+      title,
+      columns: [
+        { header: "Customer", type: "text" },
+        { header: "Open invoices", type: "text" },
+        ...AR_BUCKETS.map((b) => ({ header: b.label, type: "money" as const })),
+        { header: "Total", type: "money" as const, strong: true },
+        { header: "% of book", type: "percent" as const },
+      ],
+      rows: rows.map((r) => [
+        String(r.customer_name),
+        Number(r.invoices),
+        // An empty band is left blank rather than printed as a zero: an ageing
+        // matrix is mostly empty, and a grid of noughts hides the few cells
+        // that carry anything.
+        ...AR_BUCKETS.map((b) => Number(r[b.key]) || null),
+        Number(r.total),
+        total > 0 ? Math.round((Number(r.total) / total) * 10000) / 100 : null,
+      ]),
+      // The list is the top ten by definition - there is no larger set being
+      // capped, so the count shown is the count returned.
+      total: rows.length,
     };
   }
 
@@ -182,14 +283,19 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
       current: (t) => `${ageExpr(t)} <= 0`,
       over90: (t) => `${ageExpr(t)} > 90`,
       over180: (t) => `${ageExpr(t)} > 180`,
+      over365: (t) => `${ageExpr(t)} > 365`,
+      // Everything still open for the picked customer; the customer clause
+      // below is what narrows it.
+      customer: () => "true",
     };
     const scope = `(a.entity_id, a.as_of) in (
                      select entity_id, max(as_of) from ar_open_items
                       where entity_id = any($1::int[]) group by entity_id)
                    and ($2::int is null or a.vertical_id = $2)
                    ${verticalScope("$3", "a.vertical_id")}
+                   and ($4::text is null or a.customer_name = $4)
                    and ${test[req.drill]("a.")}`;
-    const args = [req.entity.memberIds, req.verticalId, req.entity.verticalIds];
+    const args = [req.entity.memberIds, req.verticalId, req.entity.verticalIds, req.customer ?? null];
 
     const [rows, count] = await Promise.all([
       query<{
@@ -202,7 +308,7 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
                 a.invoice_amount, a.balance_base
            from ar_open_items a join entities e on e.id = a.entity_id
           where ${scope}
-          order by a.balance_base desc
+          order by ${req.drill === "customer" ? "a.invoice_date, a.balance_base desc" : "a.balance_base desc"}
           ${cap}`,
         args,
       ),
@@ -240,6 +346,84 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
     };
   }
 
+  if (req.kind === "revenue" && req.drill === "retainers") {
+    /**
+     * Which clients are on a retainer, month by month.
+     *
+     * The headline carries retainership as one number, which is the right
+     * altitude for a tile and useless for the question actually asked of it:
+     * a customer whose retainer runs April to June and then stops is invisible
+     * in a total and obvious in a row.
+     *
+     * Read straight from what was loaded - the retainer file is a list of
+     * customer, month and amount, so this is that list pivoted rather than a
+     * derivation of it. The months shown are the months the window covers that
+     * anything was actually billed in, so a table of empty columns never
+     * pushes the ones carrying figures off the side of the page.
+     */
+    const scope = `r.entity_id = any($1::int[]) and r.month between $2 and $3
+                   and ($4::int is null or r.vertical_id = $4)
+                   ${verticalScope("$5", "r.vertical_id")}`;
+    const args = [req.entity.memberIds, req.start, req.end, req.verticalId, req.entity.verticalIds];
+
+    const rows = await query<{
+      customer_name: string; vertical: string | null; month_key: string; amount: number;
+    }>(
+      `select r.customer_name, v.name as vertical,
+              to_char(r.month, 'YYYY-MM') as month_key,
+              sum(r.amount_base)::numeric as amount
+         from retainer_revenue r
+         left join verticals v on v.id = r.vertical_id
+        where ${scope}
+        group by r.customer_name, v.name, to_char(r.month, 'YYYY-MM')`,
+      args,
+    );
+
+    const monthKeys = [...new Set(rows.map((r) => r.month_key))].sort();
+    // One customer can sit under two verticals across the two companies, so
+    // the row is keyed on the pair rather than folding one into the other.
+    const byCustomer = new Map<string, { customer: string; vertical: string | null; months: Map<string, number>; total: number }>();
+    for (const r of rows) {
+      const key = `${r.customer_name}|${r.vertical ?? ""}`;
+      const found =
+        byCustomer.get(key) ??
+        { customer: r.customer_name, vertical: r.vertical, months: new Map<string, number>(), total: 0 };
+      const amount = Number(r.amount);
+      found.months.set(r.month_key, (found.months.get(r.month_key) ?? 0) + amount);
+      found.total += amount;
+      byCustomer.set(key, found);
+    }
+
+    const monthLabels = monthKeys.map((k) => {
+      const [y, m] = k.split("-");
+      const abbr = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      return `${abbr[Number(m) - 1]} ${y.slice(2)}`;
+    });
+
+    // Largest retainer first: the table is read from the top and stopped at.
+    const ordered = [...byCustomer.values()].sort((a, b) => b.total - a.total);
+    const capped = req.limit ? ordered.slice(0, Math.max(1, Math.floor(req.limit))) : ordered;
+
+    return {
+      title,
+      columns: [
+        { header: "Customer", type: "text" },
+        ...(req.verticalId === null ? [{ header: "Vertical", type: "text" as const }] : []),
+        ...monthLabels.map((label) => ({ header: label, type: "money" as const })),
+        { header: "Total", type: "money" as const, strong: true },
+      ],
+      rows: capped.map((c) => [
+        c.customer,
+        ...(req.verticalId === null ? [c.vertical] : []),
+        // A blank month is one the customer was not billed a retainer in, which
+        // is the signal worth seeing - a zero would read as a billed nil.
+        ...monthKeys.map((k) => c.months.get(k) ?? null),
+        c.total,
+      ]),
+      total: ordered.length,
+    };
+  }
+
   // Revenue. Invoices and credit notes are separate tables with the same shape
   // on screen, so the column names differ but the query does not.
   const isCn = req.drill === "credit_notes";
@@ -254,6 +438,9 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
     ri: "i.is_reimbursement",
     credit_notes: "i.is_primary_row",
     excluded: "true",
+    // Fee and reimbursement together: a customer statement that quietly left
+    // out the recharges would not agree with what they were actually billed.
+    customer: "true",
   };
   // "Excluded" is the one tile that wants exactly what every other figure drops.
   const statusFilter =
@@ -261,10 +448,11 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
   const scope = `i.entity_id = any($1::int[]) and ${dateCol} between $2 and $3
                  and ($4::int is null or i.vertical_id = $4)
                  ${verticalScope("$6", "i.vertical_id")}
+                 and ($7::text is null or i.customer_name = $7)
                  and ${statusFilter} and ${kindWhere[req.drill]}`;
   const args = [
     req.entity.memberIds, req.start, req.end, req.verticalId, EXCLUDED_STATUS,
-    req.entity.verticalIds,
+    req.entity.verticalIds, req.customer ?? null,
   ];
 
   const [rows, count] = await Promise.all([
@@ -279,7 +467,7 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
          from ${from}
          join entities e on e.id = i.entity_id
         where ${scope}
-        order by ${dateCol} desc, ${amountCol} desc
+        order by ${dateCol}, ${amountCol} desc
         ${cap}`,
       args,
     ),
