@@ -41,6 +41,20 @@ const RECEIVERS: { key: string; label: string; codes: string[] }[] = [
 
 const EXCL_GIFT = RECEIVERS.filter((r) => r.key !== "GIFT");
 
+/**
+ * The apportionment column a ledger vertical belongs to, or null for one the
+ * budget does not apportion to.
+ *
+ * AIF and GIFT share Raja's column, so a caller narrowing the table to a
+ * picked vertical cannot simply match on the code - which is exactly the kind
+ * of mapping that should live beside the table it describes rather than being
+ * re-derived by whoever renders it.
+ */
+export function receiverKeyFor(code: string | null | undefined): string | null {
+  if (!code) return null;
+  return RECEIVERS.find((r) => r.codes.includes(code))?.key ?? null;
+}
+
 export interface ApportionedVertical {
   key: string;
   label: string;

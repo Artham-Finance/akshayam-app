@@ -2,7 +2,7 @@ import Link from "next/link";
 import { BudgetTable } from "@/components/BudgetTable";
 import { Bar, DataTable, drillColumns, renderDrillRow } from "@/components/DataTable";
 import { CurrencySplit, type CurrencyRow } from "@/components/CurrencySplit";
-import { RetainerTable } from "@/components/RetainerTable";
+import { CustomerPicker } from "@/components/CustomerPicker";
 import { PeriodControls } from "@/components/PeriodControls";
 import { SetupRequired } from "@/components/SetupRequired";
 import {
@@ -16,13 +16,13 @@ import {
 } from "@/components/ui";
 import { query, queryOne } from "@/lib/db";
 import { getEntity, getVerticals, verticalScope } from "@/lib/entity";
-import { compactINR, money, monthLabel, percent, share } from "@/lib/format";
+import { compactINR, dateLabel, money, monthLabel, percent, share } from "@/lib/format";
 import { withParams } from "@/lib/href";
 import { fyBounds, fyLabel, fyMonths } from "@/lib/period";
 import { ledgerWrittenTo, resolvePeriod } from "@/lib/reporting-period";
 import { buildBudgetVsActual } from "@/lib/reports/budget";
 import { isDrill, runDrill } from "@/lib/reports/drilldowns";
-import { buildRetainerBreakdown } from "@/lib/reports/retainers";
+import { listCustomers } from "@/lib/reports/customer-statement";
 import { requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
@@ -93,9 +93,19 @@ export default async function RevenuePage({
     const verticalId = verticals.some((v) => v.id === requestedVertical) ? requestedVertical : null;
     const verticalName = verticals.find((v) => v.id === verticalId)?.name ?? null;
 
+    /**
+     * One customer's invoices, from the start of the year up to the end of the
+     * chosen period. Deliberately not the period alone: the question a partner
+     * asks of a client is what they have been billed this year, and a single
+     * week of it answers nothing.
+     */
+    const customers = await listCustomers(entity, ["invoices"], verticalId);
+    const picked = typeof params.customer === "string" ? params.customer : null;
+    const customer = picked && customers.includes(picked) ? picked : null;
+
     const args = [entity.memberIds, start, end, verticalId, EXCLUDED_STATUS, entity.verticalIds];
 
-    const [totals, credits, byMonth, cnByMonth, byVertical, byClient, bySalesperson, excluded, byCurrency, retainers] =
+    const [totals, credits, byMonth, cnByMonth, byVertical, cnByVertical, retainerByVertical, excluded, byCurrency] =
       await Promise.all([
         queryOne<{ fee: number; ri: number; n: number }>(
           `select coalesce(sum(case when is_reimbursement then 0 else amount_base end),0)::numeric fee,
@@ -137,48 +147,63 @@ export default async function RevenuePage({
             group by 1`,
           [entity.memberIds, fyRange.start, fyRange.end, verticalId, EXCLUDED_STATUS, entity.verticalIds],
         ),
-        query<{ code: string | null; name: string | null; fee: number; ri: number; cn: number }>(
-          `select v.code, v.name,
+        /**
+         * Invoiced by vertical.
+         *
+         * Grouped on the vertical alone, with credit notes and retainers
+         * brought alongside as their own queries rather than as correlated
+         * sub-selects. Three simple aggregates that each read like what they
+         * are beat one query that has to carry the entity through its group-by
+         * just to keep a sub-select honest.
+         */
+        query<{ id: number | null; code: string | null; name: string | null; fee: number; ri: number }>(
+          `select v.id, v.code, v.name,
                   coalesce(sum(case when i.is_reimbursement then 0 else i.amount_base end),0)::numeric fee,
-                  coalesce(sum(case when i.is_reimbursement then i.amount_base else 0 end),0)::numeric ri,
-                  coalesce((select sum(cn.cn_amount_base) from credit_notes cn
-                             where cn.entity_id=i.entity_id and cn.vertical_id=i.vertical_id
-                               and cn.is_primary_row and not (cn.status = any($4))
-                               and cn.credit_note_date between $2 and $3
-                               ${verticalScope("$5", "cn.vertical_id")}),0)::numeric cn
+                  coalesce(sum(case when i.is_reimbursement then i.amount_base else 0 end),0)::numeric ri
              from invoice_lines i left join verticals v on v.id=i.vertical_id
-            where i.entity_id=any($1::int[]) and i.invoice_date between $2 and $3 and not (i.status = any($4))
-              ${verticalScope("$5", "i.vertical_id")}
-            group by v.code, v.name, i.entity_id, i.vertical_id
-            order by 3 desc`,
-          [entity.memberIds, start, end, EXCLUDED_STATUS, entity.verticalIds],
+            where i.entity_id=any($1::int[]) and i.invoice_date between $2 and $3
+              and not (i.status = any($4))
+              and ($5::int is null or i.vertical_id = $5)
+              ${verticalScope("$6", "i.vertical_id")}
+            group by v.id, v.code, v.name
+            order by 4 desc`,
+          [entity.memberIds, start, end, EXCLUDED_STATUS, verticalId, entity.verticalIds],
         ),
-        query<{ customer_name: string; fee: number; ri: number }>(
-          `select customer_name,
-                  sum(case when is_reimbursement then 0 else amount_base end)::numeric fee,
-                  sum(case when is_reimbursement then amount_base else 0 end)::numeric ri
-             from invoice_lines
-            where entity_id=any($1::int[]) and invoice_date between $2 and $3
-              and ($4::int is null or vertical_id=$4) and not (status = any($5))
+        query<{ vertical_id: number | null; cn: number }>(
+          `select vertical_id, coalesce(sum(cn_amount_base),0)::numeric cn
+             from credit_notes
+            where entity_id=any($1::int[]) and credit_note_date between $2 and $3
+              and is_primary_row and not (status = any($4))
+              and ($5::int is null or vertical_id = $5)
               ${verticalScope("$6")}
-            group by customer_name order by 2 desc limit 12`,
-          args,
+            group by vertical_id`,
+          [entity.memberIds, start, end, EXCLUDED_STATUS, verticalId, entity.verticalIds],
         ),
-        query<{ salesperson: string | null; fee: number }>(
-          `select salesperson, sum(case when is_reimbursement then 0 else amount_base end)::numeric fee
-             from invoice_lines
-            where entity_id=any($1::int[]) and invoice_date between $2 and $3
-              and ($4::int is null or vertical_id=$4) and not (status = any($5))
-              ${verticalScope("$6")}
-            group by salesperson order by 2 desc limit 12`,
-          args,
-        ),
+        /**
+         * The retainer half of each vertical's fee.
+         *
+         * Only meaningful over whole months: a retainer is billed monthly, so a
+         * single week has no defensible share of one and inventing a fifth of a
+         * month's retainer would put a figure on the page no invoice supports.
+         */
+        period.monthAligned
+          ? query<{ vertical_id: number | null; amount: number }>(
+              `select vertical_id, coalesce(sum(amount_base),0)::numeric amount
+                 from retainer_revenue
+                where entity_id=any($1::int[]) and month between $2 and $3
+                  and ($4::int is null or vertical_id = $4)
+                  ${verticalScope("$5")}
+                group by vertical_id`,
+              [entity.memberIds, start, end, verticalId, entity.verticalIds],
+            )
+          : Promise.resolve([] as { vertical_id: number | null; amount: number }[]),
         queryOne<{ n: number; v: number }>(
           `select count(*)::int n, coalesce(sum(amount_base),0)::numeric v
              from invoice_lines
             where entity_id=any($1::int[]) and invoice_date between $2 and $3 and status = any($4)
-              ${verticalScope("$5")}`,
-          [entity.memberIds, start, end, EXCLUDED_STATUS, entity.verticalIds],
+              and ($5::int is null or vertical_id = $5)
+              ${verticalScope("$6")}`,
+          [entity.memberIds, start, end, EXCLUDED_STATUS, verticalId, entity.verticalIds],
         ),
         /**
          * Invoiced by the currency it was billed in.
@@ -200,9 +225,6 @@ export default async function RevenuePage({
             order by sum(amount_base) desc`,
           args,
         ),
-        // The retainer list is a whole-year picture by design: a retainer that
-        // stopped in June is invisible in a period that starts after it.
-        buildRetainerBreakdown({ entity, fyStartYear: fy, verticalId }),
       ]);
 
     // One row is not a split; a company that only ever bills in rupees gets a
@@ -232,6 +254,19 @@ export default async function RevenuePage({
           }
         : null,
     });
+
+    const customerRows = customer
+      ? await runDrill({
+          kind: "revenue",
+          drill: "customer",
+          entity,
+          start: fyRange.start,
+          end,
+          verticalId,
+          customer,
+          limit: DRILL_LIMIT,
+        })
+      : null;
 
     // The documents behind a tile, from the same definition the Excel export uses.
     const drill = typeof params.drill === "string" ? params.drill : null;
@@ -303,8 +338,31 @@ export default async function RevenuePage({
       ...months.map((m) => Number(monthMap.get(m.key)?.fee ?? 0) + Number(monthMap.get(m.key)?.ri ?? 0)),
     );
 
-    const clientTotal = byClient.reduce((s, r) => s + Number(r.fee), 0);
-    const topThree = byClient.slice(0, 3).reduce((s, r) => s + Number(r.fee), 0);
+    /**
+     * The vertical table, assembled once.
+     *
+     * Professional fee is the remainder of the fee after the retainer, never a
+     * second measurement of it - that is what keeps the two halves adding to
+     * the invoiced total exactly rather than to each other approximately.
+     */
+    const cnByVerticalId = new Map(cnByVertical.map((r) => [r.vertical_id, Number(r.cn)]));
+    const retainerByVerticalId = new Map(
+      retainerByVertical.map((r) => [r.vertical_id, Number(r.amount)]),
+    );
+    const verticalRows = byVertical.map((r) => {
+      const fee = Number(r.fee);
+      const retainer = period.monthAligned ? (retainerByVerticalId.get(r.id) ?? 0) : null;
+      return {
+        id: r.id,
+        label: (r.code as string | null) ?? "Unallocated",
+        retainer,
+        professional: retainer === null ? null : fee - retainer,
+        fee,
+        cn: cnByVerticalId.get(r.id) ?? 0,
+        ri: Number(r.ri),
+      };
+    });
+
 
     return (
       <>
@@ -312,16 +370,19 @@ export default async function RevenuePage({
           title="Revenue"
           subtitle={`${fyLabel(fy)} · ${period.label}${verticalName ? ` · ${verticalName}` : ""} · invoiced fee revenue, net of credit notes`}
           actions={
-            <PeriodControls
-              financialYears={availableYears}
-              currentFy={fy}
-              verticals={verticals.map((v) => ({ id: v.id, name: v.name }))}
-              currentVerticalId={verticalId}
-              months={period.months.map((m) => ({ value: m.key, label: m.label }))}
-              weeks={period.weeks.map((w) => ({ value: String(w.number), label: w.label }))}
-              currentMonth={period.monthKey}
-              currentWeek={period.weekNumber === null ? null : String(period.weekNumber)}
-            />
+            <>
+              <PeriodControls
+                financialYears={availableYears}
+                currentFy={fy}
+                verticals={verticals.map((v) => ({ id: v.id, name: v.name }))}
+                currentVerticalId={verticalId}
+                months={period.months.map((m) => ({ value: m.key, label: m.label }))}
+                weeks={period.weeks.map((w) => ({ value: String(w.number), label: w.label }))}
+                currentMonth={period.monthKey}
+                currentWeek={period.weekNumber === null ? null : String(period.weekNumber)}
+              />
+              <CustomerPicker customers={customers} current={customer} />
+            </>
           }
         />
 
@@ -377,6 +438,13 @@ export default async function RevenuePage({
                   : `${percent(share(headline.professional, headline.actual))} of revenue`
               }
             />
+            {/*
+              The customer-by-customer retainer list hangs off this tile rather
+              than sitting open on the page. It is the answer to a question the
+              tile provokes - which clients are on a retainer, and has one
+              stopped - not something to read past on the way to everything
+              else.
+            */}
             <KpiTile
               label="Recurring retainership fee"
               value={headline.retainership === null ? "—" : compactINR(headline.retainership)}
@@ -384,6 +452,14 @@ export default async function RevenuePage({
                 headline.retainership === null
                   ? "Billed monthly — not split for a single week"
                   : `${percent(share(headline.retainership, headline.actual))} of revenue`
+              }
+              active={drill === "retainers"}
+              href={
+                headline.retainership === null
+                  ? undefined
+                  : withParams("/revenue", params, {
+                      drill: drill === "retainers" ? null : "retainers",
+                    })
               }
             />
           </div>
@@ -414,6 +490,36 @@ export default async function RevenuePage({
               ))}
             </span>
           </Notice>
+
+          {customerRows && (
+            <DrillPanel
+              title={customer!}
+              subtitle={
+                <>
+                  {fyLabel(fy)} · every invoice raised from {dateLabel(fyRange.start)} to{" "}
+                  {dateLabel(end)}
+                  {verticalName ? ` · ${verticalName}` : ""} · oldest first. Fee and
+                  reimbursement together, so this is what the client was actually billed.
+                </>
+              }
+              closeHref={withParams("/revenue", params, { customer: null })}
+              downloadHref={withParams("/api/export", params, {
+                kind: "revenue",
+                drill: "customer",
+                fy,
+                vertical: verticalId,
+                customer,
+              })}
+              shown={customerRows.rows.length}
+              total={customerRows.total}
+            >
+              <DataTable
+                columns={drillColumns(customerRows.columns)}
+                rows={customerRows.rows.map((r) => renderDrillRow(r, customerRows.columns))}
+                emptyMessage="Nothing was invoiced to this customer in the year to date."
+              />
+            </DrillPanel>
+          )}
 
           {chosen && (
             <DrillPanel
@@ -469,21 +575,6 @@ export default async function RevenuePage({
                 <CardTitle hint={period.shortLabel}>Invoiced by currency</CardTitle>
               </div>
               <CurrencySplit rows={currencyRows} countLabel="Invoices" />
-            </Card>
-          )}
-
-          {retainers.rows.length > 0 && (
-            <Card padded={false}>
-              <div className="px-4 pt-4 sm:px-5">
-                <CardTitle hint={`${fyLabel(fy)} · whole year`}>
-                  Recurring retainership fee by customer
-                </CardTitle>
-              </div>
-              <RetainerTable
-                data={retainers}
-                // With one vertical picked the column would repeat the picker.
-                showVertical={verticalId === null}
-              />
             </Card>
           )}
 
@@ -560,71 +651,59 @@ export default async function RevenuePage({
             </p>
           </Card>
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Card padded={false}>
-              <div className="p-4 sm:p-5">
-                <CardTitle>By vertical</CardTitle>
-              </div>
-              <DataTable
-                columns={[
-                  { header: "Vertical" },
-                  { header: "Fee", numeric: true },
-                  { header: "Credit notes", numeric: true },
-                  { header: "Net", numeric: true, strong: true },
-                  { header: "Reimbursement", numeric: true },
-                ]}
-                rows={byVertical.map((r) => [
-                  r.code ?? "Unallocated",
-                  money(Number(r.fee)),
-                  Number(r.cn) ? `(${money(Number(r.cn))})` : "—",
-                  money(Number(r.fee) - Number(r.cn)),
-                  money(Number(r.ri)),
-                ])}
-              />
-            </Card>
-
-            <Card padded={false}>
-              <div className="p-4 sm:p-5">
-                <CardTitle
-                  hint={`top 3 = ${percent(share(topThree, clientTotal))} of fees`}
-                >
-                  By client
-                </CardTitle>
-              </div>
-              <DataTable
-                columns={[
-                  { header: "Client" },
-                  { header: "Fee", numeric: true, strong: true },
-                  { header: "Share", numeric: true },
-                  { header: "Reimbursement", numeric: true },
-                ]}
-                rows={byClient.map((r) => [
-                  r.customer_name,
-                  money(Number(r.fee)),
-                  percent(share(Number(r.fee), clientTotal)),
-                  money(Number(r.ri)),
-                ])}
-              />
-            </Card>
-          </div>
-
           <Card padded={false}>
             <div className="p-4 sm:p-5">
-              <CardTitle hint="fee invoices only">By salesperson</CardTitle>
+              <CardTitle hint="click a vertical for its invoices">By vertical</CardTitle>
             </div>
             <DataTable
               columns={[
-                { header: "Salesperson" },
-                { header: "Fee invoiced", numeric: true, strong: true },
-                { header: "Share", numeric: true },
+                { header: "Vertical" },
+                { header: "Professional fee", numeric: true },
+                { header: "Recurring retainership fee", numeric: true },
+                { header: "Total", numeric: true, strong: true },
+                { header: "Credit notes", numeric: true },
+                { header: "Net", numeric: true, strong: true },
+                { header: "Reimbursement", numeric: true },
               ]}
-              rows={bySalesperson.map((r) => [
-                r.salesperson ?? "Unassigned",
-                money(Number(r.fee)),
-                percent(share(Number(r.fee), fee)),
+              rows={verticalRows.map((r) => [
+                /*
+                  The vertical is the way into its invoices: filtering the page
+                  to it and opening the list in one go, which is also what
+                  points the Excel download at the same rows. Unallocated has no
+                  vertical to filter by, so it stays plain text.
+                */
+                r.id ? (
+                  <Link
+                    key="v"
+                    href={withParams("/revenue", params, {
+                      vertical: String(r.id),
+                      drill: "fee",
+                      customer: null,
+                    })}
+                    className="font-medium text-navy hover:underline"
+                  >
+                    {r.label}
+                  </Link>
+                ) : (
+                  r.label
+                ),
+                r.professional === null ? "—" : money(r.professional),
+                r.retainer === null ? "—" : r.retainer ? money(r.retainer) : "—",
+                money(r.fee),
+                r.cn ? `(${money(r.cn)})` : "—",
+                money(r.fee - r.cn),
+                r.ri ? money(r.ri) : "—",
               ])}
             />
+            {!period.monthAligned && (
+              <p className="px-4 pb-4 text-[11.5px] text-ink-muted sm:px-5">
+                The retainer is billed monthly, so a single week has no
+                defensible share of one. Pick a month or the year to date to see
+                the professional and retainership split.
+              </p>
+            )}
           </Card>
+
         </div>
       </>
     );

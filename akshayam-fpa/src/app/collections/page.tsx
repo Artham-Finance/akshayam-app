@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { BudgetTable } from "@/components/BudgetTable";
 import { CurrencySplit, type CurrencyRow } from "@/components/CurrencySplit";
+import { CustomerPicker } from "@/components/CustomerPicker";
 import { DataTable, drillColumns, renderDrillRow } from "@/components/DataTable";
 import { PeriodControls } from "@/components/PeriodControls";
 import { SetupRequired } from "@/components/SetupRequired";
@@ -15,12 +16,13 @@ import {
 } from "@/components/ui";
 import { query, queryOne } from "@/lib/db";
 import { getEntity, getVerticals, verticalScope } from "@/lib/entity";
-import { compactINR, money, monthLabel, percent, share } from "@/lib/format";
+import { compactINR, dateLabel, money, monthLabel, percent, share } from "@/lib/format";
 import { withParams } from "@/lib/href";
 import { fyBounds, fyLabel, fyMonths } from "@/lib/period";
 import { ledgerWrittenTo, resolvePeriod } from "@/lib/reporting-period";
 import { buildBudgetVsActual } from "@/lib/reports/budget";
 import { isDrill, runDrill, UNTRACEABLE_RECEIPT } from "@/lib/reports/drilldowns";
+import { listCustomers } from "@/lib/reports/customer-statement";
 import { requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
@@ -86,7 +88,28 @@ export default async function CollectionsPage({
     const verticalId = verticals.some((v) => v.id === requestedVertical) ? requestedVertical : null;
     const verticalName = verticals.find((v) => v.id === verticalId)?.name ?? null;
 
-    const [totals, byMonth, byVertical, topClients, unmatched, byCurrency] = await Promise.all([
+    /**
+     * The budget table names verticals by code, and a link needs the id. Codes
+     * that appear more than once - the same code in both companies, seen only
+     * in the consolidated view - are left unlinked rather than sent to whichever
+     * of them happened to be first.
+     */
+    const idByCode = new Map<string, number | null>();
+    for (const v of verticals) {
+      idByCode.set(v.code, idByCode.has(v.code) ? null : v.id);
+    }
+
+    /**
+     * One customer's receipts, from the start of the year to the end of the
+     * chosen period. Not the period alone: what a partner wants of a client is
+     * what has come in this year, and one week of it answers nothing.
+     */
+    const customers = await listCustomers(entity, ["payments"], verticalId);
+    const pickedCustomer = typeof params.customer === "string" ? params.customer : null;
+    const customer =
+      pickedCustomer && customers.includes(pickedCustomer) ? pickedCustomer : null;
+
+    const [totals, byMonth, byVertical, unmatched, byCurrency] = await Promise.all([
       queryOne<{ fee: number; ri: number; n: number }>(
         `select coalesce(sum(case when a.is_reimbursement then 0 else a.amount_base end),0)::numeric fee,
                 coalesce(sum(case when a.is_reimbursement then a.amount_base else 0 end),0)::numeric ri,
@@ -116,22 +139,10 @@ export default async function CollectionsPage({
            join payments p on p.id = a.payment_id
            left join verticals v on v.id = a.vertical_id
           where a.entity_id = any($1::int[]) and p.payment_date between $2 and $3
-            ${verticalScope("$4", "a.vertical_id")}
-          group by v.code, v.name
-          order by sum(a.amount_base) desc`,
-        [entity.memberIds, start, end, entity.verticalIds],
-      ),
-      query<{ customer_name: string; fee: number; ri: number }>(
-        `select p.customer_name,
-                sum(case when a.is_reimbursement then 0 else a.amount_base end)::numeric fee,
-                sum(case when a.is_reimbursement then a.amount_base else 0 end)::numeric ri
-           from payment_allocations a join payments p on p.id = a.payment_id
-          where a.entity_id = any($1::int[]) and p.payment_date between $2 and $3
             and ($4::int is null or a.vertical_id = $4)
             ${verticalScope("$5", "a.vertical_id")}
-          group by p.customer_name
-          order by sum(a.amount_base) desc
-          limit 10`,
+          group by v.code, v.name
+          order by sum(a.amount_base) desc`,
         [entity.memberIds, start, end, verticalId, entity.verticalIds],
       ),
       // Exactly the population the "unmatched" drill lists, so the count in the
@@ -141,8 +152,9 @@ export default async function CollectionsPage({
            from payment_allocations a join payments p on p.id = a.payment_id
           where a.entity_id = any($1::int[]) and p.payment_date between $2 and $3
             and ${UNTRACEABLE_RECEIPT}
-            ${verticalScope("$4", "a.vertical_id")}`,
-        [entity.memberIds, start, end, entity.verticalIds],
+            and ($4::int is null or a.vertical_id = $4)
+            ${verticalScope("$5", "a.vertical_id")}`,
+        [entity.memberIds, start, end, verticalId, entity.verticalIds],
       ),
       /**
        * Receipts by the currency they arrived in.
@@ -195,6 +207,19 @@ export default async function CollectionsPage({
         : null,
     });
 
+    const customerRows = customer
+      ? await runDrill({
+          kind: "collections",
+          drill: "customer",
+          entity,
+          start: fyRange.start,
+          end,
+          verticalId,
+          customer,
+          limit: DRILL_LIMIT,
+        })
+      : null;
+
     // The receipts behind a tile, from the same definition the Excel export uses.
     const drill = typeof params.drill === "string" ? params.drill : null;
     const chosen = isDrill("collections", drill)
@@ -236,6 +261,19 @@ export default async function CollectionsPage({
     const cumFee = Number(toDate?.fee ?? 0);
     const cumRi = Number(toDate?.ri ?? 0);
 
+    /**
+     * The window the headline speaks for: the year to date up to the chosen
+     * week or month, or the year to date itself. A single week of budget is
+     * not what anyone means by "period budget" - week 21 falls in August, so
+     * the budget behind it is five months of the year, which is the firm own
+     * convention and the same rule the Revenue page follows.
+     */
+    const leadWindow = period.cumulative ?? period;
+    const headline = {
+      annual: budget.total.annual,
+      ...(period.cumulative ? budget.total.cumulative! : budget.total.period),
+    };
+
     const monthMap = new Map(byMonth.map((r) => [r.m, r]));
     const peak = Math.max(
       1,
@@ -251,20 +289,63 @@ export default async function CollectionsPage({
           title="Collections"
           subtitle={`${fyLabel(fy)} · ${period.label}${verticalName ? ` · ${verticalName}` : ""} · fee receipts shown separately from reimbursement recoveries`}
           actions={
-            <PeriodControls
-              financialYears={availableYears}
-              currentFy={fy}
-              verticals={verticals.map((v) => ({ id: v.id, name: v.name }))}
-              currentVerticalId={verticalId}
-              months={period.months.map((m) => ({ value: m.key, label: m.label }))}
-              weeks={period.weeks.map((w) => ({ value: String(w.number), label: w.label }))}
-              currentMonth={period.monthKey}
-              currentWeek={period.weekNumber === null ? null : String(period.weekNumber)}
-            />
+            <>
+              <PeriodControls
+                financialYears={availableYears}
+                currentFy={fy}
+                verticals={verticals.map((v) => ({ id: v.id, name: v.name }))}
+                currentVerticalId={verticalId}
+                months={period.months.map((m) => ({ value: m.key, label: m.label }))}
+                weeks={period.weeks.map((w) => ({ value: String(w.number), label: w.label }))}
+                currentMonth={period.monthKey}
+                currentWeek={period.weekNumber === null ? null : String(period.weekNumber)}
+              />
+              <CustomerPicker customers={customers} current={customer} />
+            </>
           }
         />
 
         <div className="space-y-4">
+          {/*
+            The budget position leads, exactly as it does on Revenue: what was
+            targeted for the period, what came in against it, and how far that
+            got. The three receipt tiles below are the register behind the
+            Actual figure, and stay put because the drill-downs hang off them.
+          */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <KpiTile label="Annual Budget" value={compactINR(headline.annual)} note={fyLabel(fy)} />
+            <KpiTile
+              label="Period Budget"
+              value={compactINR(headline.periodBudget)}
+              note={leadWindow.basis}
+            />
+            <KpiTile
+              label="Actual"
+              value={compactINR(headline.actual)}
+              note="Fee receipts, excluding reimbursement recoveries"
+              tone="positive"
+              cumulative={
+                period.cumulative
+                  ? { label: period.shortLabel, value: compactINR(budget.total.period.actual) }
+                  : undefined
+              }
+            />
+            <KpiTile
+              label="% Achievement"
+              value={headline.achievement === null ? "—" : percent(headline.achievement, 2)}
+              note="Actual against period budget"
+              tone={
+                headline.achievement === null
+                  ? "ink"
+                  : headline.achievement >= 100
+                    ? "positive"
+                    : headline.achievement >= 85
+                      ? "ink"
+                      : "caution"
+              }
+            />
+          </div>
+
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             {(
               [
@@ -312,6 +393,35 @@ export default async function CollectionsPage({
               />
             ))}
           </div>
+
+          {customerRows && (
+            <DrillPanel
+              title={customer!}
+              subtitle={
+                <>
+                  {fyLabel(fy)} · every receipt from {dateLabel(fyRange.start)} to{" "}
+                  {dateLabel(end)}
+                  {verticalName ? ` · ${verticalName}` : ""} · earliest first
+                </>
+              }
+              closeHref={withParams("/collections", params, { customer: null })}
+              downloadHref={withParams("/api/export", params, {
+                kind: "collections",
+                drill: "customer",
+                fy,
+                vertical: verticalId,
+                customer,
+              })}
+              shown={customerRows.rows.length}
+              total={customerRows.total}
+            >
+              <DataTable
+                columns={drillColumns(customerRows.columns)}
+                rows={customerRows.rows.map((r) => renderDrillRow(r, customerRows.columns))}
+                emptyMessage="Nothing has been received from this customer in the year to date."
+              />
+            </DrillPanel>
+          )}
 
           {chosen && (
             <DrillPanel
@@ -390,6 +500,16 @@ export default async function CollectionsPage({
               periodLabel={period.shortLabel}
               periodBasis={period.basis}
               cumulativeBasis={period.cumulative?.basis ?? null}
+              hrefFor={(row) => {
+                const id = row.code ? idByCode.get(row.code) : null;
+                return id
+                  ? withParams("/collections", params, {
+                      vertical: String(id),
+                      drill: "fee",
+                      customer: null,
+                    })
+                  : null;
+              }}
             />
             {budget.hasUnbudgeted && (
               <p className="px-4 pb-4 text-[11.5px] text-caution sm:px-5">
@@ -444,37 +564,43 @@ export default async function CollectionsPage({
             </p>
           </Card>
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Card padded={false}>
-              <div className="p-4 sm:p-5">
-                <CardTitle>By vertical</CardTitle>
-              </div>
-              <DataTable
-                columns={[{ header: "Vertical", numeric: false, strong: false }, { header: "Fee", numeric: true, strong: false }, { header: "Reimbursement", numeric: true, strong: false }, { header: "Total", numeric: true, strong: true }]}
-                rows={byVertical.map((r) => [
-                  r.code ?? "Unmatched",
+          <Card padded={false}>
+            <div className="p-4 sm:p-5">
+              <CardTitle hint="click a vertical for its receipts">By vertical</CardTitle>
+            </div>
+            <DataTable
+              columns={[
+                { header: "Vertical" },
+                { header: "Fee", numeric: true },
+                { header: "Reimbursement", numeric: true },
+                { header: "Total", numeric: true, strong: true },
+              ]}
+              rows={byVertical.map((r) => {
+                const id = r.code ? idByCode.get(r.code as string) : null;
+                return [
+                  id ? (
+                    <Link
+                      key="v"
+                      href={withParams("/collections", params, {
+                        vertical: String(id),
+                        drill: "fee",
+                        customer: null,
+                      })}
+                      className="font-medium text-navy hover:underline"
+                    >
+                      {r.code as string}
+                    </Link>
+                  ) : (
+                    ((r.code as string) ?? "Unmatched")
+                  ),
                   money(Number(r.fee)),
-                  money(Number(r.ri)),
+                  Number(r.ri) ? money(Number(r.ri)) : "—",
                   money(Number(r.fee) + Number(r.ri)),
-                ])}
-              />
-            </Card>
+                ];
+              })}
+            />
+          </Card>
 
-            <Card padded={false}>
-              <div className="p-4 sm:p-5">
-                <CardTitle hint="top 10">By client</CardTitle>
-              </div>
-              <DataTable
-                columns={[{ header: "Client", numeric: false, strong: false }, { header: "Fee", numeric: true, strong: false }, { header: "Reimbursement", numeric: true, strong: false }, { header: "Total", numeric: true, strong: true }]}
-                rows={topClients.map((r) => [
-                  r.customer_name,
-                  money(Number(r.fee)),
-                  money(Number(r.ri)),
-                  money(Number(r.fee) + Number(r.ri)),
-                ])}
-              />
-            </Card>
-          </div>
         </div>
       </>
     );

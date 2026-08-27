@@ -48,6 +48,13 @@ export function ApportionmentTable({
   const total = (pick: (v: ApportionedVertical) => number) =>
     data.verticals.reduce((sum, v) => sum + pick(v), 0);
 
+  /**
+   * Narrowed to a single vertical, the total column would repeat the only
+   * column beside it. The apportionment behind the figures is still struck
+   * across every vertical - it is the view that is narrowed, never the spread.
+   */
+  const showTotal = data.verticals.length > 1;
+
   /** One row: a label, a value per vertical, and the total across them. */
   const Row = ({
     label,
@@ -106,9 +113,11 @@ export function ApportionmentTable({
             </td>
           );
         })}
-        <td className={clsx(cell, "border-l border-line font-semibold text-ink")}>
-          {raw ? String(total(pick)) : show(total(pick))}
-        </td>
+        {showTotal && (
+          <td className={clsx(cell, "border-l border-line font-semibold text-ink")}>
+            {raw ? String(total(pick)) : show(total(pick))}
+          </td>
+        )}
       </tr>
     );
   };
@@ -141,13 +150,27 @@ export function ApportionmentTable({
         </label>
       </div>
 
+      {/*
+        A paragraph rather than a <caption>. A caption sits inside the table and
+        so counts towards its max-content width - two sentences of prose were
+        holding the label column open to the width of the longest line, which
+        with a single vertical left its one figure stranded at the far edge.
+      */}
+      <p className="px-3 pb-3 text-[11.5px] text-ink-muted">
+        {show(data.poolTotal)} of common cost spread over {data.label}, on the budget&rsquo;s own
+        bases. Cost already tagged to a vertical is its own and is never re-spread.
+        {scale !== "abs" && ` All figures ${scaleLabel[scale].toLowerCase()}.`}
+      </p>
+
       <div className="overflow-x-auto">
-      <table className="w-full min-w-max border-collapse text-[13px]">
-        <caption className="px-3 pb-3 text-left text-[11.5px] text-ink-muted">
-          {show(data.poolTotal)} of common cost spread over {data.label}, on the budget&rsquo;s
-          own bases. Cost already tagged to a vertical is its own and is never re-spread.
-          {scale !== "abs" && ` All figures ${scaleLabel[scale].toLowerCase()}.`}
-        </caption>
+      <table
+        className={clsx(
+          "min-w-max border-collapse text-[13px]",
+          // Full width spreads twelve columns evenly; with one it would strand
+          // the single figure against the right edge of the card.
+          showTotal ? "w-full" : "w-auto",
+        )}
+      >
         <thead>
           <tr>
             <th scope="col" className={clsx(head, "text-left")}>
@@ -160,6 +183,7 @@ export function ApportionmentTable({
                 className={clsx(
                   head,
                   "text-right",
+                  !showTotal && "min-w-[170px]",
                   // The lines outside the budget's nine are context, not
                   // participants; they carry no apportionment.
                   !v.receivesApportionment && "border-l border-line font-normal",
@@ -168,9 +192,11 @@ export function ApportionmentTable({
                 {v.label}
               </th>
             ))}
-            <th scope="col" className={clsx(head, "border-l border-line text-right")}>
-              Total
-            </th>
+            {showTotal && (
+              <th scope="col" className={clsx(head, "border-l border-line text-right")}>
+                Total
+              </th>
+            )}
           </tr>
         </thead>
         <tbody>
@@ -198,22 +224,26 @@ export function ApportionmentTable({
           <Row label="Total cost" pick={(v) => v.totalCost} tone="strong" rule />
           <Row label="Contribution" pick={(v) => v.contribution} tone="result" />
         </tbody>
-        <tfoot>
-          <tr>
-            <td
-              colSpan={data.verticals.length + 2}
-              className="px-3 py-3 text-left text-[11.5px] text-ink-muted"
-            >
-              Revenue, total cost and contribution add across to the quarter&rsquo;s figures on
-              Budget vs Actual — total contribution of {show(contribution)} is the same
-              EBITDA. The lines after the nine carry no apportionment: Common&rsquo;s cost{" "}
-              <span className="italic">is</span> the pool and has already been spread above, so
-              only its revenue appears.
-            </td>
-          </tr>
-        </tfoot>
       </table>
       </div>
+
+      <p className="px-3 py-3 text-[11.5px] leading-relaxed text-ink-muted">
+        {showTotal ? (
+          <>
+            Revenue, total cost and contribution add across to the quarter&rsquo;s figures on
+            Budget vs Actual — total contribution of {show(contribution)} is the same EBITDA.
+            The lines after the nine carry no apportionment: Common&rsquo;s cost{" "}
+            <span className="italic">is</span> the pool and has already been spread above, so
+            only its revenue appears.
+          </>
+        ) : (
+          <>
+            Contribution of {show(contribution)} is this vertical&rsquo;s share of EBITDA. The
+            common cost above was spread across every vertical on the budget&rsquo;s bases and
+            then narrowed to this one — the share does not change with the filter.
+          </>
+        )}
+      </p>
     </>
   );
 }

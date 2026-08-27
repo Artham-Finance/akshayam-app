@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { SetupRequired } from "@/components/SetupRequired";
 import { Card, CardTitle, EmptyState, KpiTile, Notice, PageHeader } from "@/components/ui";
-import { query, queryOne } from "@/lib/db";
+import { queryOne } from "@/lib/db";
 import {
   countUnmappedAccounts,
   getAvailableFinancialYears,
@@ -11,6 +11,7 @@ import {
 import { compactINR, dateLabel, percent, share } from "@/lib/format";
 import { fyLabel } from "@/lib/period";
 import { ledgerWrittenTo, resolvePeriod } from "@/lib/reporting-period";
+import { buildBudgetVsActual } from "@/lib/reports/budget";
 import { buildProfitAndLoss } from "@/lib/reports/statements";
 import { requireEntityAccess } from "@/lib/auth/dal";
 
@@ -53,7 +54,8 @@ export default async function OverviewPage() {
     });
     const { start, end } = period;
 
-    const [statement, arSnapshot, collections] = await Promise.all([
+    const [statement, arSnapshot, topTen, revenueBudget, collectionBudget] =
+      await Promise.all([
       availableYears.length
         ? buildProfitAndLoss({ entity, fyStartYear: fy, detail: false })
         : null,
@@ -61,11 +63,16 @@ export default async function OverviewPage() {
       // latest date across the group would drop whichever company's AR export
       // was pulled a day earlier - which is how consolidated receivables came
       // out as one company's book.
-      queryOne<{ as_of: string; total: number; overdue_90: number }>(
+      queryOne<{ as_of: string; total: number; overdue_180: number }>(
         `select max(as_of)::text as as_of,
                 sum(balance_base)::numeric as total,
-                sum(case when due_date is not null and as_of - due_date > 90
-                         then balance_base else 0 end)::numeric as overdue_90
+                -- The same age the Receivables page measures: from the due date,
+                -- falling back to the invoice date. Requiring a due date instead
+                -- silently dropped every invoice billed due on receipt, which is
+                -- most of them, and the two pages then disagreed about the same
+                -- figure.
+                sum(case when as_of - coalesce(due_date, invoice_date) > 180
+                         then balance_base else 0 end)::numeric as overdue_180
            from ar_open_items
           where (entity_id, as_of) in (
                   select entity_id, max(as_of) from ar_open_items
@@ -74,14 +81,40 @@ export default async function OverviewPage() {
          having count(*) > 0`,
         [entity.memberIds, entity.verticalIds],
       ),
-      queryOne<{ total: number }>(
-        `select coalesce(sum(a.amount_base), 0)::numeric as total
-           from payment_allocations a
-           join payments p on p.id = a.payment_id
-          where a.entity_id = any($1::int[]) and p.payment_date between $2 and $3
-            ${verticalScope("$4", "a.vertical_id")}`,
-        [entity.memberIds, start, end, entity.verticalIds],
+      /**
+       * What the ten largest customers come to. The overview says how
+       * concentrated the book is; the names are one click away on Receivables.
+       */
+      queryOne<{ v: number; n: number }>(
+        `select coalesce(sum(t.total),0)::numeric v, count(*)::int n from (
+                  select coalesce(sum(balance_base),0)::numeric total
+                    from ar_open_items
+                   where (entity_id, as_of) in (
+                           select entity_id, max(as_of) from ar_open_items
+                            where entity_id = any($1::int[]) group by entity_id)
+                     ${verticalScope("$2")}
+                   group by customer_name
+                   order by total desc limit 10) t`,
+        [entity.memberIds, entity.verticalIds],
       ),
+      /**
+       * Budget against actual, from the same builder the Revenue and
+       * Collections pages use. Percentage achievement is measured against the
+       * period budget - the annual figure is context, not a target for five
+       * months of the year.
+       */
+      buildBudgetVsActual({
+        entity,
+        fyStartYear: fy,
+        measure: "revenue",
+        period: { start, end, fraction: period.fraction, monthAligned: period.monthAligned },
+      }),
+      buildBudgetVsActual({
+        entity,
+        fyStartYear: fy,
+        measure: "collection",
+        period: { start, end, fraction: period.fraction, monthAligned: period.monthAligned },
+      }),
     ]);
 
     const totalOf = (groupCode: string) => {
@@ -95,52 +128,142 @@ export default async function OverviewPage() {
     const ebitda = totalOf("ebitda");
     const pat = totalOf("pat");
 
-    const tiles: {
+    const arTotal = arSnapshot ? Number(arSnapshot.total) : null;
+    const topTenValue = topTen ? Number(topTen.v) : null;
+
+    /** How a percentage reads: on target, nearly, or not. */
+    const achievementTone = (pct: number | null) =>
+      pct === null ? ("ink" as const) : pct >= 100 ? ("positive" as const) : pct >= 85 ? ("ink" as const) : ("caution" as const);
+
+    interface Tile {
       label: string;
       value: string | null;
       note: string;
       href: string;
       tone?: "ink" | "positive" | "caution" | "negative";
-    }[] = [
+    }
+
+    /**
+     * Four questions, in the order they are asked: what did we bill, what came
+     * in, what is still owed, and what was left. Each row is one subject, so a
+     * partner reading down the page is never comparing a budget against an
+     * ageing bucket because they happened to land side by side.
+     */
+    const rows: { title: string; hint: string; tiles: Tile[] }[] = [
       {
-        label: `Revenue ${fyLabel(fy)}`,
-        value: revenue === null ? null : compactINR(revenue),
-        note: "Year to date, from the ledger",
-        href: "/pnl",
+        title: "Revenue",
+        hint: `${period.shortLabel} · ${period.basis}`,
+        tiles: [
+          {
+            label: "Annual budget",
+            value: compactINR(revenueBudget.total.annual),
+            note: fyLabel(fy),
+            href: "/revenue",
+          },
+          {
+            label: "Actual",
+            value: compactINR(revenueBudget.total.period.actual),
+            note: "Ledger revenue, net of credit notes",
+            href: "/revenue",
+            tone: "positive",
+          },
+          {
+            label: "% achievement",
+            value:
+              revenueBudget.total.period.achievement === null
+                ? "—"
+                : percent(revenueBudget.total.period.achievement, 2),
+            note: `Against ${compactINR(revenueBudget.total.period.periodBudget)} period budget`,
+            href: "/revenue",
+            tone: achievementTone(revenueBudget.total.period.achievement),
+          },
+        ],
       },
       {
-        label: "EBITDA",
-        value: ebitda === null ? null : compactINR(ebitda),
-        note:
-          revenue && ebitda !== null ? `${percent(share(ebitda, revenue))} of revenue` : "Year to date",
-        href: "/pnl",
+        title: "Collections",
+        hint: `${period.shortLabel} · ${period.basis}`,
+        tiles: [
+          {
+            label: "Annual budget",
+            value: compactINR(collectionBudget.total.annual),
+            note: fyLabel(fy),
+            href: "/collections",
+          },
+          {
+            label: "Actual",
+            // Fee receipts, not every receipt: this is the figure the
+            // percentage beside it is struck on, and a tile showing 2.81 Cr
+            // above a percentage computed on 2.59 Cr invites exactly one
+            // question and answers none of it. Reimbursement recoveries are a
+            // recharge of client-paid costs and are not collection performance.
+            value: compactINR(collectionBudget.total.period.actual),
+            note: `Fee receipts ${period.label.replace("Year to date · ", "")}`,
+            href: "/collections",
+            tone: "positive",
+          },
+          {
+            label: "% achievement",
+            value:
+              collectionBudget.total.period.achievement === null
+                ? "—"
+                : percent(collectionBudget.total.period.achievement, 2),
+            note: `Against ${compactINR(collectionBudget.total.period.periodBudget)} period budget`,
+            href: "/collections",
+            tone: achievementTone(collectionBudget.total.period.achievement),
+          },
+        ],
       },
       {
-        label: "Profit after tax",
-        value: pat === null ? null : compactINR(pat),
-        note: revenue && pat !== null ? `${percent(share(pat, revenue))} of revenue` : "Year to date",
-        href: "/pnl",
+        title: "Receivables",
+        hint: arSnapshot ? `as at ${dateLabel(arSnapshot.as_of)}` : "no snapshot uploaded",
+        tiles: [
+          {
+            label: "Outstanding",
+            value: arTotal === null ? null : compactINR(arTotal),
+            note: arSnapshot ? `As at ${dateLabel(arSnapshot.as_of)}` : "No snapshot uploaded",
+            href: "/receivables",
+          },
+          {
+            label: "Overdue exceeding 180 days",
+            value: arSnapshot ? compactINR(Number(arSnapshot.overdue_180)) : null,
+            note: arSnapshot
+              ? `${percent(share(Number(arSnapshot.overdue_180), arTotal ?? 0))} of receivables`
+              : "No snapshot uploaded",
+            href: "/receivables?drill=over180",
+            tone: "caution",
+          },
+          {
+            label: `Top ${topTen?.n ?? 10} customers`,
+            value: topTenValue === null ? null : compactINR(topTenValue),
+            note:
+              topTenValue === null || !arTotal
+                ? "No snapshot uploaded"
+                : `${percent(share(topTenValue, arTotal))} of the book`,
+            href: "/receivables?drill=top10",
+          },
+        ],
       },
       {
-        label: "Collections",
-        value: collections ? compactINR(Number(collections.total)) : null,
-        note: `Received ${period.label.replace("Year to date · ", "")}`,
-        href: "/collections",
-      },
-      {
-        label: "Receivables",
-        value: arSnapshot ? compactINR(Number(arSnapshot.total)) : null,
-        note: arSnapshot ? `As at ${dateLabel(arSnapshot.as_of)}` : "No snapshot uploaded",
-        href: "/receivables",
-      },
-      {
-        label: "Overdue over 90 days",
-        value: arSnapshot ? compactINR(Number(arSnapshot.overdue_90)) : null,
-        note: arSnapshot
-          ? `${percent(share(Number(arSnapshot.overdue_90), Number(arSnapshot.total)))} of receivables`
-          : "No snapshot uploaded",
-        href: "/receivables",
-        tone: "caution" as const,
+        title: "Profitability",
+        hint: `${period.shortLabel} · from the ledger`,
+        tiles: [
+          {
+            label: "EBITDA",
+            value: ebitda === null ? null : compactINR(ebitda),
+            note:
+              revenue && ebitda !== null
+                ? `${percent(share(ebitda, revenue))} of revenue`
+                : "Year to date",
+            href: "/pnl",
+          },
+          {
+            label: "Profit after tax",
+            value: pat === null ? null : compactINR(pat),
+            note:
+              revenue && pat !== null ? `${percent(share(pat, revenue))} of revenue` : "Year to date",
+            href: "/pnl",
+          },
+        ],
       },
     ];
 
@@ -170,18 +293,34 @@ export default async function OverviewPage() {
             </Notice>
           )}
 
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-            {tiles.map((tile) => (
-              <KpiTile
-                key={tile.label}
-                label={tile.label}
-                value={tile.value ?? "—"}
-                note={tile.note}
-                tone={tile.tone ?? "ink"}
-                href={tile.href}
-              />
-            ))}
-          </div>
+          {rows.map((row) => (
+            <section key={row.title}>
+              <div className="mb-2 flex items-baseline justify-between gap-3">
+                <h2 className="text-[13px] font-semibold uppercase tracking-[0.1em] text-ink-muted">
+                  {row.title}
+                </h2>
+                <span className="text-[11px] text-ink-faint">{row.hint}</span>
+              </div>
+              <div
+                className={
+                  row.tiles.length === 2
+                    ? "grid grid-cols-1 gap-3 sm:grid-cols-2"
+                    : "grid grid-cols-1 gap-3 sm:grid-cols-3"
+                }
+              >
+                {row.tiles.map((tile) => (
+                  <KpiTile
+                    key={tile.label}
+                    label={tile.label}
+                    value={tile.value ?? "—"}
+                    note={tile.note}
+                    tone={tile.tone ?? "ink"}
+                    href={tile.href}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
 
           <Card>
             <CardTitle hint="the three statements are live">Where to go next</CardTitle>

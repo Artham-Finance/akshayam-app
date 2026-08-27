@@ -1,7 +1,8 @@
 import clsx from "clsx";
+import Link from "next/link";
 import { Fragment } from "react";
 import { money, percent } from "@/lib/format";
-import type { BudgetCells, BudgetVsActual } from "@/lib/reports/budget";
+import type { BudgetCells, BudgetRow, BudgetVsActual } from "@/lib/reports/budget";
 
 /**
  * Budget against actual, by vertical.
@@ -26,11 +27,18 @@ export function BudgetTable({
   periodLabel,
   periodBasis,
   cumulativeBasis,
+  hrefFor,
 }: {
   data: BudgetVsActual;
   periodLabel: string;
   periodBasis: string;
   cumulativeBasis?: string | null;
+  /**
+   * Where a vertical's own figures live, when the page has somewhere to send
+   * the reader. Returning null for a row leaves it as plain text - the total
+   * line and any vertical the page cannot resolve to an id.
+   */
+  hrefFor?: (row: BudgetRow) => string | null;
 }) {
   const rows = [...data.rows, data.total];
   const twin = data.cumulativeLabel !== null;
@@ -187,7 +195,16 @@ export function BudgetTable({
                     isTotal ? "font-semibold text-ink" : "font-normal text-ink",
                   )}
                 >
-                  {row.name}
+                  {(() => {
+                    const href = isTotal ? null : hrefFor?.(row);
+                    return href ? (
+                      <Link href={href} className="font-medium text-navy hover:underline">
+                        {row.name}
+                      </Link>
+                    ) : (
+                      row.name
+                    );
+                  })()}
                 </th>
                 <td className="num border-b border-line px-4 py-2 text-right text-ink-muted">
                   {money(row.annual)}

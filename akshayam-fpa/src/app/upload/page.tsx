@@ -3,85 +3,10 @@ import { UploadForm, type UploadKindInfo } from "@/components/UploadForm";
 import { CompanyOnly, Notice, PageHeader } from "@/components/ui";
 import { query } from "@/lib/db";
 import { getEntity } from "@/lib/entity";
+import { UPLOAD_KINDS } from "@/lib/upload-kinds";
 import { requirePermissionAndEntity } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
-
-const KINDS: Omit<UploadKindInfo, "lastUpload">[] = [
-  {
-    kind: "gl",
-    title: "General Ledger",
-    zohoPath: "Reports → Accountant → General Ledger",
-    blurb:
-      "The backbone of the whole dashboard. Every P&L, balance sheet and cash flow figure is derived from this one file, and each number stays clickable back to the transactions behind it. Export the full financial year; re-uploading a period simply replaces it.",
-    cadence: "Monthly",
-    needsAsOf: false,
-  },
-  {
-    kind: "opening_tb",
-    title: "Opening Trial Balance",
-    zohoPath: "Reports → Accountant → Trial Balance",
-    blurb:
-      "The closing trial balance of the previous financial year. The ledger alone cannot tell us what the balance sheet opened at, so this seeds it. Needed once a year.",
-    cadence: "Once a year",
-    needsAsOf: true,
-    asOfLabel: "As at",
-  },
-  {
-    kind: "budget",
-    title: "Budget — planning workbook",
-    zohoPath: "Not a Zoho report — the firm's own planning workbook",
-    blurb:
-      "The budgeted P&L, month by month, and the breakdown behind Other expenses. Without it every page shows actuals with nothing to compare them against. One file covers the group and both companies — it loads all three whichever view you drop it on, and replaces the whole year rather than adding to it. Vertical revenue and collection targets are separate and already set up.",
-    cadence: "Once a year",
-    needsAsOf: false,
-  },
-  {
-    kind: "invoices",
-    title: "Invoice Details",
-    zohoPath: "Reports → Sales → Invoice Details",
-    blurb:
-      "Drives the revenue view: billing by month, client, vertical and salesperson, plus client concentration.",
-    cadence: "Weekly",
-    needsAsOf: false,
-  },
-  {
-    kind: "credit_notes",
-    title: "Credit Note Details",
-    zohoPath: "Reports → Sales → Credit Note Details",
-    blurb:
-      "Credit notes reduce revenue in the ledger but never appear in Invoice Details, so without this file the Revenue page reads high against the P&L. One credit note applied to several invoices is exported once per invoice; it is counted once.",
-    cadence: "Weekly",
-    needsAsOf: false,
-  },
-  {
-    kind: "retainers",
-    title: "Recurring Retainership Fee",
-    zohoPath: "Reports → Sales → Sales by Item",
-    blurb:
-      "Splits revenue between the monthly retainer and one-off professional work — the split shown on the Revenue page and in Budget vs Actual. Two shapes are read: one row per customer per month (customer_name, amount, Month), or the hand-kept table with one column per month. Re-uploading replaces every month the file covers, so a corrected list fixes itself.",
-    cadence: "Monthly",
-    needsAsOf: false,
-  },
-  {
-    kind: "payments",
-    title: "Customer Payments",
-    zohoPath: "Reports → Sales → Customer Payments",
-    blurb: "Drives collections and DSO — what was billed against what actually came in.",
-    cadence: "Weekly",
-    needsAsOf: false,
-  },
-  {
-    kind: "ar_aging",
-    title: "AR Aging Details",
-    zohoPath: "Reports → Receivables → AR Aging Details",
-    blurb:
-      "A snapshot of what is outstanding and how old it is. Each upload is a dated snapshot, so the trend builds up over time.",
-    cadence: "Weekly",
-    needsAsOf: true,
-    asOfLabel: "Snapshot date",
-  },
-];
 
 export default async function UploadPage() {
   await requirePermissionAndEntity("data.upload");
@@ -114,7 +39,7 @@ export default async function UploadPage() {
 
     const lastByKind = new Map(recent.map((r) => [r.kind, r]));
 
-    const kinds: UploadKindInfo[] = KINDS.map((info) => {
+    const kinds: UploadKindInfo[] = UPLOAD_KINDS.map((info) => {
       const last = lastByKind.get(info.kind);
       return {
         ...info,
