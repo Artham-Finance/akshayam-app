@@ -12,6 +12,7 @@
     "db:reset": "node --env-file-if-exists=.env.local db/migrate.mjs --reset",
     "fixtures": "node scripts/make-fixtures.mjs ./storage/fixtures",
     "test:parsers": "tsx scripts/check-parsers.mts ./storage/fixtures",
+    "test:statements": "tsx scripts/check-statements.mts",
     "seed:admin": "node --env-file-if-exists=.env.local db/seed-admin.mjs"
   },
   "dependencies": {
