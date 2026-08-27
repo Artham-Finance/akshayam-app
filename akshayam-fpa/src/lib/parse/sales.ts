@@ -208,11 +208,27 @@ export interface PaymentParseResult {
 }
 
 export async function parsePayments(input: Buffer | ArrayBuffer): Promise<PaymentParseResult> {
+  /**
+   * A date and a customer name are not enough to know this is a receipt.
+   *
+   * An AR Aging export has both, so it parsed cleanly here and loaded a
+   * hundred invoices as payments - and because a payments upload replaces
+   * every receipt inside the range it covers, the genuine receipts underneath
+   * were deleted. The tile now insists on a column only a payments export
+   * carries, so the wrong file is refused instead of quietly believed.
+   */
   const table = await locate(
     input,
-    [["date", "payment_date"], CUSTOMER_KEYS],
+    [
+      ["date", "payment_date"],
+      CUSTOMER_KEYS,
+      ["payment_number", "payment_id", "receipt_number", "payment_mode", "mode", "payment_method"],
+    ],
     "customer payments",
-    "Export from Zoho Books via Reports > Sales > Customer Payments.",
+    "Export from Zoho Books via Reports > Sales > Customer Payments. " +
+      "A file with no payment number or mode is not a receipts export - an AR Aging " +
+      "export carries a date and a customer name too, and loading one here would " +
+      "book invoices as collections.",
   );
 
   const dateOrder = detectDateOrder(table.rows.map((r) => pick(r, "date", "payment_date")));
