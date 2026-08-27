@@ -35,6 +35,25 @@ function isKind(value: string): value is Kind {
   return (KINDS as readonly string[]).includes(value);
 }
 
+/**
+ * Refuse a double-entry file whose two sides disagree.
+ *
+ * Both parsers used to warn and load it anyway, and a warning on the upload
+ * screen is read once while the balance sheet is read every week. Neither the
+ * reporting layer nor anyone reading it can recover the missing side, so the
+ * gap would surface later as a statement that does not tie for a reason nobody
+ * could trace back to the file. A rupee of tolerance covers rounding in the
+ * export itself.
+ */
+function requireBalanced(what: string, debit: number, credit: number, remedy: string) {
+  const gap = Math.abs(debit - credit);
+  if (gap <= 1) return;
+  throw new Error(
+    `This ${what} does not balance: debits ${debit.toFixed(2)} against credits ` +
+      `${credit.toFixed(2)}, a difference of ${gap.toFixed(2)}. ${remedy}`,
+  );
+}
+
 export async function POST(request: Request) {
   const { user, denied } = await apiGuard("data.upload");
   if (denied) return denied;
@@ -110,6 +129,13 @@ export async function POST(request: Request) {
     switch (kindRaw) {
       case "gl": {
         const parsed = await parseGeneralLedger(bytes);
+        requireBalanced(
+          "general ledger",
+          parsed.totalDebit,
+          parsed.totalCredit,
+          "A ledger whose two sides disagree is missing rows or has double-read them. " +
+            "Re-export the full period from Zoho Books with every account included.",
+        );
         result = await commitGeneralLedger(entity.id, parsed, meta);
         warnings = parsed.warnings;
         detected = parsed.detected;
@@ -136,6 +162,13 @@ export async function POST(request: Request) {
           basisRaw === "closing" || basisRaw === "movement" ? basisRaw : "opening";
 
         const parsed = await parseTrialBalance(bytes, basis);
+        requireBalanced(
+          "trial balance",
+          parsed.totalDebit,
+          parsed.totalCredit,
+          "A trial balance that does not balance cannot seed a balance sheet that does. " +
+            `Check that the ${basis} column was the right one to read and that no account was left out.`,
+        );
         result = await commitTrialBalance(entity.id, parsed, asOf, meta);
         warnings = parsed.warnings;
         detected = { ...parsed.detected, basis: parsed.basis, available: parsed.available };

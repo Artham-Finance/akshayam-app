@@ -16,7 +16,7 @@ import {
 } from "@/lib/entity";
 import { withParams } from "@/lib/href";
 import { money } from "@/lib/format";
-import { fyLabel, fyStartYearOf } from "@/lib/period";
+import { fyBounds, fyLabel, fyStartYearOf } from "@/lib/period";
 import { buildBalanceSheet } from "@/lib/reports/statements";
 import { requireEntityAccess } from "@/lib/auth/dal";
 
@@ -40,13 +40,9 @@ export default async function BalanceSheetPage({
         </>
       );
     }
-    const [verticals, availableYears, openingRow] = await Promise.all([
+    const [verticals, availableYears] = await Promise.all([
       getVerticals(entity),
       getAvailableFinancialYears(entity.memberIds),
-      queryOne<{ count: number }>(
-        "select count(*)::int as count from opening_balances where entity_id = any($1::int[])",
-        [entity.memberIds],
-      ),
     ]);
 
     if (availableYears.length === 0) {
@@ -69,6 +65,29 @@ export default async function BalanceSheetPage({
     const fy = availableYears.includes(requestedFy)
       ? requestedFy
       : (availableYears[0] ?? fyStartYearOf());
+
+    /**
+     * Opening balances only seed the statement when they are dated before the
+     * year opens - that is the window buildBalanceSheet reads. Counting every
+     * row regardless of date let a trial balance entered with an as-at date
+     * inside the year read as loaded while contributing nothing, and the page
+     * then blamed the ledger for a gap the date had caused. Count the rows that
+     * actually apply, and keep the rest so the difference can be named.
+     */
+    const { start } = fyBounds(fy, entity.fy_start_month);
+    const openingRow = await queryOne<{
+      applies: number;
+      total: number;
+      earliest: string | null;
+    }>(
+      `select count(*) filter (where as_of < $2)::int as applies,
+              count(*)::int                          as total,
+              min(as_of) filter (where as_of >= $2)  as earliest
+         from opening_balances where entity_id = any($1::int[])`,
+      [entity.memberIds, start],
+    );
+    const openingApplies = openingRow?.applies ?? 0;
+    const openingMisdated = (openingRow?.total ?? 0) - openingApplies;
 
     const statement = await buildBalanceSheet({ entity, fyStartYear: fy });
 
@@ -115,7 +134,7 @@ export default async function BalanceSheetPage({
         />
 
         <div className="space-y-4">
-          {(openingRow?.count ?? 0) === 0 && (
+          {openingApplies === 0 && openingMisdated === 0 && (
             <Notice
               tone="caution"
               title="No opening balances loaded"
@@ -154,18 +173,40 @@ export default async function BalanceSheetPage({
             </Notice>
           )}
 
-          {(openingRow?.count ?? 0) > 0 &&
-            !balances &&
-            !statement.hasUnmapped && (
-              <Notice tone="negative" title="Balance sheet does not tie">
-                Assets and equity + liabilities differ by{" "}
-                {Math.abs(gap).toLocaleString("en-IN", {
-                  maximumFractionDigits: 0,
-                })}{" "}
-                at {lastMonth}. This usually means the general ledger covers a
-                shorter period than the opening balances.
-              </Notice>
-            )}
+          {openingApplies === 0 && openingMisdated > 0 && (
+            <Notice
+              tone="caution"
+              title="The opening balances are dated inside this year"
+              action={
+                <a
+                  href="/upload"
+                  className="whitespace-nowrap rounded-md border border-caution/30 px-2.5 py-1.5 text-[12px] font-medium hover:bg-caution/10"
+                >
+                  Re-upload trial balance
+                </a>
+              }
+            >
+              A trial balance seeds this statement only when it is dated before{" "}
+              {start}, the day {fyLabel(fy)} opens. The rows loaded are dated{" "}
+              {openingRow?.earliest} or later, so none of them apply and the
+              statement shows this year&rsquo;s movements alone. Upload the
+              previous year&rsquo;s closing trial balance with its own as-at
+              date.
+            </Notice>
+          )}
+
+          {openingApplies > 0 && !balances && !statement.hasUnmapped && (
+            <Notice tone="negative" title="Balance sheet does not tie">
+              Assets and equity + liabilities differ by{" "}
+              {Math.abs(gap).toLocaleString("en-IN", {
+                maximumFractionDigits: 0,
+              })}{" "}
+              at {lastMonth}. The opening balances and the ledger disagree —
+              usually the general ledger covers a shorter period than the
+              opening trial balance, or one of the two files is itself out of
+              balance.
+            </Notice>
+          )}
 
           {statement.eliminations && statement.eliminations.removed > 0 && (
             <Notice

@@ -49,6 +49,8 @@ export interface GlParseResult {
   verticals: Set<string>;
   periodStart: string | null;
   periodEnd: string | null;
+  totalDebit: number;
+  totalCredit: number;
   warnings: string[];
   detected: {
     layout: "flat" | "sectioned";
@@ -275,6 +277,8 @@ export async function parseGeneralLedger(input: Buffer | ArrayBuffer): Promise<G
     verticals,
     periodStart,
     periodEnd,
+    totalDebit,
+    totalCredit,
     warnings,
     detected: {
       layout,
