@@ -1,11 +1,12 @@
 import { DataTable } from "@/components/DataTable";
 import { SetupRequired } from "@/components/SetupRequired";
+import { UploadRowActions } from "@/components/UploadRowActions";
 import { Card, EmptyState, Notice, PageHeader } from "@/components/ui";
 import { query } from "@/lib/db";
 import { getEntity } from "@/lib/entity";
 import { dateLabel } from "@/lib/format";
 import { kindTitle } from "@/lib/upload-kinds";
-import { requirePermissionAndEntity } from "@/lib/auth/dal";
+import { can, requirePermissionAndEntity } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,7 @@ interface Row {
  */
 export default async function UploadedFilesPage() {
   await requirePermissionAndEntity("data.upload");
+  const canDelete = await can("data.delete");
   try {
     const entity = await getEntity();
 
@@ -70,6 +72,16 @@ export default async function UploadedFilesPage() {
         />
 
         <div className="space-y-4">
+          {canDelete && (
+            <Notice tone="info" title="Removing an upload takes its rows with it">
+              Loading a corrected file over a bad one only replaces the period the new file
+              covers, which is not enough when the wrong report was loaded altogether — an AR
+              Aging export booked as receipts spans a whole year and swallows the months of
+              genuine payments underneath it. Remove that upload instead and the rows go with
+              it.
+            </Notice>
+          )}
+
           {missing > 0 && (
             <Notice tone="info" title={`${missing} of these files were not kept`}>
               Their data loaded normally and the dashboard is unaffected — only the original
@@ -110,19 +122,13 @@ export default async function UploadedFilesPage() {
                   `${dateLabel(r.uploaded_on)} · ${r.uploaded_time}`,
                   r.uploaded_by ?? "—",
                   fileSize(Number(r.byte_size)),
-                  r.stored_path ? (
-                    <a
-                      key="d"
-                      href={`/api/upload/download?id=${r.id}`}
-                      className="whitespace-nowrap rounded-md border border-line px-2.5 py-1 text-[12px] font-medium text-ink-muted hover:bg-surface-sunk"
-                    >
-                      Download
-                    </a>
-                  ) : (
-                    <span key="d" className="text-[12px] text-ink-faint">
-                      not kept
-                    </span>
-                  ),
+                  <UploadRowActions
+                    key="a"
+                    id={r.id}
+                    fileName={r.original_name}
+                    hasFile={!!r.stored_path}
+                    canDelete={canDelete}
+                  />,
                 ])}
                 emptyMessage="Nothing uploaded yet."
               />

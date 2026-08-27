@@ -18,6 +18,7 @@ export const PERMISSIONS = [
   "reports.view",
   "reports.export",
   "data.upload",
+  "data.delete",
   "accounts.map",
   "verticals.manage",
   "expenses.record",
@@ -36,7 +37,10 @@ const CONTRIBUTOR: Permission[] = [
   "expenses.record",
 ];
 
-const ADMIN: Permission[] = [...CONTRIBUTOR, "users.manage", "entities.manage"];
+// Removing an upload takes its rows with it, so it sits with the admin. A
+// contributor loading the wrong file can load the right one over it; undoing
+// someone else's load is a different kind of act.
+const ADMIN: Permission[] = [...CONTRIBUTOR, "users.manage", "entities.manage", "data.delete"];
 
 const GRID: Record<Role, ReadonlySet<Permission>> = {
   admin: new Set(ADMIN),
@@ -52,7 +56,7 @@ export const ROLE_LABEL: Record<Role, string> = {
 };
 
 export const ROLE_DESCRIPTION: Record<Role, string> = {
-  admin: "Everything a contributor can do, plus managing people and their access.",
+  admin: "Everything a contributor can do, plus managing people, their access, and removing an upload.",
   contributor: "Upload data, map accounts, tidy verticals and record expenses.",
   viewer: "Read the statements and download them. Changes nothing.",
 };
