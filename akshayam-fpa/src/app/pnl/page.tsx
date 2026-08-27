@@ -22,7 +22,7 @@ import { withParams } from "@/lib/href";
 import { compactINR } from "@/lib/format";
 import { fyLabel, fyMonths, fyStartYearOf, type QuarterNo } from "@/lib/period";
 import { ledgerWrittenTo } from "@/lib/reporting-period";
-import { buildApportionment } from "@/lib/reports/apportionment";
+import { buildApportionment, receiverKeyFor } from "@/lib/reports/apportionment";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
 import { buildProfitAndLoss } from "@/lib/reports/statements";
 import { requireEntityAccess } from "@/lib/auth/dal";
@@ -107,13 +107,36 @@ export default async function ProfitAndLossPage({
 
     const [bva, apportionment] = await Promise.all([
       buildBudgetVsActualPnl({ entity, fyStartYear: fy, verticalId }),
-      // The split is across every vertical at once, so picking one on the
-      // statement above would leave this table with a single column and
-      // nothing to apportion between.
-      verticalId === null
-        ? buildApportionment({ entity, fyStartYear: fy, quarter, month: apportionMonth })
-        : null,
+      /**
+       * Always struck across every vertical, even when one is picked.
+       *
+       * Common cost is spread over the verticals that use it, so computing it
+       * for one alone would hand that vertical the whole pool. The spread is
+       * the company's; only the column shown narrows to the picker.
+       */
+      buildApportionment({ entity, fyStartYear: fy, quarter, month: apportionMonth }),
     ]);
+
+    /**
+     * The table, narrowed to the picked vertical.
+     *
+     * AIF and GIFT share one column, so the code is resolved through the
+     * apportionment's own mapping rather than matched directly. A vertical the
+     * budget does not apportion to - Common, partner contribution - resolves to
+     * nothing, and the table is left out rather than shown empty.
+     */
+    const focusCode = verticals.find((v) => v.id === verticalId)?.code ?? null;
+    // The lines outside the budget's nine - Common, partner contribution -
+    // are keyed on their own code, so a vertical that receives no
+    // apportionment still has a column of its own to show.
+    const focusKey = receiverKeyFor(focusCode) ?? focusCode;
+    const shownApportionment =
+      verticalId === null
+        ? apportionment
+        : {
+            ...apportionment,
+            verticals: apportionment.verticals.filter((v) => v.key === focusKey),
+          };
 
     const lines: ClientLine[] = statement.lines.map((line) => ({
       key: line.key,
@@ -238,10 +261,10 @@ export default async function ProfitAndLossPage({
             />
           </Card>
 
-          {apportionment?.applicable && (
+          {shownApportionment?.applicable && shownApportionment.verticals.length > 0 && (
             <Card padded={false}>
               <div className="flex flex-wrap items-start justify-between gap-3 px-4 pt-4 sm:px-5">
-                <CardTitle hint={`${apportionment.label} · for VPP`}>
+                <CardTitle hint={`${shownApportionment.label} · for VPP`}>
                   Vertical-wise P&amp;L, after cost apportionment
                 </CardTitle>
                 <QuarterTabs
@@ -253,8 +276,8 @@ export default async function ProfitAndLossPage({
                   hrefFor={(q, m) => withParams("/pnl", params, { q: `q${q}`, qm: m })}
                 />
               </div>
-              <ApportionmentTable data={apportionment} />
-              {apportionment.outside.length > 0 && (
+              <ApportionmentTable data={shownApportionment} />
+              {verticalId === null && apportionment.outside.length > 0 && (
                 <p className="px-4 pb-4 text-[11.5px] text-ink-muted sm:px-5">
                   Outside the nine budgeted verticals:{" "}
                   {apportionment.outside
