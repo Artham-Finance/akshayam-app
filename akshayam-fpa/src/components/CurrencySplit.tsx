@@ -1,5 +1,6 @@
 import clsx from "clsx";
-import { money, percent, share } from "@/lib/format";
+import Link from "next/link";
+import { money, moneyIn, percent, share } from "@/lib/format";
 
 /**
  * What was billed or received, split by the currency it was denominated in.
@@ -29,11 +30,21 @@ export function CurrencySplit({
   rows,
   countLabel,
   baseCurrency = "INR",
+  hrefFor,
+  active,
 }: {
   rows: CurrencyRow[];
   /** what the count column is counting, e.g. "Receipts" */
   countLabel: string;
   baseCurrency?: string;
+  /**
+   * Where a currency leads. The code is the natural handle for "show me these
+   * 75 invoices" - a summary row whose count is the only thing on the page
+   * that can answer which documents it counted, and no way to open them.
+   */
+  hrefFor?: (currency: string) => string;
+  /** the currency currently opened below, so the row reads as the live one */
+  active?: string | null;
 }) {
   const head =
     "border-y border-line px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-faint";
@@ -52,6 +63,7 @@ export function CurrencySplit({
           Amounts are shown in the currency they were denominated in and in
           rupees. The rate is what the two imply over the period, not a rate on
           any one transaction.
+          {hrefFor && " Click a currency for the documents behind it."}
           {missing.length > 0 && (
             <span className="mt-1 block text-caution">
               {missing.join(" and ")} {missing.length === 1 ? "shows" : "show"} no
@@ -89,8 +101,22 @@ export function CurrencySplit({
             const rate = row.foreign && row.foreign !== 0 ? row.inr / row.foreign : null;
             return (
               <tr key={row.currency} className="hover:bg-surface-sunk/50">
-                <th scope="row" className={clsx(cell, "text-left font-medium text-ink")}>
-                  {row.currency}
+                <th scope="row" className={clsx(cell, "text-left font-medium")}>
+                  {hrefFor ? (
+                    <Link
+                      href={hrefFor(row.currency)}
+                      className={clsx(
+                        "hover:underline",
+                        active && active.toUpperCase() === row.currency.toUpperCase()
+                          ? "font-semibold text-navy"
+                          : "text-navy",
+                      )}
+                    >
+                      {row.currency}
+                    </Link>
+                  ) : (
+                    <span className="text-ink">{row.currency}</span>
+                  )}
                 </th>
                 <td className={clsx(cell, "num text-right text-ink-muted")}>{row.count}</td>
                 <td className={clsx(cell, "num text-right text-ink")}>
@@ -109,7 +135,9 @@ export function CurrencySplit({
                       not captured
                     </span>
                   ) : (
-                    money(row.foreign, 2)
+                    // Grouped in the currency's own convention: 26,154.06 is a
+                    // dollar figure, and Indian grouping would read it as lakhs.
+                    moneyIn(row.currency, row.foreign, 2)
                   )}
                 </td>
                 <td className={clsx(cell, "num text-right font-medium text-ink")}>

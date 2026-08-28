@@ -62,6 +62,57 @@ export function compactINR(value: number | null | undefined): string {
   return `${sign}${inr0.format(Math.round(abs))}`;
 }
 
+/* ---------- original-currency figures ---------- */
+
+/**
+ * Grouping belongs to the currency, not to the reader.
+ *
+ * Indian grouping is right for the rupee and wrong for everything else: a
+ * dollar balance written 19,59,908 reads as lakhs to anyone who knows the
+ * convention and as a typo to anyone who does not. Non-INR amounts therefore
+ * group in threes, which is what makes a USD column safe to read at a glance
+ * beside an INR one.
+ */
+const western0 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const western2 = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+/** The three-letter code shown against an original-currency figure. */
+export function currencyLabel(currency: string | null | undefined): string {
+  return (currency ?? "INR").toUpperCase();
+}
+
+/** An amount in the currency it was billed in, unsigned and without a symbol. */
+export function moneyIn(
+  currency: string | null | undefined,
+  value: number | null | undefined,
+  decimals = 0,
+): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "-";
+  if (currencyLabel(currency) === "INR") return money(value, decimals);
+  const abs = Math.abs(value);
+  return decimals === 0 ? western0.format(Math.round(abs)) : western2.format(abs);
+}
+
+/**
+ * Short form for a KPI tile, in the tile's own currency.
+ * Lakhs and crores are rupee units, so a dollar figure abbreviates K / M.
+ */
+export function compactIn(
+  currency: string | null | undefined,
+  value: number | null | undefined,
+): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "-";
+  if (currencyLabel(currency) === "INR") return compactINR(value);
+  const sign = value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toFixed(2)} M`;
+  if (abs >= 1_000) return `${sign}${(abs / 1_000).toFixed(1)} K`;
+  return `${sign}${western0.format(Math.round(abs))}`;
+}
+
 /** Percentage with a fixed 1 decimal, e.g. "18.4%". */
 export function percent(value: number | null | undefined, decimals = 1): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "-";

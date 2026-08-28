@@ -1,4 +1,5 @@
 import Link from "next/link";
+import clsx from "clsx";
 import { Bar, DataTable, drillColumns, renderDrillRow } from "@/components/DataTable";
 import { CustomerPicker } from "@/components/CustomerPicker";
 import { PeriodControls } from "@/components/PeriodControls";
@@ -14,9 +15,24 @@ import {
 } from "@/components/ui";
 import { query, queryOne } from "@/lib/db";
 import { getEntity, getVerticals, verticalScope } from "@/lib/entity";
-import { compactINR, dateLabel, money, percent, share } from "@/lib/format";
+import {
+  compactINR,
+  currencyLabel,
+  dateLabel,
+  money,
+  moneyIn,
+  percent,
+  share,
+} from "@/lib/format";
 import { withParams } from "@/lib/href";
-import { AR_BUCKETS, arBucketSelect, isDrill, runDrill } from "@/lib/reports/drilldowns";
+import {
+  AR_BUCKETS,
+  arBucketCounts,
+  arBucketSelect,
+  arOriginalAmount,
+  isDrill,
+  runDrill,
+} from "@/lib/reports/drilldowns";
 import { buildCustomerStatement, listCustomers } from "@/lib/reports/customer-statement";
 import { fyBounds, fyLabel, fyStartYearOf } from "@/lib/period";
 import { requireEntityAccess } from "@/lib/auth/dal";
@@ -103,7 +119,29 @@ export default async function ReceivablesPage({
 
     const scope = [entity.memberIds, verticalId, entity.verticalIds];
 
-    const [totals, byVertical, topTen, unmatched, terms] = await Promise.all([
+    /**
+     * The book split by the currency each invoice was billed in.
+     *
+     * Every figure elsewhere on this page is the INR base, which is the right
+     * basis for a total and the wrong answer to "what are the dollar clients
+     * sitting on". The two are never added together: a GIFT-city balance is
+     * 6,77,355 dollars or 5.6 crore rupees depending on the question, and one
+     * column carrying both would be neither.
+     */
+    const byCurrencyQuery = query<Record<string, string | number>>(
+      `select upper(currency) as currency,
+              ${arBucketSelect("", arOriginalAmount())},
+              ${arBucketCounts()},
+              coalesce(sum(${arOriginalAmount()}),0)::numeric as total,
+              count(*)::int as n
+         from ar_open_items
+        where ${LATEST_SNAPSHOT} and ($2::int is null or vertical_id=$2)
+          ${verticalScope("$3")}
+        group by 1 order by n desc`,
+      scope,
+    );
+
+    const [totals, byVertical, topTen, unmatched, terms, byCurrency] = await Promise.all([
       queryOne<Record<string, number>>(
         `select ${bucketSelect},
                 coalesce(sum(balance_base),0)::numeric total, count(*)::int n
@@ -154,7 +192,18 @@ export default async function ReceivablesPage({
              ${verticalScope("$3")}`,
         [entity.memberIds, verticalId, entity.verticalIds],
       ),
+      byCurrencyQuery,
     ]);
+
+    /** Only worth a column each once there is more than one currency in the book. */
+    const currencies = byCurrency.map((r) => currencyLabel(String(r.currency)));
+    /** Checked against what is actually in the book, so a stray code cannot
+     *  open an empty panel that reads as "no invoices". */
+    const requestedCurrency =
+      typeof params.currency === "string" ? params.currency.toUpperCase() : null;
+    const openCurrency =
+      requestedCurrency && currencies.includes(requestedCurrency) ? requestedCurrency : null;
+    const multiCurrency = currencies.length > 1;
 
     /**
      * The financial year the movements are measured over. Receivables are a
@@ -171,6 +220,27 @@ export default async function ReceivablesPage({
           verticalId,
         })
       : null;
+    /**
+     * The picked customer's own currency split. A client billed in dollars
+     * should read as dollars on their own card - converting it to rupees to
+     * sit beside the other clients answers a question nobody asked of a
+     * single-customer view.
+     */
+    const customerCurrency = customer
+      ? await query<Record<string, string | number>>(
+          `select upper(currency) as currency,
+                  ${arBucketSelect("", arOriginalAmount())},
+                  coalesce(sum(${arOriginalAmount()}),0)::numeric as total,
+                  count(*)::int as n
+             from ar_open_items
+            where ${LATEST_SNAPSHOT} and ($2::int is null or vertical_id=$2)
+              ${verticalScope("$3")}
+              and customer_name = $4
+            group by 1 order by n desc`,
+          [entity.memberIds, verticalId, entity.verticalIds, customer],
+        )
+      : null;
+
     const customerRows = customer
       ? await runDrill({
           kind: "receivables",
@@ -180,6 +250,7 @@ export default async function ReceivablesPage({
           end: asOf,
           verticalId,
           customer,
+          currency: openCurrency,
           limit: DRILL_LIMIT,
         })
       : null;
@@ -196,6 +267,7 @@ export default async function ReceivablesPage({
           start: asOf,
           end: asOf,
           verticalId,
+          currency: openCurrency,
           limit: DRILL_LIMIT,
         })
       : null;
@@ -318,6 +390,29 @@ export default async function ReceivablesPage({
                     })}
                   </div>
                 </div>
+                {customerCurrency && customerCurrency.length > 0 && (
+                  <div className="mt-4">
+                    <CardTitle hint="as billed — not cross-converted">
+                      Outstanding by billing currency
+                    </CardTitle>
+                    <DataTable
+                      columns={[
+                        { header: "Currency" },
+                        { header: "Open invoices", numeric: true },
+                        ...AR_BUCKETS.map((b) => ({ header: b.label, numeric: true })),
+                        { header: "Outstanding", numeric: true, strong: true },
+                      ]}
+                      rows={customerCurrency.map((c) => [
+                        currencyLabel(String(c.currency)),
+                        Number(c.n),
+                        ...AR_BUCKETS.map((b) =>
+                          Number(c[b.key]) ? moneyIn(String(c.currency), Number(c[b.key])) : "—",
+                        ),
+                        moneyIn(String(c.currency), Number(c.total)),
+                      ])}
+                    />
+                  </div>
+                )}
                 {/*
                   Only the closing balance is a fact - it is the AR export,
                   invoice by invoice. Working the year's movements back off it
@@ -368,11 +463,12 @@ export default async function ReceivablesPage({
               subtitle={
                 <>
                   As at {dateLabel(asOf)}
-                  {verticalName ? ` · ${verticalName}` : ""} · age measured from the due date,
-                  largest balance first
+                  {verticalName ? ` · ${verticalName}` : ""}
+                  {openCurrency ? ` · raised in ${openCurrency}` : ""} · age measured from the
+                  due date, largest balance first
                 </>
               }
-              closeHref={withParams("/receivables", params, { drill: null })}
+              closeHref={withParams("/receivables", params, { drill: null, currency: null })}
               downloadHref={withParams("/api/export", params, {
                 kind: "receivables",
                 vertical: verticalId,
@@ -431,6 +527,86 @@ export default async function ReceivablesPage({
               })}
             </div>
           </Card>
+
+          {multiCurrency && (
+            <Card padded={false}>
+              <div className="p-4 sm:p-5">
+                <CardTitle
+                  hint={`${currencies.join(" and ")} shown as billed — not cross-converted`}
+                >
+                  Ageing by billing currency
+                </CardTitle>
+              </div>
+              <DataTable
+                columns={[
+                  { header: "Ageing bucket" },
+                  { header: "Invoices", numeric: true },
+                  ...byCurrency.flatMap((c) => [
+                    {
+                      header: `${currencyLabel(String(c.currency))} outstanding`,
+                      numeric: true,
+                      strong: true,
+                    },
+                    { header: `# ${currencyLabel(String(c.currency))}`, numeric: true },
+                  ]),
+                ]}
+                rows={AR_BUCKETS.map((b) => [
+                  b.label,
+                  byCurrency.reduce((n, c) => n + Number(c[`${b.key}_n`] ?? 0), 0) || "—",
+                  ...byCurrency.flatMap((c) => [
+                    Number(c[b.key])
+                      ? moneyIn(String(c.currency), Number(c[b.key]))
+                      : "—",
+                    Number(c[`${b.key}_n`]) || "—",
+                  ]),
+                ])}
+                footer={[
+                  "Grand total",
+                  byCurrency.reduce((n, c) => n + Number(c.n ?? 0), 0),
+                  ...byCurrency.flatMap((c) => [
+                    moneyIn(String(c.currency), Number(c.total)),
+                    Number(c.n),
+                  ]),
+                ]}
+              />
+              {/*
+                The rupee total on the tiles above and these columns are the
+                same book read two ways, so they must not be added together -
+                said here rather than left for someone to work out from a
+                total that refuses to reconcile.
+              */}
+              <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
+                <span className="text-[11.5px] text-ink-faint">Open the invoices raised in</span>
+                {byCurrency.map((c) => {
+                  const code = currencyLabel(String(c.currency));
+                  const live = openCurrency === code && drill === "total";
+                  return (
+                    <Link
+                      key={code}
+                      href={withParams("/receivables", params, {
+                        currency: live ? null : code,
+                        drill: live ? null : "total",
+                        customer: null,
+                      })}
+                      className={clsx(
+                        "rounded-md border px-2 py-1 text-[12px] font-medium transition-colors",
+                        live
+                          ? "border-navy bg-navy text-ink-invert"
+                          : "border-line text-navy hover:border-line-strong",
+                      )}
+                    >
+                      {code}
+                    </Link>
+                  );
+                })}
+              </div>
+              <p className="px-4 pb-4 pt-3 text-[11.5px] leading-relaxed text-ink-faint">
+                The tiles and the ageing above are the INR base of the whole book, Zoho&rsquo;s
+                own conversion. These columns are what each invoice was billed in, so they add
+                across to the same invoices but never to the same number.
+              </p>
+            </Card>
+          )}
 
           <Card padded={false}>
             <div className="p-4 sm:p-5">
