@@ -43,8 +43,12 @@ export const UPLOAD_KINDS: Omit<UploadKindInfo, "lastUpload">[] = [
     title: "Invoice Details",
     zohoPath: "Reports → Sales → Invoice Details",
     blurb:
-      "Drives the revenue view: billing by month, client, vertical and salesperson, plus client concentration.",
-    cadence: "Weekly",
+      "Drives the revenue view: billing by month, client, vertical and salesperson, plus client concentration. " +
+      "Export any span you like — a file replaces exactly the dates it covers and leaves every other period alone, " +
+      "so a back-year export loaded alongside the weekly one adds history without disturbing the current week. " +
+      "Worth doing once: a receipt settling an invoice raised before the ledger starts cannot be matched to it, " +
+      "and shows up on Collections as untraceable until the invoice it pays is loaded.",
+    cadence: "Weekly, plus prior years once",
     needsAsOf: false,
   },
   {
@@ -69,8 +73,11 @@ export const UPLOAD_KINDS: Omit<UploadKindInfo, "lastUpload">[] = [
     kind: "payments",
     title: "Customer Payments",
     zohoPath: "Reports → Sales → Customer Payments",
-    blurb: "Drives collections and DSO — what was billed against what actually came in.",
-    cadence: "Weekly",
+    blurb:
+      "Drives collections and DSO — what was billed against what actually came in. " +
+      "Like Invoice Details, a file replaces exactly the dates it covers, so prior years can be loaded " +
+      "alongside the weekly export without touching it.",
+    cadence: "Weekly, plus prior years once",
     needsAsOf: false,
   },
   {
