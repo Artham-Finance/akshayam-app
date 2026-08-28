@@ -534,8 +534,11 @@ export async function commitArAging(
       ]),
     );
 
-    // The AR export carries no salesperson for Akshayam, so nothing here has a
-    // tag of its own; a single-vertical company still attributes cleanly.
+    // Take each open item's vertical from the invoice that raised it rather
+    // than from this file's own salesperson column, so the two sales reports
+    // cannot disagree. Then a single-vertical company still attributes
+    // whatever is left over.
+    await linkByInvoice(client, entityId);
     await attributeSoleVertical(client, entityId);
     return { uploadId, rowsInserted, newAccounts: [], newVerticals, needsReview: [] };
   });
@@ -669,6 +672,40 @@ export async function linkByInvoice(client: PoolClient, entityId: number): Promi
       where p.entity_id = $1
         and p.vertical_id is distinct from i.vertical_id
         and p.invoice_number = i.invoice_number`,
+    [entityId],
+  );
+
+  /**
+   * One invoice, one vertical, decided in one place.
+   *
+   * Neither sales-side export carries a reporting tag: Invoice Details offers
+   * salesperson_name and AR Aging offers Salesperson, so both reports reach
+   * the vertical by parsing it out of a person's name. Only the general
+   * ledger carries the tag itself. Two exports parsing two salesperson
+   * columns can disagree - the AR report may name a different person than the
+   * invoice does, or omit the column entirely, as Akshayam's does - and then
+   * the same invoice sits under one vertical on Revenue and another on
+   * Receivables.
+   *
+   * So the invoice register decides, and receivables follow it. Re-assigning
+   * a client to a new salesperson in Zoho can then no longer move their debt
+   * without also moving the revenue that raised it.
+   *
+   * An invoice in no uploaded register keeps whatever the AR file implied,
+   * which is the best answer still available for it.
+   */
+  await client.query(
+    `update ar_open_items a
+        set vertical_id = i.vertical_id
+       from (
+         select distinct on (invoice_number) invoice_number, vertical_id
+           from invoice_lines
+          where entity_id = $1 and vertical_id is not null
+          order by invoice_number, id
+       ) i
+      where a.entity_id = $1
+        and a.vertical_id is distinct from i.vertical_id
+        and a.invoice_number = i.invoice_number`,
     [entityId],
   );
 
