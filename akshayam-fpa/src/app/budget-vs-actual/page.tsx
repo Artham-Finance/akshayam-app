@@ -52,7 +52,7 @@ export default async function BudgetVsActualPage({
       return (
         <>
           <PageHeader title="Budget vs Actual" />
-          <CompanyOnly what="The budgeted P&L" slice />
+          <CompanyOnly what="The budgeted P&L" slice companies={entity.memberIds.length} />
         </>
       );
     }

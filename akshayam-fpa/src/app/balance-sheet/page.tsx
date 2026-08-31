@@ -37,7 +37,7 @@ export default async function BalanceSheetPage({
       return (
         <>
           <PageHeader title="Balance Sheet" />
-          <CompanyOnly what="The balance sheet" slice />
+          <CompanyOnly what="The balance sheet" slice companies={entity.memberIds.length} />
         </>
       );
     }

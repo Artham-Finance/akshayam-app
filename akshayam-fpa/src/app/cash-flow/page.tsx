@@ -41,7 +41,7 @@ export default async function CashFlowPage({
       return (
         <>
           <PageHeader title="Cash Flow" />
-          <CompanyOnly what="The cash flow" slice />
+          <CompanyOnly what="The cash flow" slice companies={entity.memberIds.length} />
         </>
       );
     }

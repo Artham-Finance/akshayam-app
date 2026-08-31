@@ -334,13 +334,34 @@ export function DrillPanel({
  * books. The consolidation has none of its own, so rather than showing an
  * empty screen that looks broken, say what to do instead.
  */
-export function CompanyOnly({ what, slice = false }: { what: string; slice?: boolean }) {
+export function CompanyOnly({
+  what,
+  slice = false,
+  companies = 2,
+}: {
+  what: string;
+  slice?: boolean;
+  /**
+   * How many real companies the slice draws from - RAJA is one vertical from
+   * each of two companies, a single-vertical slice like CMRGA is one vertical
+   * of one. The copy below reads wrong for the other case if this is left at
+   * its RAJA-shaped default.
+   */
+  companies?: number;
+}) {
   if (slice) {
+    const whatLower = what.charAt(0).toLowerCase() + what.slice(1);
+    // Every slice today draws from one company or two (RAJA), and prose reads
+    // better than a numeral at that size - "2 companies" looks like a stat,
+    // "two companies" like a sentence.
+    const word = companies === 1 ? "one" : companies === 2 ? "two" : String(companies);
+    const whose = companies === 1 ? "one company’s" : `${word} companies’`;
+    const across = companies === 1 ? "part of a company" : `part of ${word} companies`;
     return (
       <EmptyState title="Not available on a partner view">
-        {what} is a whole-company statement. This view is a slice of two companies&rsquo;
-        books - one vertical of each - and a balance sheet drawn across part of two
-        companies would be a figure with nothing behind it. Revenue, collections,
+        {what} is a whole-company statement. This view is a slice of {whose} books
+        {companies > 1 ? " - one vertical of each" : ""}, and {whatLower} drawn across{" "}
+        {across} would be a figure with nothing behind it. Revenue, collections,
         receivables and the P&amp;L all work here; switch to a company for the rest.
       </EmptyState>
     );
