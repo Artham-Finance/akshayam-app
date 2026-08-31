@@ -1,3 +1,4 @@
+import clsx from "clsx";
 import Link from "next/link";
 import { BudgetTable } from "@/components/BudgetTable";
 import { CurrencySplit, type CurrencyRow } from "@/components/CurrencySplit";
@@ -562,7 +563,7 @@ export default async function CollectionsPage({
           </Card>
 
           <Card>
-            <CardTitle hint={`peak month ${compactINR(peak)} · full year`}>
+            <CardTitle hint={`peak month ${compactINR(peak)} · full year · click a month for its receipts`}>
               Collections by month
             </CardTitle>
             <div className="space-y-1.5">
@@ -571,8 +572,15 @@ export default async function CollectionsPage({
                 const f = Number(row?.fee ?? 0);
                 const r = Number(row?.ri ?? 0);
                 const sum = f + r;
-                return (
-                  <div key={m.key} className="flex items-center gap-3">
+                /*
+                  Fee and reimbursement together - the same "total" drill the
+                  currency card already uses - since that is what the bar and
+                  the figure beside it add up to. A month with no receipts has
+                  nothing to open, so it stays a plain row.
+                */
+                const live = period.monthKey === m.key && drill === "total";
+                const content = (
+                  <>
                     <span className="w-14 shrink-0 text-[11.5px] text-ink-muted">
                       {monthLabel(m.end)}
                     </span>
@@ -591,6 +599,28 @@ export default async function CollectionsPage({
                     <span className="num w-24 shrink-0 text-right text-[12px] text-ink">
                       {sum ? money(sum) : "—"}
                     </span>
+                  </>
+                );
+                return sum > 0 ? (
+                  <Link
+                    key={m.key}
+                    href={withParams("/collections", params, {
+                      month: live ? null : m.key,
+                      week: null,
+                      drill: live ? null : "total",
+                      customer: null,
+                    })}
+                    scroll={false}
+                    className={clsx(
+                      "-mx-1 flex items-center gap-3 rounded-sm px-1 transition-colors hover:bg-surface-sunk/50",
+                      live && "bg-surface-sunk/50",
+                    )}
+                  >
+                    {content}
+                  </Link>
+                ) : (
+                  <div key={m.key} className="flex items-center gap-3">
+                    {content}
                   </div>
                 );
               })}

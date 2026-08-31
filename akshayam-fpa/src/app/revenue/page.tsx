@@ -1,3 +1,4 @@
+import clsx from "clsx";
 import Link from "next/link";
 import { BudgetTable } from "@/components/BudgetTable";
 import { Bar, DataTable, drillColumns, renderDrillRow } from "@/components/DataTable";
@@ -698,7 +699,7 @@ export default async function RevenuePage({
           </Card>
 
           <Card>
-            <CardTitle hint={`peak month ${compactINR(peak)} · full year`}>
+            <CardTitle hint={`peak month ${compactINR(peak)} · full year · click a month for its invoices`}>
               Invoiced by month
             </CardTitle>
             <div className="space-y-1.5">
@@ -707,8 +708,16 @@ export default async function RevenuePage({
                 const f = Number(row?.fee ?? 0);
                 const r = Number(row?.ri ?? 0);
                 const credit = cnMap.get(m.key) ?? 0;
-                return (
-                  <div key={m.key} className="flex items-center gap-3">
+                /*
+                  Fee and reimbursement together - the same "all" drill the
+                  currency card already uses - since that is what the total
+                  column beside the bar adds up to. A month billing nothing has
+                  no invoices to open, so it stays a plain row rather than a
+                  link to an empty list.
+                */
+                const live = period.monthKey === m.key && drill === "all";
+                const content = (
+                  <>
                     <span className="w-14 shrink-0 text-[11.5px] text-ink-muted">
                       {monthLabel(m.end)}
                     </span>
@@ -725,6 +734,28 @@ export default async function RevenuePage({
                     <span className="num w-20 shrink-0 text-right text-[11.5px] text-negative">
                       {credit ? `(${money(credit)})` : ""}
                     </span>
+                  </>
+                );
+                return f + r > 0 ? (
+                  <Link
+                    key={m.key}
+                    href={withParams("/revenue", params, {
+                      month: live ? null : m.key,
+                      week: null,
+                      drill: live ? null : "all",
+                      customer: null,
+                    })}
+                    scroll={false}
+                    className={clsx(
+                      "-mx-1 flex items-center gap-3 rounded-sm px-1 transition-colors hover:bg-surface-sunk/50",
+                      live && "bg-surface-sunk/50",
+                    )}
+                  >
+                    {content}
+                  </Link>
+                ) : (
+                  <div key={m.key} className="flex items-center gap-3">
+                    {content}
                   </div>
                 );
               })}
