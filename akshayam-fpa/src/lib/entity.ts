@@ -224,6 +224,41 @@ export async function getVerticals(entity: Entity): Promise<Vertical[]> {
 }
 
 /**
+ * Every vertical an entity's figures can be filtered to, whether or not the
+ * picker offers them.
+ *
+ * `getVerticals` answers a narrower question - what belongs in a dropdown -
+ * and gives the group nothing, because a list of two companies' schemes side
+ * by side reads like one scheme the group does not have. That reasoning holds
+ * for a picker offered before anything is on screen. It does not hold for a
+ * row already named on the page: Revenue and Collections both table the group
+ * by vertical, and a reader clicking "Disputes, Litigation & Resolution" there
+ * has asked for that row, not for a group-wide taxonomy.
+ *
+ * Safe because codes are unique across the companies - RBJV tags AIF, Akshayam
+ * tags GIFT, and none is shared - so a vertical id names exactly one company's
+ * vertical and a filter on it cannot quietly mean both.
+ */
+export async function getVerticalsInScope(entity: Entity): Promise<Vertical[]> {
+  if (entity.verticalIds) {
+    return query<Vertical>(
+      `select id, code, name, sort_order, is_active, needs_review
+         from verticals where id = any($1::int[]) order by sort_order, name`,
+      [entity.verticalIds],
+    );
+  }
+  // memberIds is the entity itself for a company, so this is getVerticals for
+  // everything except the group, which is the only case that differs.
+  return query<Vertical>(
+    `select id, code, name, sort_order, is_active, needs_review
+       from verticals
+      where entity_id = any($1::int[]) and is_active
+      order by sort_order, name`,
+    [entity.memberIds],
+  );
+}
+
+/**
  * The predicate limiting rows to an entity's verticals, for a query that has
  * already filtered on entity_id.
  *

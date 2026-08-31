@@ -15,7 +15,7 @@ import {
   PageHeader,
 } from "@/components/ui";
 import { query, queryOne } from "@/lib/db";
-import { getEntity, getVerticals, verticalScope } from "@/lib/entity";
+import { getEntity, getVerticalsInScope, verticalScope } from "@/lib/entity";
 import { compactINR, dateLabel, money, monthLabel, percent, share } from "@/lib/format";
 import { withParams } from "@/lib/href";
 import { fyBounds, fyLabel, fyMonths } from "@/lib/period";
@@ -47,7 +47,7 @@ export default async function CollectionsPage({
 
   try {
     const entity = await getEntity();
-    const verticals = await getVerticals(entity);
+    const verticals = await getVerticalsInScope(entity);
 
     const years = await query<{ fy: number }>(
       `select distinct case when extract(month from payment_date) >= 4
