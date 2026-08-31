@@ -459,7 +459,15 @@ export default async function RevenuePage({
             reimbursement is a client's own cost recharged, so reading either
             as though it were the Actual above it would overstate the week.
           */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {/*
+            Four tiles a row on a wide screen: the budget position (annual,
+            period, actual, achievement) as one line the eye takes in at once,
+            the fee/retainer/credit-note/reimbursement line below it as
+            another. Narrower screens fall back to two a row and then one -
+            the grouping is a column count, not an order, so nothing here
+            needs to move to change it.
+          */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <KpiTile label="Annual Budget" value={compactINR(headline.annual)} note={fyLabel(fy)} />
             <KpiTile
               label="Period Budget"

@@ -348,7 +348,13 @@ export default async function CollectionsPage({
             got. The three receipt tiles below are the register behind the
             Actual figure, and stay put because the drill-downs hang off them.
           */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {/*
+            All four budget-position tiles on one line on a wide screen -
+            annual, period, actual, achievement read together rather than
+            split across two rows. Narrower screens fall back to two a row
+            and then one.
+          */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <KpiTile label="Annual Budget" value={compactINR(headline.annual)} note={fyLabel(fy)} />
             <KpiTile
               label="Period Budget"
