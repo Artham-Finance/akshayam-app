@@ -652,6 +652,13 @@ export default async function ReceivablesPage({
                 money(Number(r.total)),
                 ...AR_BUCKETS.map((b) => (Number(r[b.key]) ? money(Number(r[b.key])) : "—")),
               ])}
+              footer={[
+                "Total",
+                money(Number(totals?.total ?? 0)),
+                ...AR_BUCKETS.map((b) =>
+                  Number(totals?.[b.key]) ? money(Number(totals?.[b.key])) : "—",
+                ),
+              ]}
             />
           </Card>
 

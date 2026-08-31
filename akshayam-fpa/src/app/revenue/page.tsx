@@ -443,6 +443,11 @@ export default async function RevenuePage({
       1,
       ...months.map((m) => Number(monthMap.get(m.key)?.fee ?? 0) + Number(monthMap.get(m.key)?.ri ?? 0)),
     );
+    // The full year's figures, not the selected period's - the chart above
+    // stays on the full year, so its own total does too.
+    const yearFee = months.reduce((n, m) => n + Number(monthMap.get(m.key)?.fee ?? 0), 0);
+    const yearRi = months.reduce((n, m) => n + Number(monthMap.get(m.key)?.ri ?? 0), 0);
+    const yearCn = months.reduce((n, m) => n + Number(cnMap.get(m.key) ?? 0), 0);
 
     /**
      * The vertical table, assembled once.
@@ -473,7 +478,18 @@ export default async function RevenuePage({
         ri: Number(r.ri),
       };
     });
-
+    const verticalTotals = {
+      professional: period.monthAligned
+        ? verticalRows.reduce((n, r) => n + (r.professional ?? 0), 0)
+        : null,
+      retainer: period.monthAligned
+        ? verticalRows.reduce((n, r) => n + (r.retainer ?? 0), 0)
+        : null,
+      fee: verticalRows.reduce((n, r) => n + r.fee, 0),
+      cnFee: verticalRows.reduce((n, r) => n + r.cnFee, 0),
+      ri: verticalRows.reduce((n, r) => n + r.ri, 0),
+      cnRi: verticalRows.reduce((n, r) => n + r.cnRi, 0),
+    };
 
     return (
       <>
@@ -833,6 +849,16 @@ export default async function RevenuePage({
                   </div>
                 );
               })}
+              <div className="mt-1.5 flex items-center gap-3 border-t border-line pt-1.5 font-semibold">
+                <span className="w-14 shrink-0 text-[11.5px] text-ink">Total</span>
+                <span className="flex-1" />
+                <span className="num w-24 shrink-0 text-right text-[12px] text-ink">
+                  {money(yearFee + yearRi)}
+                </span>
+                <span className="num w-20 shrink-0 text-right text-[11.5px] text-negative">
+                  {yearCn ? `(${money(yearCn)})` : ""}
+                </span>
+              </div>
             </div>
             <p className="mt-3 flex flex-wrap items-center gap-4 text-[11px] text-ink-muted">
               <span className="flex items-center gap-1.5">
@@ -893,6 +919,17 @@ export default async function RevenuePage({
                 // here rather than in the Credit notes column to its left.
                 r.ri - r.cnRi ? money(r.ri - r.cnRi) : "—",
               ])}
+              footer={[
+                "Total",
+                verticalTotals.professional === null ? "—" : money(verticalTotals.professional),
+                verticalTotals.retainer ? money(verticalTotals.retainer) : "—",
+                money(verticalTotals.fee),
+                verticalTotals.cnFee ? `(${money(verticalTotals.cnFee)})` : "—",
+                money(verticalTotals.fee - verticalTotals.cnFee),
+                verticalTotals.ri - verticalTotals.cnRi
+                  ? money(verticalTotals.ri - verticalTotals.cnRi)
+                  : "—",
+              ]}
             />
             <p className="px-4 pb-4 text-[11.5px] text-ink-muted sm:px-5">
               Reimbursement is net of credit notes raised against those invoices, the same way

@@ -316,6 +316,10 @@ export default async function CollectionsPage({
         return Number(row?.fee ?? 0) + Number(row?.ri ?? 0);
       }),
     );
+    // The full year's fee and reimbursement, not the selected period's - the
+    // chart above stays on the full year, so its own total does too.
+    const yearFee = months.reduce((n, m) => n + Number(monthMap.get(m.key)?.fee ?? 0), 0);
+    const yearRi = months.reduce((n, m) => n + Number(monthMap.get(m.key)?.ri ?? 0), 0);
 
     return (
       <>
@@ -632,6 +636,13 @@ export default async function CollectionsPage({
                   </div>
                 );
               })}
+              <div className="mt-1.5 flex items-center gap-3 border-t border-line pt-1.5 font-semibold">
+                <span className="w-14 shrink-0 text-[11.5px] text-ink">Total</span>
+                <span className="flex-1" />
+                <span className="num w-24 shrink-0 text-right text-[12px] text-ink">
+                  {money(yearFee + yearRi)}
+                </span>
+              </div>
             </div>
             <p className="mt-3 flex items-center gap-4 text-[11px] text-ink-muted">
               <span className="flex items-center gap-1.5">
