@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
@@ -56,19 +57,29 @@ export function Nav({
       {/* On a phone the company picker drops to its own line rather than
           fighting the nav buttons for width. */}
       <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:px-6">
-        <div className="min-w-0 flex-1 sm:flex-none">
-          {/*
-            The brand, not the selected company - which one you are looking at
-            is the switcher's job, right beside it. A title that changed with
-            every switch was reading as confirmation of the switch rather than
-            the firm's own name.
-          */}
-          <p className="truncate text-[17px] font-semibold uppercase tracking-wide text-ink">
-            Akshayam Group
-          </p>
-          <p className="hidden text-[11px] uppercase tracking-[0.14em] text-ink-faint sm:block">
-            Management Reporting
-          </p>
+        <div className="flex min-w-0 flex-1 items-center gap-2.5 sm:flex-none">
+          <Image
+            src="/logo.jpeg"
+            alt="Akshayam"
+            width={200}
+            height={200}
+            className="h-9 w-9 shrink-0 rounded-sm object-contain"
+            priority
+          />
+          <div className="min-w-0">
+            {/*
+              The brand, not the selected company - which one you are looking
+              at is the switcher's job, right beside it. A title that changed
+              with every switch was reading as confirmation of the switch
+              rather than the firm's own name.
+            */}
+            <p className="truncate text-[17px] font-semibold uppercase tracking-wide text-ink">
+              Akshayam Group
+            </p>
+            <p className="hidden text-[11px] uppercase tracking-[0.14em] text-ink-faint sm:block">
+              Management Reporting
+            </p>
+          </div>
         </div>
         <div className="order-3 w-full sm:order-none sm:w-auto">
           <EntitySwitcher entities={entities} current={currentSlug} />
