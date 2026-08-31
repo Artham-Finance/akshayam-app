@@ -63,7 +63,7 @@ export function Nav({
             every switch was reading as confirmation of the switch rather than
             the firm's own name.
           */}
-          <p className="truncate text-[13px] font-semibold tracking-tight text-ink">
+          <p className="truncate text-[17px] font-semibold uppercase tracking-wide text-ink">
             Akshayam Group
           </p>
           <p className="hidden text-[11px] uppercase tracking-[0.14em] text-ink-faint sm:block">
