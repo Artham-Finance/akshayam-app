@@ -7,6 +7,7 @@ import type {
   ArParseResult,
   CreditNoteParseResult,
   InvoiceParseResult,
+  ParsedOsbRow,
   PaymentParseResult,
 } from "@/lib/parse/sales";
 import type { BudgetParseResult } from "@/lib/parse/budget";
@@ -449,9 +450,101 @@ export async function commitInvoices(
       ]),
     );
 
+    if (parsed.osbRows) {
+      await commitOsb(client, entityId, uploadId, parsed.osbRows, verticalIds);
+    }
+
     await linkByInvoice(client, entityId);
     return { uploadId, rowsInserted, newAccounts: [], newVerticals, needsReview: [] };
   });
+}
+
+/**
+ * Outside-books invoices, from the "OSB" sheet of an Invoice Details upload.
+ *
+ * Replaced wholesale on every upload that carries the sheet, entity-wide -
+ * not scoped to a date range or to the invoice numbers in this file, the way
+ * the rest of an invoice upload is. These are hand-maintained exceptions
+ * rather than a period export: an invoice removed from the sheet, or one
+ * that moved from overdue to paid, has to actually disappear from the old
+ * side, and the sheet itself is the one place that says which invoices are
+ * outside-books right now.
+ *
+ * invoice_lines and payments are not snapshots, so a plain replace is safe.
+ * ar_open_items is - many as_of dates coexist - so only the latest one is
+ * touched; commitArAging's own carry-forward (025_osb... see there) is what
+ * keeps a receivable visible from one AR snapshot to the next after that.
+ */
+export async function commitOsb(
+  client: PoolClient,
+  entityId: number,
+  uploadId: number,
+  rows: ParsedOsbRow[],
+  verticalIds: Map<string, number>,
+): Promise<void> {
+  await client.query("delete from invoice_lines where entity_id = $1 and is_osb", [entityId]);
+  await client.query("delete from payments where entity_id = $1 and is_osb", [entityId]);
+
+  await bulkInsert(
+    client,
+    "invoice_lines",
+    [
+      "entity_id", "upload_id", "invoice_number", "invoice_date", "customer_name",
+      "vertical_id", "salesperson", "currency", "exchange_rate", "amount_base",
+      "total_base", "status", "is_osb",
+    ],
+    rows.map((row) => [
+      entityId, uploadId, row.invoiceNumber, row.invoiceDate, row.customerName,
+      row.vertical ? verticalIds.get(row.vertical) ?? null : null, row.salesperson,
+      "INR", 1, row.amountBase, row.amountBase, row.status, true,
+    ]),
+  );
+
+  const paid = rows.filter((r) => (r.status ?? "").toLowerCase() === "paid");
+  await bulkInsert(
+    client,
+    "payments",
+    [
+      "entity_id", "upload_id", "payment_date", "customer_name", "invoice_number",
+      "vertical_id", "currency", "amount_base", "unallocated_base", "is_osb",
+    ],
+    // Dated to the invoice itself - an outside-books collection has no real
+    // receipt to carry its own date.
+    paid.map((row) => [
+      entityId, uploadId, row.invoiceDate, row.customerName, row.invoiceNumber,
+      row.vertical ? verticalIds.get(row.vertical) ?? null : null, "INR", row.amountBase, 0, true,
+    ]),
+  );
+
+  const open = rows.filter((r) => (r.status ?? "").toLowerCase() !== "paid");
+  const latest = await client.query<{ as_of: string | null }>(
+    "select max(as_of)::text as as_of from ar_open_items where entity_id = $1",
+    [entityId],
+  );
+  const asOf = latest.rows[0]?.as_of;
+  // No AR snapshot loaded yet for this entity: an open outside-books item has
+  // nothing to attach to. It still counts as revenue via invoice_lines above;
+  // the first AR upload's own carry-forward logic is what picks it up.
+  if (asOf) {
+    await client.query(
+      "delete from ar_open_items where entity_id = $1 and is_osb and as_of = $2",
+      [entityId, asOf],
+    );
+    await bulkInsert(
+      client,
+      "ar_open_items",
+      [
+        "entity_id", "upload_id", "as_of", "invoice_number", "invoice_date", "due_date",
+        "customer_name", "vertical_id", "salesperson", "currency", "exchange_rate",
+        "invoice_amount", "balance_base", "unused_credit", "is_osb",
+      ],
+      open.map((row) => [
+        entityId, uploadId, asOf, row.invoiceNumber, row.invoiceDate, row.invoiceDate,
+        row.customerName, row.vertical ? verticalIds.get(row.vertical) ?? null : null,
+        row.salesperson, "INR", 1, row.amountBase, row.amountBase, 0, true,
+      ]),
+    );
+  }
 }
 
 export async function commitPayments(
