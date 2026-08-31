@@ -177,7 +177,7 @@ function normaliseTag(raw: string): string {
  * into "Disputes, Litigation & Resolution" may well be right, but that is the
  * client's call, not ours.
  */
-async function resolveVerticals(
+export async function resolveVerticals(
   client: PoolClient,
   entityId: number,
   codes: Iterable<string>,
@@ -248,7 +248,7 @@ async function resolveVerticals(
   return { ids, created };
 }
 
-interface FileMeta {
+export interface FileMeta {
   originalName: string;
   byteSize: number;
   sha256: string;
@@ -258,7 +258,7 @@ interface FileMeta {
   uploadedBy?: number | null;
 }
 
-async function createUpload(
+export async function createUpload(
   client: PoolClient,
   entityId: number,
   kind: string,
@@ -428,7 +428,7 @@ export async function commitInvoices(
 
     if (parsed.periodStart && parsed.periodEnd) {
       await client.query(
-        "delete from invoice_lines where entity_id = $1 and invoice_date between $2 and $3 and upload_id <> $4",
+        "delete from invoice_lines where entity_id = $1 and invoice_date between $2 and $3 and upload_id <> $4 and not is_osb",
         [entityId, parsed.periodStart, parsed.periodEnd, uploadId],
       );
     }
@@ -471,7 +471,7 @@ export async function commitPayments(
 
     if (parsed.periodStart && parsed.periodEnd) {
       await client.query(
-        "delete from payments where entity_id = $1 and payment_date between $2 and $3 and upload_id <> $4",
+        "delete from payments where entity_id = $1 and payment_date between $2 and $3 and upload_id <> $4 and not is_osb",
         [entityId, parsed.periodStart, parsed.periodEnd, uploadId],
       );
     }
@@ -514,7 +514,7 @@ export async function commitArAging(
 
     // Receivables are a snapshot: one upload per as-of date replaces it entirely.
     await client.query(
-      "delete from ar_open_items where entity_id = $1 and as_of = $2 and upload_id <> $3",
+      "delete from ar_open_items where entity_id = $1 and as_of = $2 and upload_id <> $3 and not is_osb",
       [entityId, asOf, uploadId],
     );
 
@@ -533,6 +533,32 @@ export async function commitArAging(
         row.invoiceAmount, row.balanceBase, row.unusedCredit,
       ]),
     );
+
+    // An outside-books invoice has no Zoho export to arrive in, so nothing
+    // ever re-states it at this new as_of the way a real open item just did
+    // above - it is carried forward from whichever snapshot last had it,
+    // still open, until something (a future OSB reload marking it paid)
+    // says otherwise. Skipped entirely once this is already that snapshot,
+    // which a same-day re-upload would otherwise try to carry forward onto
+    // itself.
+    const latestOsb = await client.query<{ as_of: string }>(
+      `select max(as_of) as as_of from ar_open_items where entity_id = $1 and is_osb and as_of < $2`,
+      [entityId, asOf],
+    );
+    if (latestOsb.rows[0]?.as_of) {
+      await client.query(
+        `insert into ar_open_items
+           (entity_id, upload_id, as_of, invoice_number, invoice_date, due_date, customer_name,
+            vertical_id, salesperson, currency, exchange_rate, invoice_amount, balance_base,
+            unused_credit, is_osb)
+         select entity_id, $3, $2, invoice_number, invoice_date, due_date, customer_name,
+                vertical_id, salesperson, currency, exchange_rate, invoice_amount, balance_base,
+                unused_credit, true
+           from ar_open_items
+          where entity_id = $1 and is_osb and as_of = $4`,
+        [entityId, asOf, uploadId, latestOsb.rows[0].as_of],
+      );
+    }
 
     // Take each open item's vertical from the invoice that raised it rather
     // than from this file's own salesperson column, so the two sales reports
@@ -669,18 +695,73 @@ export async function linkByInvoice(client: PoolClient, entityId: number): Promi
   // Take the vertical from the invoice the payment settles. Only meaningful
   // for single-invoice receipts; multi-invoice ones are handled by the
   // allocation table below, which is what the reports read.
+  /*
+    An invoice raised under one vertical and later split across several -
+    022/023's slice-vertical corrections are the first case of this - has
+    more than one distinct vertical_id among its invoice_lines rows. The
+    plain lookup below deliberately excludes those: "one row, one vertical"
+    is what makes distinct on safe, and forcing a split invoice through it
+    would collapse the split back onto whichever vertical sorts first,
+    silently undoing the correction for every table that follows it.
+  */
   await client.query(
     `update payments p
         set vertical_id = i.vertical_id
        from (
          select distinct on (invoice_number) invoice_number, vertical_id
-           from invoice_lines
-          where entity_id = $1 and vertical_id is not null
+           from (
+             select il.invoice_number, il.vertical_id, il.id
+               from invoice_lines il
+               join (
+                 select invoice_number, count(distinct vertical_id) as n_verticals
+                   from invoice_lines
+                  where entity_id = $1 and vertical_id is not null
+                  group by invoice_number
+               ) n on n.invoice_number = il.invoice_number and n.n_verticals = 1
+              where il.entity_id = $1 and il.vertical_id is not null
+           ) x
           order by invoice_number, id
        ) i
       where p.entity_id = $1
         and p.vertical_id is distinct from i.vertical_id
         and p.invoice_number = i.invoice_number`,
+    [entityId],
+  );
+
+  /*
+    A split invoice's payment rows are matched by rank instead: the same
+    upload that split the invoice duplicated the payment row alongside it,
+    each copy carrying the amount that belongs to one share of the split (see
+    the credit-note-value precedent in 025 - the figure that ties a document
+    to a specific line is the one already sitting on that row, not a share
+    invented by dividing a total). Ranking both sides by amount and pairing
+    rank-for-rank lines a payment up with the invoice line its own amount
+    corresponds to, largest with largest, without needing a column that
+    names the pairing directly.
+  */
+  await client.query(
+    `update payments p
+        set vertical_id = m.vertical_id
+       from (
+         select pr.payment_id, pr.rnk, il.vertical_id
+           from (
+             select id as payment_id, invoice_number,
+                    row_number() over (partition by invoice_number order by amount_base desc, id) as rnk
+               from payments
+              where entity_id = $1 and invoice_number is not null
+           ) pr
+           join (
+             select invoice_number, vertical_id,
+                    row_number() over (partition by invoice_number order by amount_base desc, id) as rnk
+               from invoice_lines
+              where entity_id = $1
+                and invoice_number in (
+                      select invoice_number from invoice_lines where entity_id = $1
+                      group by invoice_number having count(distinct vertical_id) > 1)
+           ) il on il.invoice_number = pr.invoice_number and il.rnk = pr.rnk
+       ) m
+      where p.entity_id = $1 and p.id = m.payment_id
+        and p.vertical_id is distinct from m.vertical_id`,
     [entityId],
   );
 
@@ -703,13 +784,31 @@ export async function linkByInvoice(client: PoolClient, entityId: number): Promi
    * An invoice in no uploaded register keeps whatever the AR file implied,
    * which is the best answer still available for it.
    */
+  /*
+    Excludes split invoices, same reason as the payments lookup above: AR
+    Aging already carries its own Salesperson-derived vertical per row, and
+    for a split invoice that is one row per share (the AR export repeats the
+    invoice once per cost-centre split, same as Invoice Details does) - the
+    correct answer for each row is already sitting on it. Forcing all of them
+    onto one vertical from a single-row lookup would erase the split AR
+    itself already shows.
+  */
   await client.query(
     `update ar_open_items a
         set vertical_id = i.vertical_id
        from (
          select distinct on (invoice_number) invoice_number, vertical_id
-           from invoice_lines
-          where entity_id = $1 and vertical_id is not null
+           from (
+             select il.invoice_number, il.vertical_id, il.id
+               from invoice_lines il
+               join (
+                 select invoice_number, count(distinct vertical_id) as n_verticals
+                   from invoice_lines
+                  where entity_id = $1 and vertical_id is not null
+                  group by invoice_number
+               ) n on n.invoice_number = il.invoice_number and n.n_verticals = 1
+              where il.entity_id = $1 and il.vertical_id is not null
+           ) x
           order by invoice_number, id
        ) i
       where a.entity_id = $1
@@ -725,8 +824,17 @@ export async function linkByInvoice(client: PoolClient, entityId: number): Promi
         set vertical_id = i.vertical_id
        from (
          select distinct on (invoice_number) invoice_number, vertical_id
-           from invoice_lines
-          where entity_id = $1 and vertical_id is not null
+           from (
+             select il.invoice_number, il.vertical_id, il.id
+               from invoice_lines il
+               join (
+                 select invoice_number, count(distinct vertical_id) as n_verticals
+                   from invoice_lines
+                  where entity_id = $1 and vertical_id is not null
+                  group by invoice_number
+               ) n on n.invoice_number = il.invoice_number and n.n_verticals = 1
+              where il.entity_id = $1 and il.vertical_id is not null
+           ) x
           order by invoice_number, id
        ) i
       where cn.entity_id = $1
@@ -777,19 +885,56 @@ async function rebuildPaymentAllocations(client: PoolClient, entityId: number): 
          ) as x(inv)
         where p.entity_id = $1
      ),
-     joined as (
-       select parts.*,
-              i.vertical_id,
-              coalesce(i.total_base, 0) as weight,
-              (i.invoice_number is not null) as known,
-              coalesce(parts.inv like $2, false) as ri
-         from parts
-         left join (
-           select distinct on (invoice_number) invoice_number, vertical_id, total_base
+     -- Most invoices carry one vertical; the plain lookup, unchanged.
+     single_vertical as (
+       select distinct on (invoice_number) invoice_number, vertical_id, total_base
+         from (
+           select il.invoice_number, il.vertical_id, il.total_base, il.id
+             from invoice_lines il
+             join (
+               select invoice_number, count(distinct vertical_id) as n_verticals
+                 from invoice_lines
+                where entity_id = $1 and vertical_id is not null
+                group by invoice_number
+             ) n on n.invoice_number = il.invoice_number and n.n_verticals = 1
+            where il.entity_id = $1
+         ) x
+        order by invoice_number, id
+     ),
+     -- An invoice split across verticals (022/023's slice corrections, or any
+     -- future one) carries several rows for the same invoice_number, and the
+     -- upload that split it duplicated the payment row alongside each share -
+     -- see 025's reasoning for crediting a document from the amount already
+     -- on its own row rather than a share invented by dividing a total.
+     -- Ranking both sides by amount and pairing rank-for-rank lines a payment
+     -- up with the split share its own amount corresponds to.
+     split_vertical as (
+       select pr.payment_id, pr.inv, il.vertical_id, il.total_base
+         from (
+           select payment_id, inv, amount_base,
+                  row_number() over (partition by inv order by amount_base desc, payment_id) as rnk
+             from parts
+            where inv is not null
+         ) pr
+         join (
+           select invoice_number, vertical_id, total_base,
+                  row_number() over (partition by invoice_number order by amount_base desc, id) as rnk
              from invoice_lines
             where entity_id = $1
-            order by invoice_number, id
-         ) i on i.invoice_number = parts.inv
+              and invoice_number in (
+                    select invoice_number from invoice_lines where entity_id = $1
+                    group by invoice_number having count(distinct vertical_id) > 1)
+         ) il on il.invoice_number = pr.inv and il.rnk = pr.rnk
+     ),
+     joined as (
+       select parts.*,
+              coalesce(sv.vertical_id, s.vertical_id) as vertical_id,
+              coalesce(sv.total_base, s.total_base, 0) as weight,
+              (coalesce(sv.vertical_id, s.vertical_id) is not null) as known,
+              coalesce(parts.inv like $2, false) as ri
+         from parts
+         left join single_vertical s on s.invoice_number = parts.inv
+         left join split_vertical sv on sv.payment_id = parts.payment_id and sv.inv = parts.inv
      ),
      weighted as (
        select j.*,
