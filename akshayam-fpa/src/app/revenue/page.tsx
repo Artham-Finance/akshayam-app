@@ -1,3 +1,4 @@
+import clsx from "clsx";
 import Link from "next/link";
 import { BudgetTable } from "@/components/BudgetTable";
 import { Bar, DataTable, drillColumns, renderDrillRow } from "@/components/DataTable";
@@ -15,7 +16,7 @@ import {
   PageHeader,
 } from "@/components/ui";
 import { query, queryOne } from "@/lib/db";
-import { getEntity, getVerticals, verticalScope } from "@/lib/entity";
+import { getEntity, getVerticalsInScope, verticalScope } from "@/lib/entity";
 import { compactINR, dateLabel, money, monthLabel, percent, share } from "@/lib/format";
 import { withParams } from "@/lib/href";
 import { fyBounds, fyLabel, fyMonths } from "@/lib/period";
@@ -52,7 +53,7 @@ export default async function RevenuePage({
 
   try {
     const entity = await getEntity();
-    const verticals = await getVerticals(entity);
+    const verticals = await getVerticalsInScope(entity);
 
     const years = await query<{ fy: number }>(
       `select distinct case when extract(month from invoice_date) >= 4
@@ -92,6 +93,17 @@ export default async function RevenuePage({
     const requestedVertical = Number(params.vertical);
     const verticalId = verticals.some((v) => v.id === requestedVertical) ? requestedVertical : null;
     const verticalName = verticals.find((v) => v.id === verticalId)?.name ?? null;
+
+    /**
+     * The budget table names verticals by code, and a link needs the id. Codes
+     * that appear more than once - the same code in both companies, seen only
+     * in the consolidated view - are left unlinked rather than sent to whichever
+     * of them happened to be first.
+     */
+    const idByCode = new Map<string, number | null>();
+    for (const v of verticals) {
+      idByCode.set(v.code, idByCode.has(v.code) ? null : v.id);
+    }
 
     /**
      * One customer's invoices, from the start of the year up to the end of the
@@ -405,10 +417,15 @@ export default async function RevenuePage({
           {/*
             The headline is the budget position, not the invoice register: what
             was targeted for the period, what the ledger actually earned, and
-            the gap. Gross invoiced and the credit-note deduction are still
-            reachable - they hang off the Actual tile and the note below - but
-            they are workings, and workings do not belong in the six numbers a
-            partner reads first.
+            the gap. Gross invoiced stays a working - it hangs off the Actual
+            tile and the note below - but credit notes raised and reimbursement
+            income are read every week and are asked for on the face of the
+            page, so they close the block rather than hiding in prose.
+
+            Both sit below the budget position deliberately. Neither is fee
+            performance: a credit note is revenue given back, and a
+            reimbursement is a client's own cost recharged, so reading either
+            as though it were the Actual above it would overstate the week.
           */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <KpiTile label="Annual Budget" value={compactINR(headline.annual)} note={fyLabel(fy)} />
@@ -475,6 +492,39 @@ export default async function RevenuePage({
                   : withParams("/revenue", params, {
                       drill: drill === "retainers" ? null : "retainers",
                     })
+              }
+            />
+            <KpiTile
+              label="Credit notes raised"
+              value={compactINR(cumCnValue)}
+              note={
+                cumFeeInvoiced
+                  ? `${percent(share(cumCnValue, cumFeeInvoiced))} of fee invoiced`
+                  : "Deducted from the fee invoiced"
+              }
+              tone={cumCnValue ? "negative" : "ink"}
+              active={drill === "credit_notes"}
+              href={withParams("/revenue", params, {
+                drill: drill === "credit_notes" ? null : "credit_notes",
+              })}
+              cumulative={
+                period.cumulative
+                  ? { label: period.shortLabel, value: compactINR(cn) }
+                  : undefined
+              }
+            />
+            <KpiTile
+              label="Reimbursement income"
+              value={compactINR(cumRiValue)}
+              note="Client costs recharged · never counted as fee"
+              active={drill === "ri"}
+              href={withParams("/revenue", params, {
+                drill: drill === "ri" ? null : "ri",
+              })}
+              cumulative={
+                period.cumulative
+                  ? { label: period.shortLabel, value: compactINR(ri) }
+                  : undefined
               }
             />
           </div>
@@ -623,6 +673,16 @@ export default async function RevenuePage({
               periodLabel={period.shortLabel}
               periodBasis={period.basis}
               cumulativeBasis={period.cumulative?.basis ?? null}
+              hrefFor={(row) => {
+                const id = row.code ? idByCode.get(row.code) : null;
+                return id
+                  ? withParams("/revenue", params, {
+                      vertical: String(id),
+                      drill: "fee",
+                      customer: null,
+                    })
+                  : null;
+              }}
             />
             <p className="px-4 pb-4 text-[11.5px] text-ink-muted sm:px-5">
               Actual is the ledger&rsquo;s Revenue from Operations, so it is net of credit
@@ -639,7 +699,7 @@ export default async function RevenuePage({
           </Card>
 
           <Card>
-            <CardTitle hint={`peak month ${compactINR(peak)} · full year`}>
+            <CardTitle hint={`peak month ${compactINR(peak)} · full year · click a month for its invoices`}>
               Invoiced by month
             </CardTitle>
             <div className="space-y-1.5">
@@ -648,8 +708,16 @@ export default async function RevenuePage({
                 const f = Number(row?.fee ?? 0);
                 const r = Number(row?.ri ?? 0);
                 const credit = cnMap.get(m.key) ?? 0;
-                return (
-                  <div key={m.key} className="flex items-center gap-3">
+                /*
+                  Fee and reimbursement together - the same "all" drill the
+                  currency card already uses - since that is what the total
+                  column beside the bar adds up to. A month billing nothing has
+                  no invoices to open, so it stays a plain row rather than a
+                  link to an empty list.
+                */
+                const live = period.monthKey === m.key && drill === "all";
+                const content = (
+                  <>
                     <span className="w-14 shrink-0 text-[11.5px] text-ink-muted">
                       {monthLabel(m.end)}
                     </span>
@@ -666,6 +734,28 @@ export default async function RevenuePage({
                     <span className="num w-20 shrink-0 text-right text-[11.5px] text-negative">
                       {credit ? `(${money(credit)})` : ""}
                     </span>
+                  </>
+                );
+                return f + r > 0 ? (
+                  <Link
+                    key={m.key}
+                    href={withParams("/revenue", params, {
+                      month: live ? null : m.key,
+                      week: null,
+                      drill: live ? null : "all",
+                      customer: null,
+                    })}
+                    scroll={false}
+                    className={clsx(
+                      "-mx-1 flex items-center gap-3 rounded-sm px-1 transition-colors hover:bg-surface-sunk/50",
+                      live && "bg-surface-sunk/50",
+                    )}
+                  >
+                    {content}
+                  </Link>
+                ) : (
+                  <div key={m.key} className="flex items-center gap-3">
+                    {content}
                   </div>
                 );
               })}

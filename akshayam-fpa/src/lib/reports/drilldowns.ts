@@ -80,6 +80,7 @@ const TITLES: Record<DrillKind, Record<string, string>> = {
     over365: "Overdue more than 1 year",
     top10: "Top 10 customers by balance",
     customer: "Outstanding invoices for one customer",
+    unattributed: "Open items with no vertical",
   },
   revenue: {
     all: "All invoices",
@@ -340,6 +341,13 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
       // Everything still open for the picked customer; the customer clause
       // below is what narrows it.
       customer: () => "true",
+      /*
+        The open items the AR report gave no salesperson for, so nothing said
+        which vertical they belong to. Read straight off the column the By
+        vertical table groups on, so the "Unallocated" row there and this list
+        can never disagree about which invoices it means.
+      */
+      unattributed: (t) => `${t}vertical_id is null`,
     };
     const scope = `(a.entity_id, a.as_of) in (
                      select entity_id, max(as_of) from ar_open_items

@@ -1,3 +1,4 @@
+import clsx from "clsx";
 import Link from "next/link";
 import { BudgetTable } from "@/components/BudgetTable";
 import { CurrencySplit, type CurrencyRow } from "@/components/CurrencySplit";
@@ -15,7 +16,7 @@ import {
   PageHeader,
 } from "@/components/ui";
 import { query, queryOne } from "@/lib/db";
-import { getEntity, getVerticals, verticalScope } from "@/lib/entity";
+import { getEntity, getVerticalsInScope, verticalScope } from "@/lib/entity";
 import { compactINR, dateLabel, money, monthLabel, percent, share } from "@/lib/format";
 import { withParams } from "@/lib/href";
 import { fyBounds, fyLabel, fyMonths } from "@/lib/period";
@@ -47,7 +48,7 @@ export default async function CollectionsPage({
 
   try {
     const entity = await getEntity();
-    const verticals = await getVerticals(entity);
+    const verticals = await getVerticalsInScope(entity);
 
     const years = await query<{ fy: number }>(
       `select distinct case when extract(month from payment_date) >= 4
@@ -109,7 +110,7 @@ export default async function CollectionsPage({
     const customer =
       pickedCustomer && customers.includes(pickedCustomer) ? pickedCustomer : null;
 
-    const [totals, byMonth, byVertical, unmatched, byCurrency] = await Promise.all([
+    const [totals, byMonth, unmatched, byCurrency] = await Promise.all([
       queryOne<{ fee: number; ri: number; n: number }>(
         `select coalesce(sum(case when a.is_reimbursement then 0 else a.amount_base end),0)::numeric fee,
                 coalesce(sum(case when a.is_reimbursement then a.amount_base else 0 end),0)::numeric ri,
@@ -130,20 +131,6 @@ export default async function CollectionsPage({
             ${verticalScope("$5", "a.vertical_id")}
           group by 1`,
         [entity.memberIds, fyRange.start, fyRange.end, verticalId, entity.verticalIds],
-      ),
-      query<{ code: string | null; name: string | null; fee: number; ri: number }>(
-        `select v.code, v.name,
-                sum(case when a.is_reimbursement then 0 else a.amount_base end)::numeric fee,
-                sum(case when a.is_reimbursement then a.amount_base else 0 end)::numeric ri
-           from payment_allocations a
-           join payments p on p.id = a.payment_id
-           left join verticals v on v.id = a.vertical_id
-          where a.entity_id = any($1::int[]) and p.payment_date between $2 and $3
-            and ($4::int is null or a.vertical_id = $4)
-            ${verticalScope("$5", "a.vertical_id")}
-          group by v.code, v.name
-          order by sum(a.amount_base) desc`,
-        [entity.memberIds, start, end, verticalId, entity.verticalIds],
       ),
       // Exactly the population the "unmatched" drill lists, so the count in the
       // notice and the rows in the table below it can never disagree.
@@ -528,6 +515,20 @@ export default async function CollectionsPage({
               periodBasis={period.basis}
               cumulativeBasis={period.cumulative?.basis ?? null}
               hrefFor={(row) => {
+                /*
+                  The unattributed row has no vertical to filter by, so it opens
+                  the receipts themselves. Deliberately the same drill the
+                  notice below already offers: they are one population - a
+                  receipt with no vertical is a receipt nothing traced to an
+                  invoice - and two links to the same figure that opened
+                  different lists would be worse than one.
+                */
+                if (row.unattributed)
+                  return withParams("/collections", params, {
+                    vertical: null,
+                    drill: "unmatched",
+                    customer: null,
+                  });
                 const id = row.code ? idByCode.get(row.code) : null;
                 return id
                   ? withParams("/collections", params, {
@@ -548,7 +549,7 @@ export default async function CollectionsPage({
           </Card>
 
           <Card>
-            <CardTitle hint={`peak month ${compactINR(peak)} · full year`}>
+            <CardTitle hint={`peak month ${compactINR(peak)} · full year · click a month for its receipts`}>
               Collections by month
             </CardTitle>
             <div className="space-y-1.5">
@@ -557,8 +558,15 @@ export default async function CollectionsPage({
                 const f = Number(row?.fee ?? 0);
                 const r = Number(row?.ri ?? 0);
                 const sum = f + r;
-                return (
-                  <div key={m.key} className="flex items-center gap-3">
+                /*
+                  Fee and reimbursement together - the same "total" drill the
+                  currency card already uses - since that is what the bar and
+                  the figure beside it add up to. A month with no receipts has
+                  nothing to open, so it stays a plain row.
+                */
+                const live = period.monthKey === m.key && drill === "total";
+                const content = (
+                  <>
                     <span className="w-14 shrink-0 text-[11.5px] text-ink-muted">
                       {monthLabel(m.end)}
                     </span>
@@ -577,6 +585,28 @@ export default async function CollectionsPage({
                     <span className="num w-24 shrink-0 text-right text-[12px] text-ink">
                       {sum ? money(sum) : "—"}
                     </span>
+                  </>
+                );
+                return sum > 0 ? (
+                  <Link
+                    key={m.key}
+                    href={withParams("/collections", params, {
+                      month: live ? null : m.key,
+                      week: null,
+                      drill: live ? null : "total",
+                      customer: null,
+                    })}
+                    scroll={false}
+                    className={clsx(
+                      "-mx-1 flex items-center gap-3 rounded-sm px-1 transition-colors hover:bg-surface-sunk/50",
+                      live && "bg-surface-sunk/50",
+                    )}
+                  >
+                    {content}
+                  </Link>
+                ) : (
+                  <div key={m.key} className="flex items-center gap-3">
+                    {content}
                   </div>
                 );
               })}
@@ -589,43 +619,6 @@ export default async function CollectionsPage({
                 <span className="h-2 w-3 rounded-sm bg-caution/70" /> Reimbursement
               </span>
             </p>
-          </Card>
-
-          <Card padded={false}>
-            <div className="p-4 sm:p-5">
-              <CardTitle hint="click a vertical for its receipts">By vertical</CardTitle>
-            </div>
-            <DataTable
-              columns={[
-                { header: "Vertical" },
-                { header: "Fee", numeric: true },
-                { header: "Reimbursement", numeric: true },
-                { header: "Total", numeric: true, strong: true },
-              ]}
-              rows={byVertical.map((r) => {
-                const id = r.code ? idByCode.get(r.code as string) : null;
-                return [
-                  id ? (
-                    <Link
-                      key="v"
-                      href={withParams("/collections", params, {
-                        vertical: String(id),
-                        drill: "fee",
-                        customer: null,
-                      })}
-                      className="font-medium text-navy hover:underline"
-                    >
-                      {r.code as string}
-                    </Link>
-                  ) : (
-                    ((r.code as string) ?? "Unmatched")
-                  ),
-                  money(Number(r.fee)),
-                  Number(r.ri) ? money(Number(r.ri)) : "—",
-                  money(Number(r.fee) + Number(r.ri)),
-                ];
-              })}
-            />
           </Card>
 
         </div>
