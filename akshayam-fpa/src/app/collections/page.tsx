@@ -652,6 +652,11 @@ export default async function CollectionsPage({
                 <span className="h-2 w-3 rounded-sm bg-caution/70" /> Reimbursement
               </span>
             </p>
+            <p className="mt-2 text-[11.5px] text-ink-muted">
+              This total is full calendar months, so it can run ahead of the tiles above: those
+              stop at the last completed week ({dateLabel(period.cumulative?.end ?? period.end)}),
+              while a month still open here counts everything posted to it so far.
+            </p>
           </Card>
 
           {chosen && drill === "month" && chosenPanel}
