@@ -107,7 +107,7 @@ export async function buildBudgetVsActualPnl(opts: {
   const months = fyMonths(fyStartYear);
   const { start, end } = fyBounds(fyStartYear);
 
-  const [actualRows, budgetRows] = await Promise.all([
+  const [glRows, osbRows, budgetRows] = await Promise.all([
     query<{ month_key: string; group_code: string | null; amount: number }>(
       // credit - debit, so income is positive and a cost negative: the same
       // convention the P&L page uses, which is what lets the two agree.
@@ -123,6 +123,26 @@ export async function buildBudgetVsActualPnl(opts: {
           ${verticalScope("$6", "g.vertical_id")}
         group by 1, 2`,
       [entity.memberIds, start, end, entity.consolidates, verticalId, entity.verticalIds],
+    ),
+    /**
+     * Outside-books revenue folded straight into the Revenue line - it has no
+     * gl_entries row above to carry its own group_code, and this statement
+     * has no line of its own for it the way the P&L does, so the group_code
+     * is stated as 'revenue' directly rather than read from an account. Same
+     * source buildProfitAndLoss and actualsByVertical read, so all three
+     * total OSB revenue the same way.
+     */
+    query<{ month_key: string; group_code: string; amount: number }>(
+      `select to_char(i.invoice_date, 'YYYY-MM') as month_key,
+              'revenue' as group_code,
+              sum(i.amount_base) as amount
+         from invoice_lines i
+        where i.entity_id = any($1::int[]) and i.is_osb
+          and i.invoice_date between $2 and $3
+          and ($4::int is null or i.vertical_id = $4)
+          ${verticalScope("$5", "i.vertical_id")}
+        group by 1`,
+      [entity.memberIds, start, end, verticalId, entity.verticalIds],
     ),
     /**
      * The budget is held for the entity itself, not summed from members: the
@@ -150,7 +170,7 @@ export async function buildBudgetVsActualPnl(opts: {
   const byCode = new Map(lines.map((l) => [l.code, l]));
   const valid = new Set(months.map((m) => m.key));
 
-  for (const row of actualRows) {
+  for (const row of [...glRows, ...osbRows]) {
     if (!valid.has(row.month_key)) continue;
     const code = row.group_code ? GROUP_TO_LINE[row.group_code] : undefined;
     // An account with no reporting line has nowhere to sit on a statement this

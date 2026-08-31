@@ -66,16 +66,18 @@ export async function buildProfitAndLoss(opts: {
   const months = fyMonths(fyStartYear);
   const { start, end } = fyBounds(fyStartYear);
 
-  const [groups, rows] = await Promise.all([
+  type FlatRow = {
+    month_key: string;
+    group_code: string | null;
+    account_id: number;
+    account_name: string;
+    account_sort: number;
+    amount: number;
+  };
+
+  const [groups, rows, osbRows] = await Promise.all([
     loadGroups(entity.id, "pnl"),
-    query<{
-      month_key: string;
-      group_code: string | null;
-      account_id: number;
-      account_name: string;
-      account_sort: number;
-      amount: number;
-    }>(
+    query<FlatRow>(
       `select to_char(g.txn_date, 'YYYY-MM') as month_key,
               a.group_code,
               min(a.id)           as account_id,
@@ -95,9 +97,38 @@ export async function buildProfitAndLoss(opts: {
         group by 1, 2, 4`,
       [entity.memberIds, start, end, verticalId, entity.consolidates, entity.verticalIds],
     ),
+    /**
+     * Outside-books revenue, added on top of the ledger rather than posted
+     * into it.
+     *
+     * An OSB invoice has no gl_entries behind it by definition - that is what
+     * outside books means - so it cannot come from the query above no matter
+     * how the join is written. It is real revenue of the vertical that did
+     * the work, so it is shaped exactly like a ledger row (one account, one
+     * group) and handed to the same assemble() that builds every other line,
+     * rather than being bolted onto the total after the fact where it could
+     * drift from Gross Profit, EBITDA and everything else that sums lines
+     * rather than reading a total field.
+     */
+    query<FlatRow>(
+      `select to_char(i.invoice_date, 'YYYY-MM') as month_key,
+              a.group_code,
+              a.id         as account_id,
+              a.name       as account_name,
+              a.sort_order as account_sort,
+              sum(i.amount_base) as amount
+         from invoice_lines i
+         join accounts a on a.entity_id = i.entity_id and a.group_code = 'osb_revenue'
+        where i.entity_id = any($1::int[]) and i.is_osb
+          and i.invoice_date between $2 and $3
+          and ($4::int is null or i.vertical_id = $4)
+          ${verticalScope("$5", "i.vertical_id")}
+        group by 1, 2, 3, 4, 5`,
+      [entity.memberIds, start, end, verticalId, entity.verticalIds],
+    ),
   ]);
 
-  return assemble(months, groups, rows, detail);
+  return assemble(months, groups, [...rows, ...osbRows], detail);
 }
 
 /* ============================================================

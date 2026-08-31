@@ -130,8 +130,18 @@ export default async function RevenuePage({
               ${verticalScope("$6")}`,
           args,
         ),
-        queryOne<{ v: number; n: number }>(
-          `select coalesce(sum(cn_amount_base),0)::numeric v, count(*)::int n
+        queryOne<{ fee: number; ri: number; n: number }>(
+          /*
+            A credit note against an RI invoice reverses a recharge, not fee
+            income - it is raised because a client-paid cost never actually
+            landed, the same reason the invoice itself carries is_reimbursement.
+            Split here for exactly the reason invoice_lines already is: setting
+            an RI credit note off against fee would understate fee revenue and
+            overstate reimbursement by the same rupee.
+          */
+          `select coalesce(sum(case when is_reimbursement then 0 else cn_amount_base end),0)::numeric fee,
+                  coalesce(sum(case when is_reimbursement then cn_amount_base else 0 end),0)::numeric ri,
+                  count(*)::int n
              from credit_notes
             where entity_id=any($1::int[]) and credit_note_date between $2 and $3
               and ($4::int is null or vertical_id=$4)
@@ -182,8 +192,10 @@ export default async function RevenuePage({
             order by 4 desc`,
           [entity.memberIds, start, end, EXCLUDED_STATUS, verticalId, entity.verticalIds],
         ),
-        query<{ vertical_id: number | null; cn: number }>(
-          `select vertical_id, coalesce(sum(cn_amount_base),0)::numeric cn
+        query<{ vertical_id: number | null; cnFee: number; cnRi: number }>(
+          `select vertical_id,
+                  coalesce(sum(case when is_reimbursement then 0 else cn_amount_base end),0)::numeric "cnFee",
+                  coalesce(sum(case when is_reimbursement then cn_amount_base else 0 end),0)::numeric "cnRi"
              from credit_notes
             where entity_id=any($1::int[]) and credit_note_date between $2 and $3
               and is_primary_row and not (status = any($4))
@@ -221,21 +233,47 @@ export default async function RevenuePage({
         /**
          * Invoiced by the currency it was billed in.
          *
+         * Fee only - professional plus retainership, the same two tiles this
+         * feeds - and net of credit notes, so this card foots to the Actual
+         * tile above it exactly. Reimbursement is a recharge of a client-paid
+         * cost, never fee income, and a credit note here is set off against
+         * the fee it was raised against; both are excluded the same way the
+         * Actual figure already excludes them.
+         *
          * Zoho's export converts every amount to INR and leaves exchange_rate
          * to get back, so the billed figure is amount ÷ rate. Multiplying is
          * the classic mistake and inflates a dollar invoice ninety-fold.
          */
         query<{ currency: string; n: number; inr: number; foreign: number }>(
-          `select coalesce(currency, 'INR') as currency,
-                  count(*)::int as n,
-                  sum(amount_base)::numeric as inr,
-                  sum(amount_base / nullif(exchange_rate, 0))::numeric as foreign
-             from invoice_lines
-            where entity_id=any($1::int[]) and invoice_date between $2 and $3
-              and ($4::int is null or vertical_id=$4) and not (status = any($5))
-              ${verticalScope("$6")}
-            group by 1
-            order by sum(amount_base) desc`,
+          `with fee as (
+             select coalesce(currency, 'INR') as currency,
+                    count(*)::int as n,
+                    sum(amount_base)::numeric as inr,
+                    sum(amount_base / nullif(exchange_rate, 0))::numeric as foreign
+               from invoice_lines
+              where entity_id=any($1::int[]) and invoice_date between $2 and $3
+                and not is_reimbursement
+                and ($4::int is null or vertical_id=$4) and not (status = any($5))
+                ${verticalScope("$6")}
+              group by 1
+           ),
+           cn as (
+             select coalesce(currency, 'INR') as currency,
+                    sum(cn_amount_base)::numeric as inr,
+                    sum(cn_amount_base / nullif(exchange_rate, 0))::numeric as foreign
+               from credit_notes
+              where entity_id=any($1::int[]) and credit_note_date between $2 and $3
+                and is_primary_row and not is_reimbursement
+                and ($4::int is null or vertical_id=$4) and not (status = any($5))
+                ${verticalScope("$6")}
+              group by 1
+           )
+           select coalesce(fee.currency, cn.currency) as currency,
+                  coalesce(fee.n, 0) as n,
+                  coalesce(fee.inr, 0) - coalesce(cn.inr, 0) as inr,
+                  coalesce(fee.foreign, 0) - coalesce(cn.foreign, 0) as foreign
+             from fee full outer join cn on cn.currency = fee.currency
+            order by 3 desc`,
           args,
         ),
       ]);
@@ -342,15 +380,23 @@ export default async function RevenuePage({
     // The same figures for the year to date behind the chosen week or month.
     // One quiet week reads like a crisis without the run-rate beside it.
     const toDate = period.cumulative
-      ? await queryOne<{ fee: number; ri: number; cn: number }>(
+      ? await queryOne<{ fee: number; ri: number; cnFee: number; cnRi: number }>(
           `select coalesce(sum(case when i.is_reimbursement then 0 else i.amount_base end),0)::numeric fee,
                   coalesce(sum(case when i.is_reimbursement then i.amount_base else 0 end),0)::numeric ri,
                   coalesce((select sum(cn.cn_amount_base) from credit_notes cn
                              where cn.entity_id = any($1::int[])
                                and cn.credit_note_date between $2 and $3
                                and ($4::int is null or cn.vertical_id = $4)
-                               and cn.is_primary_row and not (cn.status = any($5))
-                               ${verticalScope("$6", "cn.vertical_id")}),0)::numeric cn
+                               and cn.is_primary_row and not cn.is_reimbursement
+                               and not (cn.status = any($5))
+                               ${verticalScope("$6", "cn.vertical_id")}),0)::numeric "cnFee",
+                  coalesce((select sum(cn.cn_amount_base) from credit_notes cn
+                             where cn.entity_id = any($1::int[])
+                               and cn.credit_note_date between $2 and $3
+                               and ($4::int is null or cn.vertical_id = $4)
+                               and cn.is_primary_row and cn.is_reimbursement
+                               and not (cn.status = any($5))
+                               ${verticalScope("$6", "cn.vertical_id")}),0)::numeric "cnRi"
              from invoice_lines i
             where i.entity_id = any($1::int[]) and i.invoice_date between $2 and $3
               and ($4::int is null or i.vertical_id = $4) and not (i.status = any($5))
@@ -368,7 +414,8 @@ export default async function RevenuePage({
 
     const fee = Number(totals?.fee ?? 0);
     const ri = Number(totals?.ri ?? 0);
-    const cn = Number(credits?.v ?? 0);
+    const cnFee = Number(credits?.fee ?? 0);
+    const cnRi = Number(credits?.ri ?? 0);
 
     /**
      * The window the headline speaks for: the year to date up to the chosen
@@ -385,7 +432,9 @@ export default async function RevenuePage({
 
     // The invoice register behind that figure, for the note under the tiles.
     const cumFeeInvoiced = Number(toDate?.fee ?? fee);
-    const cumCnValue = Number(toDate?.cn ?? cn);
+    const cumCnFee = Number(toDate?.cnFee ?? cnFee);
+    const cumCnRi = Number(toDate?.cnRi ?? cnRi);
+    const cumCnValue = cumCnFee + cumCnRi;
     const cumRiValue = Number(toDate?.ri ?? ri);
 
     const monthMap = new Map(byMonth.map((r) => [r.m, r]));
@@ -394,6 +443,11 @@ export default async function RevenuePage({
       1,
       ...months.map((m) => Number(monthMap.get(m.key)?.fee ?? 0) + Number(monthMap.get(m.key)?.ri ?? 0)),
     );
+    // The full year's figures, not the selected period's - the chart above
+    // stays on the full year, so its own total does too.
+    const yearFee = months.reduce((n, m) => n + Number(monthMap.get(m.key)?.fee ?? 0), 0);
+    const yearRi = months.reduce((n, m) => n + Number(monthMap.get(m.key)?.ri ?? 0), 0);
+    const yearCn = months.reduce((n, m) => n + Number(cnMap.get(m.key) ?? 0), 0);
 
     /**
      * The vertical table, assembled once.
@@ -402,7 +456,8 @@ export default async function RevenuePage({
      * second measurement of it - that is what keeps the two halves adding to
      * the invoiced total exactly rather than to each other approximately.
      */
-    const cnByVerticalId = new Map(cnByVertical.map((r) => [r.vertical_id, Number(r.cn)]));
+    const cnFeeByVerticalId = new Map(cnByVertical.map((r) => [r.vertical_id, Number(r.cnFee)]));
+    const cnRiByVerticalId = new Map(cnByVertical.map((r) => [r.vertical_id, Number(r.cnRi)]));
     const retainerByVerticalId = new Map(
       retainerByVertical.map((r) => [r.vertical_id, Number(r.amount)]),
     );
@@ -415,11 +470,26 @@ export default async function RevenuePage({
         retainer,
         professional: retainer === null ? null : fee - retainer,
         fee,
-        cn: cnByVerticalId.get(r.id) ?? 0,
+        // A credit note against an RI invoice reduces reimbursement, not fee -
+        // the two credit-note columns below read the same distinction
+        // invoice_lines already carries.
+        cnFee: cnFeeByVerticalId.get(r.id) ?? 0,
+        cnRi: cnRiByVerticalId.get(r.id) ?? 0,
         ri: Number(r.ri),
       };
     });
-
+    const verticalTotals = {
+      professional: period.monthAligned
+        ? verticalRows.reduce((n, r) => n + (r.professional ?? 0), 0)
+        : null,
+      retainer: period.monthAligned
+        ? verticalRows.reduce((n, r) => n + (r.retainer ?? 0), 0)
+        : null,
+      fee: verticalRows.reduce((n, r) => n + r.fee, 0),
+      cnFee: verticalRows.reduce((n, r) => n + r.cnFee, 0),
+      ri: verticalRows.reduce((n, r) => n + r.ri, 0),
+      cnRi: verticalRows.reduce((n, r) => n + r.cnRi, 0),
+    };
 
     return (
       <>
@@ -532,9 +602,12 @@ export default async function RevenuePage({
               label="Credit notes raised"
               value={compactINR(cumCnValue)}
               note={
-                cumFeeInvoiced
-                  ? `${percent(share(cumCnValue, cumFeeInvoiced))} of fee invoiced`
-                  : "Deducted from the fee invoiced"
+                // Fee and reimbursement together, so the share is of what was
+                // invoiced overall - the same pairing the currency card and
+                // the by-month bar already invoice fee and reimbursement in.
+                cumFeeInvoiced + cumRiValue
+                  ? `${percent(share(cumCnValue, cumFeeInvoiced + cumRiValue))} of invoiced`
+                  : "Deducted from what was invoiced"
               }
               tone="positive"
               active={drill === "credit_notes"}
@@ -543,7 +616,7 @@ export default async function RevenuePage({
               })}
               cumulative={
                 period.cumulative
-                  ? { label: period.shortLabel, value: compactINR(cn) }
+                  ? { label: period.shortLabel, value: compactINR(cnFee + cnRi) }
                   : undefined
               }
             />
@@ -566,9 +639,11 @@ export default async function RevenuePage({
 
           <Notice tone="info" title={`${compactINR(cumFeeInvoiced)} invoiced, ${compactINR(cumCnValue)} credited`}>
             Actual above is the ledger&rsquo;s revenue line. The invoice register shows{" "}
-            {compactINR(cumFeeInvoiced)} of fee raised less {compactINR(cumCnValue)} of credit
-            notes, and {compactINR(cumRiValue)} of reimbursements billed — recharges of
-            client-paid costs, which are reported separately and never counted as fee income.
+            {compactINR(cumFeeInvoiced)} of fee raised less {compactINR(cumCnFee)} of credit
+            notes, and {compactINR(cumRiValue)} of reimbursements billed less{" "}
+            {compactINR(cumCnRi)} of credit notes against those — recharges of client-paid
+            costs, which are reported separately and never counted as fee income. A credit
+            note against a reimbursement invoice is set off here, not against fee.
             <span className="mt-1 block">
               {(
                 [
@@ -774,6 +849,16 @@ export default async function RevenuePage({
                   </div>
                 );
               })}
+              <div className="mt-1.5 flex items-center gap-3 border-t border-line pt-1.5 font-semibold">
+                <span className="w-14 shrink-0 text-[11.5px] text-ink">Total</span>
+                <span className="flex-1" />
+                <span className="num w-24 shrink-0 text-right text-[12px] text-ink">
+                  {money(yearFee + yearRi)}
+                </span>
+                <span className="num w-20 shrink-0 text-right text-[11.5px] text-negative">
+                  {yearCn ? `(${money(yearCn)})` : ""}
+                </span>
+              </div>
             </div>
             <p className="mt-3 flex flex-wrap items-center gap-4 text-[11px] text-ink-muted">
               <span className="flex items-center gap-1.5">
@@ -783,6 +868,16 @@ export default async function RevenuePage({
                 <span className="h-2 w-3 rounded-sm bg-caution/70" /> Reimbursement
               </span>
               <span className="text-negative">( ) credit notes raised that month</span>
+            </p>
+            <p className="mt-2 text-[11.5px] text-ink-muted">
+              This total won&rsquo;t match a tile elsewhere on the page, on purpose: it is fee and
+              reimbursement together, before credit notes - the same two colours as the chart -
+              over full calendar months, so it can run ahead of them too. Actual, and the By
+              vertical table&rsquo;s Net column, count fee only, net of credit notes, up to the
+              last completed week ({dateLabel(period.cumulative?.end ?? period.end)}). Of the{" "}
+              {money(yearFee + yearRi)} above, {money(yearFee + yearRi - cumFeeInvoiced - cumRiValue)}{" "}
+              was invoiced after that week closed; the rest, {money(cumFeeInvoiced + cumRiValue)}, is
+              everything invoiced within the year to date, before any credit notes.
             </p>
           </Card>
 
@@ -827,11 +922,29 @@ export default async function RevenuePage({
                 r.professional === null ? "—" : money(r.professional),
                 r.retainer === null ? "—" : r.retainer ? money(r.retainer) : "—",
                 money(r.fee),
-                r.cn ? `(${money(r.cn)})` : "—",
-                money(r.fee - r.cn),
-                r.ri ? money(r.ri) : "—",
+                r.cnFee ? `(${money(r.cnFee)})` : "—",
+                money(r.fee - r.cnFee),
+                // Net of its own credit notes too - one raised against an RI
+                // invoice reverses a recharge, not fee income, so it belongs
+                // here rather than in the Credit notes column to its left.
+                r.ri - r.cnRi ? money(r.ri - r.cnRi) : "—",
               ])}
+              footer={[
+                "Total",
+                verticalTotals.professional === null ? "—" : money(verticalTotals.professional),
+                verticalTotals.retainer ? money(verticalTotals.retainer) : "—",
+                money(verticalTotals.fee),
+                verticalTotals.cnFee ? `(${money(verticalTotals.cnFee)})` : "—",
+                money(verticalTotals.fee - verticalTotals.cnFee),
+                verticalTotals.ri - verticalTotals.cnRi
+                  ? money(verticalTotals.ri - verticalTotals.cnRi)
+                  : "—",
+              ]}
             />
+            <p className="px-4 pb-4 text-[11.5px] text-ink-muted sm:px-5">
+              Reimbursement is net of credit notes raised against those invoices, the same way
+              Net is fee net of the credit notes column beside it.
+            </p>
             {!period.monthAligned && (
               <p className="px-4 pb-4 text-[11.5px] text-ink-muted sm:px-5">
                 The retainer is billed monthly, so a single week has no

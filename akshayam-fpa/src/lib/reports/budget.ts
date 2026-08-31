@@ -93,7 +93,8 @@ async function actualsByVertical(
     /**
      * Revenue as the ledger has it: the accounts mapped to Revenue from
      * Operations, signed credit less debit, split by the ledger's own
-     * reporting tag.
+     * reporting tag - plus outside-books revenue, which by definition has no
+     * ledger entry to be read from there at all.
      *
      * Taken from the ledger rather than the invoice register on purpose. It is
      * net of credit notes by construction - a credit note debits the revenue
@@ -103,20 +104,40 @@ async function actualsByVertical(
      * the tag the entry was actually posted with: reading Common from the
      * ledger gives 11.8 L against the register's 3.2 L, and the ledger is the
      * one that agrees with the client's own report.
+     *
+     * OSB revenue is unioned in rather than folded into the same query,
+     * because it is not a ledger row - buildProfitAndLoss reaches the same
+     * total the same way, reading the same is_osb rows, so the two stay
+     * equal without either copying the other's total.
      */
-    return query<ActualRow>(
-      `select g.vertical_id, max(v.name) as name,
-              sum(g.credit - g.debit)::numeric as actual
-         from gl_entries g
-         join accounts a on a.id = g.account_id
-         left join verticals v on v.id = g.vertical_id
-        where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
-          and a.statement = 'pnl' and a.group_code = 'revenue'
-          ${verticalScope("$4", "g.vertical_id")}
-          and ($5::int is null or g.vertical_id = $5)
-        group by g.vertical_id`,
-      [entityIds, window.start, window.end, verticalIds, verticalId],
-    );
+    const [gl, osb] = await Promise.all([
+      query<ActualRow>(
+        `select g.vertical_id, max(v.name) as name,
+                sum(g.credit - g.debit)::numeric as actual
+           from gl_entries g
+           join accounts a on a.id = g.account_id
+           left join verticals v on v.id = g.vertical_id
+          where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
+            and a.statement = 'pnl' and a.group_code = 'revenue'
+            ${verticalScope("$4", "g.vertical_id")}
+            and ($5::int is null or g.vertical_id = $5)
+          group by g.vertical_id`,
+        [entityIds, window.start, window.end, verticalIds, verticalId],
+      ),
+      query<ActualRow>(
+        `select i.vertical_id, max(v.name) as name,
+                sum(i.amount_base)::numeric as actual
+           from invoice_lines i
+           left join verticals v on v.id = i.vertical_id
+          where i.entity_id = any($1::int[]) and i.is_osb
+            and i.invoice_date between $2 and $3
+            ${verticalScope("$4", "i.vertical_id")}
+            and ($5::int is null or i.vertical_id = $5)
+          group by i.vertical_id`,
+        [entityIds, window.start, window.end, verticalIds, verticalId],
+      ),
+    ]);
+    return [...gl, ...osb];
   }
 
   // Fee receipts only: a reimbursement recovery is not collection performance,

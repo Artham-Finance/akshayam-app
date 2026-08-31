@@ -9,6 +9,7 @@ import {
   toTag,
   toText,
   isRepeatedRow,
+  type Cell,
   type SheetTable,
 } from "./workbook";
 
@@ -31,6 +32,19 @@ const INVOICE_NO_KEYS = [
   "transaction", "transaction_number", // "Transaction#" in the AR aging report
 ];
 const CURRENCY_KEYS = ["currency_code", "currency"];
+
+/**
+ * A currency code is three letters - INR, USD, SGD. A cell that fails that
+ * shape falls back to the entity's own base currency rather than becoming a
+ * "currency" of its own with a handful of invoices in it: seen on RBJV's own
+ * export, where a Zoho internal id landed in the currency_code column on a
+ * few rows that had been hand-edited to add a vertical split, and every one
+ * of them was otherwise an ordinary rupee invoice.
+ */
+function currencyOf(row: Record<string, Cell>): string {
+  const raw = toText(pick(row, ...CURRENCY_KEYS));
+  return raw && /^[A-Za-z]{3}$/.test(raw) ? raw : "INR";
+}
 const RATE_KEYS = ["exchange_rate", "exchangerate", "rate"];
 const SALESPERSON_KEYS = ["salesperson_name", "salesperson", "sales_person", "owner"];
 const VERTICAL_KEYS = [
@@ -154,7 +168,7 @@ export async function parseInvoices(input: Buffer | ArrayBuffer): Promise<Invoic
       vertical,
       salesperson,
       itemName: toText(pick(row, "item_name", "item", "item_description", "description")),
-      currency: toText(pick(row, ...CURRENCY_KEYS)) ?? "INR",
+      currency: currencyOf(row),
       exchangeRate,
       amountBase,
       totalBase,
@@ -253,7 +267,7 @@ export async function parsePayments(input: Buffer | ArrayBuffer): Promise<Paymen
     // the normalised key carries the code. The generic "amount" is only the
     // foreign figure when a separate bcy column exists to be the INR one;
     // without that it IS the INR figure and must not be read twice.
-    const currency = toText(pick(row, ...CURRENCY_KEYS)) ?? "INR";
+    const currency = currencyOf(row);
     const hasSeparateBase = pick(row, "bcy_amount", "amount_bcy") !== null;
     const foreign =
       currency.toUpperCase() === "INR"
@@ -383,7 +397,7 @@ export async function parseArAging(
       customerName,
       vertical,
       salesperson,
-      currency: toText(pick(row, ...CURRENCY_KEYS)) ?? "INR",
+      currency: currencyOf(row),
       exchangeRate: toNumber(pick(row, ...RATE_KEYS)) || 1,
       invoiceAmount,
       balanceBase,
@@ -456,8 +470,10 @@ export interface CreditNoteParseResult {
  * invoice linkage is still available on every row.
  *
  * The export also repeats column names - date, bcy_total and amount_without_tax
- * appear again for the applied invoice. readWorkbook suffixes the repeats, so
- * the plain names here are the credit note's own figures.
+ * appear again for the applied invoice. readWorkbook suffixes the repeats, and
+ * the credit note's value is deliberately taken from the second occurrence
+ * (amount_without_tax_2, column Z) rather than the plain one: Z is the figure
+ * that ties to the ledger's P&L, confirmed against RBJV's own export.
  */
 export async function parseCreditNotes(
   input: Buffer | ArrayBuffer,
@@ -503,9 +519,15 @@ export async function parseCreditNotes(
       customerName,
       vertical,
       status: toText(pick(row, "status", "creditnote_status")),
-      currency: toText(pick(row, ...CURRENCY_KEYS)) ?? "INR",
+      currency: currencyOf(row),
       exchangeRate: toNumber(pick(row, ...RATE_KEYS)) || 1,
-      amountBase: toNumber(pick(row, "amount_without_tax", "sub_total", "amount")),
+      // Column Z of the Zoho export, not O - the applied invoice's own
+      // amount_without_tax (readWorkbook suffixes the repeat as
+      // amount_without_tax_2), which is the figure that ties to the ledger's
+      // P&L rather than the credit note's own computed total.
+      amountBase: toNumber(
+        pick(row, "amount_without_tax_2", "amount_without_tax", "sub_total", "amount"),
+      ),
       totalBase: toNumber(pick(row, "bcy_total", "total", "grand_total")),
       invoiceNumber: toText(pick(row, "invoice_number", "invoice")),
       isPrimaryRow,
