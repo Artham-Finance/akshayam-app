@@ -19,9 +19,8 @@ export const viewport = {
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  // The entity name is read at render time, but a missing database should not
+  // The entity list is read at render time, but a missing database should not
   // blank the whole app - the setup page needs to stay reachable.
-  let entityName = "Management Reporting";
   let entities: { slug: string; name: string }[] = [];
   let currentSlug = "";
 
@@ -31,7 +30,6 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     try {
       const { getEntity, listEntities } = await import("@/lib/entity");
       const [entity, all] = await Promise.all([getEntity(), listEntities()]);
-      entityName = entity.name;
       currentSlug = entity.slug;
       entities = all.map((e) => ({ slug: e.slug, name: e.name }));
     } catch {
@@ -50,7 +48,6 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             the login page gets the window to itself. */}
         {user && (
           <Nav
-            entityName={entityName}
             entities={entities}
             currentSlug={currentSlug}
             user={{
