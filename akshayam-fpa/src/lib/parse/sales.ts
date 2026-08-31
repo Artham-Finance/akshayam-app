@@ -456,8 +456,10 @@ export interface CreditNoteParseResult {
  * invoice linkage is still available on every row.
  *
  * The export also repeats column names - date, bcy_total and amount_without_tax
- * appear again for the applied invoice. readWorkbook suffixes the repeats, so
- * the plain names here are the credit note's own figures.
+ * appear again for the applied invoice. readWorkbook suffixes the repeats, and
+ * the credit note's value is deliberately taken from the second occurrence
+ * (amount_without_tax_2, column Z) rather than the plain one: Z is the figure
+ * that ties to the ledger's P&L, confirmed against RBJV's own export.
  */
 export async function parseCreditNotes(
   input: Buffer | ArrayBuffer,
@@ -505,7 +507,13 @@ export async function parseCreditNotes(
       status: toText(pick(row, "status", "creditnote_status")),
       currency: toText(pick(row, ...CURRENCY_KEYS)) ?? "INR",
       exchangeRate: toNumber(pick(row, ...RATE_KEYS)) || 1,
-      amountBase: toNumber(pick(row, "amount_without_tax", "sub_total", "amount")),
+      // Column Z of the Zoho export, not O - the applied invoice's own
+      // amount_without_tax (readWorkbook suffixes the repeat as
+      // amount_without_tax_2), which is the figure that ties to the ledger's
+      // P&L rather than the credit note's own computed total.
+      amountBase: toNumber(
+        pick(row, "amount_without_tax_2", "amount_without_tax", "sub_total", "amount"),
+      ),
       totalBase: toNumber(pick(row, "bcy_total", "total", "grand_total")),
       invoiceNumber: toText(pick(row, "invoice_number", "invoice")),
       isPrimaryRow,
