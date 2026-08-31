@@ -478,7 +478,6 @@ export default async function RevenuePage({
               label="Actual"
               value={compactINR(headline.actual)}
               note="Net of credit notes · matches the P&L"
-              tone="positive"
               active={drill === "fee"}
               href={withParams("/revenue", params, { drill: drill === "fee" ? null : "fee" })}
               cumulative={
@@ -491,15 +490,6 @@ export default async function RevenuePage({
               label="% Achievement"
               value={headline.achievement === null ? "—" : percent(headline.achievement, 2)}
               note="Actual against period budget"
-              tone={
-                headline.achievement === null
-                  ? "ink"
-                  : headline.achievement >= 100
-                    ? "positive"
-                    : headline.achievement >= 85
-                      ? "ink"
-                      : "caution"
-              }
             />
             <KpiTile
               label="Professional fee"
@@ -542,7 +532,6 @@ export default async function RevenuePage({
                   ? `${percent(share(cumCnValue, cumFeeInvoiced))} of fee invoiced`
                   : "Deducted from the fee invoiced"
               }
-              tone={cumCnValue ? "negative" : "ink"}
               active={drill === "credit_notes"}
               href={withParams("/revenue", params, {
                 drill: drill === "credit_notes" ? null : "credit_notes",
