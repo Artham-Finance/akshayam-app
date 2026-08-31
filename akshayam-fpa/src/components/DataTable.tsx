@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import type { ReactNode } from "react";
-import { dateLabel, money } from "@/lib/format";
+import { dateLabel, money, moneyIn } from "@/lib/format";
 
 export interface Column {
   header: string;
@@ -16,7 +16,11 @@ export function drillColumns(
 ): Column[] {
   return columns.map((c) => ({
     header: c.header,
-    numeric: c.type === "money" || c.type === "days" || c.type === "percent",
+    numeric:
+      c.type === "money" ||
+      c.type === "money_ccy" ||
+      c.type === "days" ||
+      c.type === "percent",
     strong: c.strong,
   }));
 }
@@ -41,6 +45,17 @@ export function renderDrillRow(
     if (type === "money") {
       const n = Number(value);
       return money(n, Number.isInteger(n) || Math.abs(n) >= 1 ? 0 : 2);
+    }
+    /*
+      An amount denominated in the row's own currency. The code lives in the
+      one column typed "currency", so the figure is grouped the way that
+      currency is written - 26,154.06 dollars must not be grouped as lakhs.
+      Dollars keep their paise: a fee agreed at 600.00 is not "600".
+    */
+    if (type === "money_ccy") {
+      const at = columns.findIndex((c) => c.type === "currency");
+      const ccy = at >= 0 ? String(row[at] ?? "INR") : "INR";
+      return moneyIn(ccy, Number(value), 2);
     }
     return String(value);
   });

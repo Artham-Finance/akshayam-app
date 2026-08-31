@@ -190,6 +190,20 @@ export default async function CollectionsPage({
     }));
     const showCurrencySplit = currencyRows.length > 1;
 
+    /**
+     * A currency picked off the split above. Validated against the currencies
+     * actually present rather than taken as given - an arbitrary code in the
+     * query string would otherwise open an empty panel under a confident
+     * heading, which reads as no invoices rather than no such currency.
+     */
+    const requestedCurrency =
+      typeof params.currency === "string" ? params.currency.toUpperCase() : null;
+    const currency =
+      requestedCurrency && currencyRows.some((r) => r.currency.toUpperCase() === requestedCurrency)
+        ? requestedCurrency
+        : null;
+
+
     const budget = await buildBudgetVsActual({
       entity,
       fyStartYear: fy,
@@ -230,6 +244,7 @@ export default async function CollectionsPage({
           start,
           end,
           verticalId,
+          currency,
           limit: DRILL_LIMIT,
         })
       : null;
@@ -429,12 +444,13 @@ export default async function CollectionsPage({
               subtitle={
                 <>
                   {fyLabel(fy)}
-                  {verticalName ? ` · ${verticalName}` : ""} · amounts are the part of each
+                  {verticalName ? ` · ${verticalName}` : ""}
+                  {currency ? ` · received in ${currency}` : ""} · amounts are the part of each
                   receipt that falls in this tile. Unallocated is the receipt&rsquo;s own
                   unapplied balance — Zoho does not split it between fee and reimbursement.
                 </>
               }
-              closeHref={withParams("/collections", params, { drill: null })}
+              closeHref={withParams("/collections", params, { drill: null, currency: null })}
               downloadHref={withParams("/api/export", params, {
                 kind: "collections",
                 fy,
@@ -481,7 +497,18 @@ export default async function CollectionsPage({
               <div className="px-4 pt-4 sm:px-5">
                 <CardTitle hint={period.shortLabel}>Collected by currency</CardTitle>
               </div>
-              <CurrencySplit rows={currencyRows} countLabel="Receipts" />
+              <CurrencySplit
+                rows={currencyRows}
+                countLabel="Receipts"
+                active={currency}
+                hrefFor={(code) =>
+                  withParams("/collections", params, {
+                    currency: currency === code.toUpperCase() ? null : code,
+                    drill: currency === code.toUpperCase() ? null : "total",
+                    customer: null,
+                  })
+                }
+              />
             </Card>
           )}
 

@@ -23,6 +23,11 @@ export interface VerticalRow {
   activity: number;
 }
 
+/** A tag invented from an upload carries code === name, and "GIFT — GIFT" reads as a bug. */
+function verticalLabel(v: VerticalRow): string {
+  return v.code === v.name ? v.name : `${v.code} — ${v.name}`;
+}
+
 export function VerticalMapper({ verticals }: { verticals: VerticalRow[] }) {
   const router = useRouter();
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -37,6 +42,21 @@ export function VerticalMapper({ verticals }: { verticals: VerticalRow[] }) {
     () => verticals.filter((v) => v.needsReview).sort((a, b) => b.rows - a.rows),
     [verticals],
   );
+
+  /**
+   * A tag may be folded into any other vertical, not just a settled one.
+   *
+   * Restricting the targets to settled verticals leaves an entity that has
+   * none - every tag it has ever seen arrived from an upload, and so arrived
+   * flagged - with an empty dropdown above a permanently disabled Merge
+   * button: no way to consolidate, and nothing on screen saying why. Merging
+   * into a tag that is itself awaiting a decision is sound, because the target
+   * survives the merge and can be settled once the rest are folded into it.
+   */
+  const targetsFor = (sourceId: number) => ({
+    settled: canonical.filter((v) => v.id !== sourceId),
+    pending: review.filter((v) => v.id !== sourceId),
+  });
 
   async function send(body: unknown, id: number) {
     setBusyId(id);
@@ -118,11 +138,27 @@ export function VerticalMapper({ verticals }: { verticals: VerticalRow[] }) {
                           className="w-56 rounded-md border border-line bg-surface px-2 py-1.5 text-[12.5px] text-ink"
                         >
                           <option value="">Choose a vertical…</option>
-                          {canonical.map((target) => (
-                            <option key={target.id} value={target.id}>
-                              {target.code} — {target.name}
-                            </option>
-                          ))}
+                          {(() => {
+                            const { settled, pending } = targetsFor(v.id);
+                            return (
+                              <>
+                                {settled.map((target) => (
+                                  <option key={target.id} value={target.id}>
+                                    {verticalLabel(target)}
+                                  </option>
+                                ))}
+                                {pending.length > 0 && (
+                                  <optgroup label="Also awaiting a decision">
+                                    {pending.map((target) => (
+                                      <option key={target.id} value={target.id}>
+                                        {verticalLabel(target)}
+                                      </option>
+                                    ))}
+                                  </optgroup>
+                                )}
+                              </>
+                            );
+                          })()}
                         </select>
                         <button
                           type="button"

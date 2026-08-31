@@ -238,6 +238,20 @@ export default async function RevenuePage({
     }));
     const showCurrencySplit = currencyRows.length > 1;
 
+    /**
+     * A currency picked off the split above. Validated against the currencies
+     * actually present rather than taken as given - an arbitrary code in the
+     * query string would otherwise open an empty panel under a confident
+     * heading, which reads as no invoices rather than no such currency.
+     */
+    const requestedCurrency =
+      typeof params.currency === "string" ? params.currency.toUpperCase() : null;
+    const currency =
+      requestedCurrency && currencyRows.some((r) => r.currency.toUpperCase() === requestedCurrency)
+        ? requestedCurrency
+        : null;
+
+
     const budget = await buildBudgetVsActual({
       entity,
       fyStartYear: fy,
@@ -278,6 +292,7 @@ export default async function RevenuePage({
           start,
           end,
           verticalId,
+          currency,
           limit: DRILL_LIMIT,
         })
       : null;
@@ -527,10 +542,12 @@ export default async function RevenuePage({
               subtitle={
                 <>
                   {fyLabel(fy)}
-                  {verticalName ? ` · ${verticalName}` : ""} · amounts are ex-tax, newest first
+                  {verticalName ? ` · ${verticalName}` : ""}
+                  {currency ? ` · raised in ${currency}` : ""} · amounts are ex-tax, newest
+                  first
                 </>
               }
-              closeHref={withParams("/revenue", params, { drill: null })}
+              closeHref={withParams("/revenue", params, { drill: null, currency: null })}
               downloadHref={withParams("/api/export", params, {
                 kind: "revenue",
                 fy,
@@ -574,7 +591,20 @@ export default async function RevenuePage({
               <div className="px-4 pt-4 sm:px-5">
                 <CardTitle hint={period.shortLabel}>Invoiced by currency</CardTitle>
               </div>
-              <CurrencySplit rows={currencyRows} countLabel="Invoices" />
+              <CurrencySplit
+                rows={currencyRows}
+                countLabel="Invoices"
+                active={currency}
+                hrefFor={(code) =>
+                  withParams("/revenue", params, {
+                    // Clicking the live currency again closes the panel, the
+                    // way the tiles above already behave.
+                    currency: currency === code.toUpperCase() ? null : code,
+                    drill: currency === code.toUpperCase() ? null : "all",
+                    customer: null,
+                  })
+                }
+              />
             </Card>
           )}
 

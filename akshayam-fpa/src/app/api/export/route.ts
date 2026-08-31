@@ -37,6 +37,8 @@ export async function GET(request: Request) {
   // A customer-filtered panel must export the customer it is showing, not the
   // whole book under the same heading.
   const customer = url.searchParams.get("customer") || null;
+  // Likewise a panel opened from one currency: the download is the panel.
+  const currency = url.searchParams.get("currency") || null;
 
   try {
     const entity = await getEntity();
@@ -84,6 +86,7 @@ export async function GET(request: Request) {
       end,
       verticalId,
       customer,
+      currency,
     });
     if (!result) return NextResponse.json({ error: "Nothing to export." }, { status: 404 });
 
@@ -91,6 +94,7 @@ export async function GET(request: Request) {
     if (kind !== "receivables") context.push(fyLabel(fy));
     if (verticalId) context.push("filtered to one vertical");
     if (customer) context.push(customer);
+    if (currency) context.push(`raised in ${currency.toUpperCase()}`);
     context.push(`${result.total} row${result.total === 1 ? "" : "s"}`);
 
     const workbook = createWorkbook();
@@ -98,9 +102,15 @@ export async function GET(request: Request) {
       name: result.title,
       title: result.title,
       context,
+      /*
+        The sheet has no currency-aware money format, and does not need one:
+        the code sits in its own column beside the figure. So a currency cell
+        writes as text and an own-currency amount as an ordinary number, which
+        is what lets the recipient sort and total it.
+      */
       columns: result.columns.map((c) => ({
         header: c.header,
-        type: c.type,
+        type: c.type === "currency" ? "text" : c.type === "money_ccy" ? "money" : c.type,
         strong: c.strong,
       })),
       rows: result.rows,

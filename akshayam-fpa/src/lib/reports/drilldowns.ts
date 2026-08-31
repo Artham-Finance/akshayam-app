@@ -16,7 +16,20 @@ import { verticalScope, type Entity } from "@/lib/entity";
 
 export type DrillKind = "collections" | "receivables" | "revenue";
 
-export type CellType = "text" | "date" | "money" | "days" | "percent";
+/**
+ * `currency` is the three-letter code a document was raised in, and
+ * `money_ccy` is an amount denominated in it. The pair travels together: the
+ * renderer formats a money_ccy cell using the currency cell on its own row, so
+ * a dollar figure groups in threes beside a rupee one grouped in lakhs.
+ */
+export type CellType =
+  | "text"
+  | "date"
+  | "money"
+  | "days"
+  | "percent"
+  | "currency"
+  | "money_ccy";
 
 export interface DrillColumn {
   header: string;
@@ -44,6 +57,8 @@ export interface DrillRequest {
   verticalId: number | null;
   /** one customer's side of the page, when a customer has been picked */
   customer?: string | null;
+  /** narrow to documents raised in one currency, e.g. "USD" */
+  currency?: string | null;
   /** omit for everything - the export wants the lot, the screen does not */
   limit?: number;
 }
@@ -67,6 +82,7 @@ const TITLES: Record<DrillKind, Record<string, string>> = {
     customer: "Outstanding invoices for one customer",
   },
   revenue: {
+    all: "All invoices",
     fee: "Fee invoices",
     retainers: "Recurring retainership fee by customer",
     customer: "Invoices raised on one customer",
@@ -126,6 +142,27 @@ export function arBucketSelect(t = "", amount = "balance_base"): string {
   ).join(",\n            ");
 }
 
+/**
+ * What an open item is worth in the currency it was actually billed in.
+ *
+ * Zoho's Indian-base exports carry every amount already converted to INR, and
+ * exchange_rate is there to get *back* to the billing currency - so the
+ * original figure is balance ÷ rate. An INR invoice divides by 1 and is
+ * unchanged, which is why one expression serves both and no currency test is
+ * needed. Multiplying instead is the classic mistake and inflates a USD
+ * balance by roughly eighty times.
+ */
+export function arOriginalAmount(t = "", amount = "balance_base"): string {
+  return `(${t}${amount} / nullif(${t}exchange_rate, 0))`;
+}
+
+/** How many invoices sit in each ageing band, aliased `<key>_n`. */
+export function arBucketCounts(t = ""): string {
+  return AR_BUCKETS.map(
+    (b) => `count(*) filter (where ${b.test(t)})::int as ${b.key}_n`,
+  ).join(",\n            ");
+}
+
 export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
   const title = drillTitle(req.kind, req.drill);
   if (!title) return null;
@@ -155,27 +192,39 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
                    and ($4::int is null or a.vertical_id = $4)
                    ${verticalScope("$5", "a.vertical_id")}
                    and ($6::text is null or p.customer_name = $6)
+                   and ($7::text is null or upper(coalesce(p.currency, 'INR')) = $7)
                    and ${where[req.drill]}`;
     const args = [
       req.entity.memberIds, req.start, req.end, req.verticalId, req.entity.verticalIds,
       req.customer ?? null,
+      req.currency ? req.currency.toUpperCase() : null,
     ];
 
     const [rows, count] = await Promise.all([
       query<{
         payment_date: string; payment_number: string | null; company: string;
         customer_name: string; invoices: string | null;
+        currency: string; amount_billed: number | null;
         amount: number; unallocated: number;
       }>(
         `select p.payment_date::text, p.payment_number, e.name as company, p.customer_name,
                 string_agg(distinct a.invoice_number, ', ') as invoices,
+                upper(coalesce(p.currency, 'INR')) as currency,
+                -- A receipt split across two invoices belongs to each in
+                -- proportion, so its own-currency figure is split the same way
+                -- rather than repeated whole in both rows.
+                case when upper(coalesce(p.currency, 'INR')) = 'INR'
+                       or max(p.amount_foreign) is null
+                       or max(p.amount_base) = 0 then null
+                     else sum(a.amount_base) * max(p.amount_foreign) / max(p.amount_base)
+                end::numeric as amount_billed,
                 sum(a.amount_base)::numeric as amount,
                 max(p.unallocated_base)::numeric as unallocated
            from payment_allocations a
            join payments p on p.id = a.payment_id
            join entities e on e.id = p.entity_id
           where ${scope}
-          group by p.id, p.payment_date, p.payment_number, e.name, p.customer_name
+          group by p.id, p.payment_date, p.payment_number, e.name, p.customer_name, p.currency
           order by p.payment_date, sum(a.amount_base) desc
           ${cap}`,
         args,
@@ -196,8 +245,10 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
         ...company,
         { header: "Customer", type: "text" },
         { header: "Invoices mapped", type: "text" },
-        { header: "Amount", type: "money", strong: true },
-        { header: "Unallocated", type: "money" },
+        { header: "Received in", type: "currency" },
+        { header: "Amount received", type: "money_ccy" },
+        { header: "Amount (INR)", type: "money", strong: true },
+        { header: "Unallocated (INR)", type: "money" },
       ],
       rows: rows.map((r) => [
         r.payment_date,
@@ -205,6 +256,8 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
         ...pickCompany(r),
         r.customer_name,
         r.invoices,
+        r.currency,
+        r.amount_billed === null ? null : Number(r.amount_billed),
         Number(r.amount),
         Number(r.unallocated) || null,
       ]),
@@ -294,17 +347,27 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
                    and ($2::int is null or a.vertical_id = $2)
                    ${verticalScope("$3", "a.vertical_id")}
                    and ($4::text is null or a.customer_name = $4)
+                   and ($5::text is null or upper(coalesce(a.currency, 'INR')) = $5)
                    and ${test[req.drill]("a.")}`;
-    const args = [req.entity.memberIds, req.verticalId, req.entity.verticalIds, req.customer ?? null];
+    const args = [
+      req.entity.memberIds, req.verticalId, req.entity.verticalIds, req.customer ?? null,
+      req.currency ? req.currency.toUpperCase() : null,
+    ];
 
     const [rows, count] = await Promise.all([
       query<{
         invoice_number: string | null; invoice_date: string | null; due_date: string | null;
         company: string; customer_name: string; salesperson: string | null;
         age: number; invoice_amount: number; balance_base: number;
+        currency: string; billed_invoice: number | null; billed_balance: number | null;
       }>(
         `select a.invoice_number, a.invoice_date::text, a.due_date::text, e.name as company,
                 a.customer_name, a.salesperson, ${ageExpr("a.")}::int as age,
+                upper(coalesce(a.currency, 'INR')) as currency,
+                case when upper(coalesce(a.currency, 'INR')) = 'INR' then null
+                     else ${arOriginalAmount("a.", "invoice_amount")} end as billed_invoice,
+                case when upper(coalesce(a.currency, 'INR')) = 'INR' then null
+                     else ${arOriginalAmount("a.")} end as billed_balance,
                 a.invoice_amount, a.balance_base
            from ar_open_items a join entities e on e.id = a.entity_id
           where ${scope}
@@ -328,8 +391,11 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
         { header: "Customer", type: "text" },
         { header: "Salesperson", type: "text" },
         { header: "Age", type: "days" },
-        { header: "Invoice value", type: "money" },
-        { header: "Balance", type: "money", strong: true },
+        { header: "Raised in", type: "currency" },
+        { header: "Invoice value billed", type: "money_ccy" },
+        { header: "Balance billed", type: "money_ccy" },
+        { header: "Invoice value (INR)", type: "money" },
+        { header: "Balance (INR)", type: "money", strong: true },
       ],
       rows: rows.map((r) => [
         r.invoice_number,
@@ -339,6 +405,9 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
         r.customer_name,
         r.salesperson,
         Number(r.age),
+        r.currency,
+        r.billed_invoice === null ? null : Number(r.billed_invoice),
+        r.billed_balance === null ? null : Number(r.billed_balance),
         Number(r.invoice_amount),
         Number(r.balance_base),
       ]),
@@ -434,6 +503,9 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
   const totalCol = isCn ? "i.cn_total_base" : "i.total_base";
   const personCol = isCn ? "null::text" : "i.salesperson";
   const kindWhere: Record<string, string> = {
+    // Fee and reimbursement together - exactly what the currency card counted,
+    // so clicking a currency lands on the invoices behind that row.
+    all: "true",
     fee: "not i.is_reimbursement",
     ri: "i.is_reimbursement",
     credit_notes: "i.is_primary_row",
@@ -449,20 +521,29 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
                  and ($4::int is null or i.vertical_id = $4)
                  ${verticalScope("$6", "i.vertical_id")}
                  and ($7::text is null or i.customer_name = $7)
+                 and ($8::text is null or upper(coalesce(i.currency, 'INR')) = $8)
                  and ${statusFilter} and ${kindWhere[req.drill]}`;
   const args = [
     req.entity.memberIds, req.start, req.end, req.verticalId, EXCLUDED_STATUS,
     req.entity.verticalIds, req.customer ?? null,
+    req.currency ? req.currency.toUpperCase() : null,
   ];
 
   const [rows, count] = await Promise.all([
     query<{
       number: string | null; doc_date: string; company: string; customer_name: string;
       salesperson: string | null; status: string | null;
+      currency: string; amount_billed: number | null;
       amount_base: number; total_base: number;
     }>(
       `select ${numberCol} as number, ${dateCol}::text as doc_date, e.name as company,
               i.customer_name, ${personCol} as salesperson, i.status,
+              upper(coalesce(i.currency, 'INR')) as currency,
+              -- Zoho carries the INR conversion and leaves exchange_rate to get
+              -- back, so the billed figure is amount ÷ rate. Null on a rupee
+              -- invoice, where it would only repeat the column beside it.
+              case when upper(coalesce(i.currency, 'INR')) = 'INR' then null
+                   else ${amountCol} / nullif(i.exchange_rate, 0) end as amount_billed,
               ${amountCol} as amount_base, ${totalCol} as total_base
          from ${from}
          join entities e on e.id = i.entity_id
@@ -483,8 +564,10 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
       { header: "Customer", type: "text" },
       { header: "Salesperson", type: "text" },
       { header: "Status", type: "text" },
-      { header: "Amount", type: "money", strong: true },
-      { header: "Incl. tax", type: "money" },
+      { header: "Raised in", type: "currency" },
+      { header: "Amount billed", type: "money_ccy" },
+      { header: "Amount (INR)", type: "money", strong: true },
+      { header: "Incl. tax (INR)", type: "money" },
     ],
     rows: rows.map((r) => [
       r.number,
@@ -493,6 +576,8 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
       r.customer_name,
       r.salesperson,
       r.status,
+      r.currency,
+      r.amount_billed === null ? null : Number(r.amount_billed),
       Number(r.amount_base),
       Number(r.total_base),
     ]),
