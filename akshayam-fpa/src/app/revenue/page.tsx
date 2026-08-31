@@ -874,7 +874,10 @@ export default async function RevenuePage({
               reimbursement together, before credit notes - the same two colours as the chart -
               over full calendar months, so it can run ahead of them too. Actual, and the By
               vertical table&rsquo;s Net column, count fee only, net of credit notes, up to the
-              last completed week ({dateLabel(period.cumulative?.end ?? period.end)}).
+              last completed week ({dateLabel(period.cumulative?.end ?? period.end)}). Of the{" "}
+              {money(yearFee + yearRi)} above, {money(yearFee + yearRi - cumFeeInvoiced - cumRiValue)}{" "}
+              was invoiced after that week closed; the rest, {money(cumFeeInvoiced + cumRiValue)}, is
+              everything invoiced within the year to date, before any credit notes.
             </p>
           </Card>
 
