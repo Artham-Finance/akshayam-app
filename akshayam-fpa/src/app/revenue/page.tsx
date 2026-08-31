@@ -20,7 +20,7 @@ import { getEntity, getVerticalsInScope, verticalScope } from "@/lib/entity";
 import { compactINR, dateLabel, money, monthLabel, percent, share } from "@/lib/format";
 import { withParams } from "@/lib/href";
 import { fyBounds, fyLabel, fyMonths } from "@/lib/period";
-import { ledgerWrittenTo, resolvePeriod } from "@/lib/reporting-period";
+import { ledgerAsOfLabel, ledgerWrittenTo, resolvePeriod } from "@/lib/reporting-period";
 import { buildBudgetVsActual } from "@/lib/reports/budget";
 import { isDrill, runDrill } from "@/lib/reports/drilldowns";
 import { listCustomers } from "@/lib/reports/customer-statement";
@@ -83,9 +83,10 @@ export default async function RevenuePage({
     // The period picker drives every figure on the page except the by-month
     // trend, which stays on the full year so the shape of it remains readable.
     const fyRange = fyBounds(fy);
+    const writtenTo = await ledgerWrittenTo(entity.memberIds, fy);
     const period = resolvePeriod({
       fyStartYear: fy,
-      latest: await ledgerWrittenTo(entity.memberIds, fy),
+      latest: writtenTo,
       params,
     });
     const { start, end } = period;
@@ -424,7 +425,9 @@ export default async function RevenuePage({
       <>
         <PageHeader
           title="Revenue"
-          subtitle={`${fyLabel(fy)} · ${period.label}${verticalName ? ` · ${verticalName}` : ""} · invoiced fee revenue, net of credit notes`}
+          subtitle={`${fyLabel(fy)} · ${period.label}${verticalName ? ` · ${verticalName}` : ""}${
+            ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""
+          } · invoiced fee revenue, net of credit notes`}
           actions={
             <>
               <PeriodControls
@@ -456,7 +459,15 @@ export default async function RevenuePage({
             reimbursement is a client's own cost recharged, so reading either
             as though it were the Actual above it would overstate the week.
           */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {/*
+            Four tiles a row on a wide screen: the budget position (annual,
+            period, actual, achievement) as one line the eye takes in at once,
+            the fee/retainer/credit-note/reimbursement line below it as
+            another. Narrower screens fall back to two a row and then one -
+            the grouping is a column count, not an order, so nothing here
+            needs to move to change it.
+          */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <KpiTile label="Annual Budget" value={compactINR(headline.annual)} note={fyLabel(fy)} />
             <KpiTile
               label="Period Budget"
@@ -480,15 +491,7 @@ export default async function RevenuePage({
               label="% Achievement"
               value={headline.achievement === null ? "—" : percent(headline.achievement, 2)}
               note="Actual against period budget"
-              tone={
-                headline.achievement === null
-                  ? "ink"
-                  : headline.achievement >= 100
-                    ? "positive"
-                    : headline.achievement >= 85
-                      ? "ink"
-                      : "caution"
-              }
+              tone="caution"
             />
             <KpiTile
               label="Professional fee"
@@ -498,6 +501,7 @@ export default async function RevenuePage({
                   ? "Billed monthly — not split for a single week"
                   : `${percent(share(headline.professional, headline.actual))} of revenue`
               }
+              tone="positive"
             />
             {/*
               The customer-by-customer retainer list hangs off this tile rather
@@ -514,6 +518,7 @@ export default async function RevenuePage({
                   ? "Billed monthly — not split for a single week"
                   : `${percent(share(headline.retainership, headline.actual))} of revenue`
               }
+              tone="positive"
               active={drill === "retainers"}
               href={
                 headline.retainership === null
@@ -531,7 +536,7 @@ export default async function RevenuePage({
                   ? `${percent(share(cumCnValue, cumFeeInvoiced))} of fee invoiced`
                   : "Deducted from the fee invoiced"
               }
-              tone={cumCnValue ? "negative" : "ink"}
+              tone="positive"
               active={drill === "credit_notes"}
               href={withParams("/revenue", params, {
                 drill: drill === "credit_notes" ? null : "credit_notes",
@@ -546,6 +551,7 @@ export default async function RevenuePage({
               label="Reimbursement income"
               value={compactINR(cumRiValue)}
               note="Client costs recharged · never counted as fee"
+              tone="positive"
               active={drill === "ri"}
               href={withParams("/revenue", params, {
                 drill: drill === "ri" ? null : "ri",

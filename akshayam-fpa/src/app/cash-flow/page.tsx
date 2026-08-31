@@ -13,6 +13,7 @@ import { getAvailableFinancialYears, getEntity } from "@/lib/entity";
 import { withParams } from "@/lib/href";
 import { money } from "@/lib/format";
 import { fyLabel, fyStartYearOf } from "@/lib/period";
+import { ledgerAsOfLabel, ledgerWrittenTo } from "@/lib/reporting-period";
 import { buildCashFlow } from "@/lib/reports/statements";
 import { requireEntityAccess } from "@/lib/auth/dal";
 
@@ -40,7 +41,7 @@ export default async function CashFlowPage({
       return (
         <>
           <PageHeader title="Cash Flow" />
-          <CompanyOnly what="The cash flow" slice />
+          <CompanyOnly what="The cash flow" slice companies={entity.memberIds.length} />
         </>
       );
     }
@@ -74,14 +75,19 @@ export default async function CashFlowPage({
       ? requestedFy
       : (availableYears[0] ?? fyStartYearOf());
 
-    const statement = await buildCashFlow({ entity, fyStartYear: fy });
+    const [statement, writtenTo] = await Promise.all([
+      buildCashFlow({ entity, fyStartYear: fy }),
+      ledgerWrittenTo(entity.memberIds, fy),
+    ]);
     const lines: ClientLine[] = statement.lines.map((line) => ({ ...line }));
 
     return (
       <>
         <PageHeader
           title="Cash Flow"
-          subtitle={`${fyLabel(fy)} · indirect method · click a quarter heading to open its months`}
+          subtitle={`${fyLabel(fy)} · indirect method${
+            ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""
+          } · click a quarter heading to open its months`}
           actions={
             <>
               <PeriodControls

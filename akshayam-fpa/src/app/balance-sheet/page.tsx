@@ -17,6 +17,7 @@ import {
 import { withParams } from "@/lib/href";
 import { money } from "@/lib/format";
 import { fyBounds, fyLabel, fyStartYearOf } from "@/lib/period";
+import { ledgerAsOfLabel, ledgerWrittenTo } from "@/lib/reporting-period";
 import { buildBalanceSheet } from "@/lib/reports/statements";
 import { requireEntityAccess } from "@/lib/auth/dal";
 
@@ -36,7 +37,7 @@ export default async function BalanceSheetPage({
       return (
         <>
           <PageHeader title="Balance Sheet" />
-          <CompanyOnly what="The balance sheet" slice />
+          <CompanyOnly what="The balance sheet" slice companies={entity.memberIds.length} />
         </>
       );
     }
@@ -89,7 +90,10 @@ export default async function BalanceSheetPage({
     const openingApplies = openingRow?.applies ?? 0;
     const openingMisdated = (openingRow?.total ?? 0) - openingApplies;
 
-    const statement = await buildBalanceSheet({ entity, fyStartYear: fy });
+    const [statement, writtenTo] = await Promise.all([
+      buildBalanceSheet({ entity, fyStartYear: fy }),
+      ledgerWrittenTo(entity.memberIds, fy),
+    ]);
 
     const lines: ClientLine[] = statement.lines.map((line) => ({ ...line }));
 
@@ -108,7 +112,9 @@ export default async function BalanceSheetPage({
       <>
         <PageHeader
           title="Balance Sheet"
-          subtitle={`${fyLabel(fy)} · position at each period end · click a quarter heading to open its months`}
+          subtitle={`${fyLabel(fy)} · position at each period end${
+            ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""
+          } · click a quarter heading to open its months`}
           actions={
             <>
               <PeriodControls

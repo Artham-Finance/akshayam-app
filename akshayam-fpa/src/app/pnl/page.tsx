@@ -21,7 +21,7 @@ import {
 import { withParams } from "@/lib/href";
 import { compactINR } from "@/lib/format";
 import { fyLabel, fyMonths, fyStartYearOf, type QuarterNo } from "@/lib/period";
-import { ledgerWrittenTo } from "@/lib/reporting-period";
+import { ledgerAsOfLabel, ledgerWrittenTo } from "@/lib/reporting-period";
 import { buildApportionment, receiverKeyFor } from "@/lib/reports/apportionment";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
 import { buildProfitAndLoss } from "@/lib/reports/statements";
@@ -156,7 +156,8 @@ export default async function ProfitAndLossPage({
           subtitle={
             <>
               {fyLabel(fy)}
-              {verticalName ? ` · ${verticalName}` : " · All verticals"} · click
+              {verticalName ? ` · ${verticalName}` : " · All verticals"}
+              {ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""} · click
               a quarter heading to open its months
             </>
           }

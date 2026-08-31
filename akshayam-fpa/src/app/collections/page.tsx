@@ -20,7 +20,7 @@ import { getEntity, getVerticalsInScope, verticalScope } from "@/lib/entity";
 import { compactINR, dateLabel, money, monthLabel, percent, share } from "@/lib/format";
 import { withParams } from "@/lib/href";
 import { fyBounds, fyLabel, fyMonths } from "@/lib/period";
-import { ledgerWrittenTo, resolvePeriod } from "@/lib/reporting-period";
+import { ledgerAsOfLabel, ledgerWrittenTo, resolvePeriod } from "@/lib/reporting-period";
 import { buildBudgetVsActual } from "@/lib/reports/budget";
 import { isDrill, runDrill, UNTRACEABLE_RECEIPT } from "@/lib/reports/drilldowns";
 import { listCustomers } from "@/lib/reports/customer-statement";
@@ -78,9 +78,10 @@ export default async function CollectionsPage({
     // The period picker drives every figure on the page except the by-month
     // trend, which stays on the full year so the shape of it remains readable.
     const fyRange = fyBounds(fy);
+    const writtenTo = await ledgerWrittenTo(entity.memberIds, fy);
     const period = resolvePeriod({
       fyStartYear: fy,
-      latest: await ledgerWrittenTo(entity.memberIds, fy),
+      latest: writtenTo,
       params,
     });
     const { start, end } = period;
@@ -320,7 +321,9 @@ export default async function CollectionsPage({
       <>
         <PageHeader
           title="Collections"
-          subtitle={`${fyLabel(fy)} · ${period.label}${verticalName ? ` · ${verticalName}` : ""} · fee receipts shown separately from reimbursement recoveries`}
+          subtitle={`${fyLabel(fy)} · ${period.label}${verticalName ? ` · ${verticalName}` : ""}${
+            ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""
+          } · fee receipts shown separately from reimbursement recoveries`}
           actions={
             <>
               <PeriodControls
@@ -345,7 +348,13 @@ export default async function CollectionsPage({
             got. The three receipt tiles below are the register behind the
             Actual figure, and stay put because the drill-downs hang off them.
           */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {/*
+            All four budget-position tiles on one line on a wide screen -
+            annual, period, actual, achievement read together rather than
+            split across two rows. Narrower screens fall back to two a row
+            and then one.
+          */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <KpiTile label="Annual Budget" value={compactINR(headline.annual)} note={fyLabel(fy)} />
             <KpiTile
               label="Period Budget"
