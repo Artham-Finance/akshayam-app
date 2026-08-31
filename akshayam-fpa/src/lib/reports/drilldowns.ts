@@ -71,6 +71,10 @@ const TITLES: Record<DrillKind, Record<string, string>> = {
     ri: "Reimbursement recoveries",
     unmatched: "Receipts not traced to an invoice",
     customer: "Receipts from one customer",
+    // Same population as "total" - fee and reimbursement together - under its
+    // own name so a month bar's result can be told apart from a currency
+    // click's and placed by the chart it came from rather than at the top.
+    month: "Receipts that month",
   },
   receivables: {
     total: "Every open invoice",
@@ -90,6 +94,10 @@ const TITLES: Record<DrillKind, Record<string, string>> = {
     ri: "Reimbursement invoices",
     credit_notes: "Credit notes",
     excluded: "Void, rejected and draft invoices",
+    // Same population as "all" - fee and reimbursement together - under its
+    // own name so a month bar's result can be told apart from a currency
+    // click's and placed by the chart it came from rather than at the top.
+    month: "Invoiced that month",
   },
 };
 
@@ -188,6 +196,9 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
       // Every receipt from the picked customer; the customer clause below is
       // what narrows it.
       customer: "true",
+      // Same population as "total" - only the name differs, so the panel can
+      // be placed under the chart rather than at the top.
+      month: "true",
     };
     const scope = `a.entity_id = any($1::int[]) and p.payment_date between $2 and $3
                    and ($4::int is null or a.vertical_id = $4)
@@ -213,10 +224,13 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
                 upper(coalesce(p.currency, 'INR')) as currency,
                 -- A receipt split across two invoices belongs to each in
                 -- proportion, so its own-currency figure is split the same way
-                -- rather than repeated whole in both rows.
-                case when upper(coalesce(p.currency, 'INR')) = 'INR'
-                       or max(p.amount_foreign) is null
-                       or max(p.amount_base) = 0 then null
+                -- rather than repeated whole in both rows. A rupee receipt has
+                -- no separate billed figure to split - what it was received in
+                -- and its rupee value are the same number - so that number is
+                -- shown rather than a dash, which on a book this overwhelmingly
+                -- rupee would otherwise fill nearly the whole column.
+                case when upper(coalesce(p.currency, 'INR')) = 'INR' then sum(a.amount_base)
+                     when max(p.amount_foreign) is null or max(p.amount_base) = 0 then null
                      else sum(a.amount_base) * max(p.amount_foreign) / max(p.amount_base)
                 end::numeric as amount_billed,
                 sum(a.amount_base)::numeric as amount,
@@ -521,6 +535,9 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
     // Fee and reimbursement together: a customer statement that quietly left
     // out the recharges would not agree with what they were actually billed.
     customer: "true",
+    // Same population as "all" - only the name differs, so the panel can be
+    // placed under the chart rather than at the top.
+    month: "true",
   };
   // "Excluded" is the one tile that wants exactly what every other figure drops.
   const statusFilter =
@@ -548,9 +565,11 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
               i.customer_name, ${personCol} as salesperson, i.status,
               upper(coalesce(i.currency, 'INR')) as currency,
               -- Zoho carries the INR conversion and leaves exchange_rate to get
-              -- back, so the billed figure is amount ÷ rate. Null on a rupee
-              -- invoice, where it would only repeat the column beside it.
-              case when upper(coalesce(i.currency, 'INR')) = 'INR' then null
+              -- back, so the billed figure is amount ÷ rate. A rupee invoice
+              -- was billed in rupees, so that figure is shown rather than a
+              -- dash - on a book this overwhelmingly rupee, a blank column
+              -- would otherwise read as data that went missing.
+              case when upper(coalesce(i.currency, 'INR')) = 'INR' then ${amountCol}
                    else ${amountCol} / nullif(i.exchange_rate, 0) end as amount_billed,
               ${amountCol} as amount_base, ${totalCol} as total_base
          from ${from}

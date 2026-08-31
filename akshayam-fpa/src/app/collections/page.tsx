@@ -236,6 +236,37 @@ export default async function CollectionsPage({
         })
       : null;
 
+    // Built once and placed at one of two spots below, depending on which
+    // chart the drill came from - see where it is read.
+    const chosenPanel = chosen && (
+      <DrillPanel
+        title={chosen.title}
+        subtitle={
+          <>
+            {fyLabel(fy)}
+            {verticalName ? ` · ${verticalName}` : ""}
+            {currency ? ` · received in ${currency}` : ""} · amounts are the part of each
+            receipt that falls in this tile. Unallocated is the receipt&rsquo;s own unapplied
+            balance — Zoho does not split it between fee and reimbursement.
+          </>
+        }
+        closeHref={withParams("/collections", params, { drill: null, currency: null })}
+        downloadHref={withParams("/api/export", params, {
+          kind: "collections",
+          fy,
+          vertical: verticalId,
+        })}
+        shown={chosen.rows.length}
+        total={chosen.total}
+      >
+        <DataTable
+          columns={drillColumns(chosen.columns)}
+          rows={chosen.rows.map((r) => renderDrillRow(r, chosen.columns))}
+          emptyMessage="No receipts of this kind in the period."
+        />
+      </DrillPanel>
+    );
+
     // The same three figures for the year to date behind the chosen week or
     // month. One quiet week reads like a crisis without the run-rate beside it.
     const toDate = period.cumulative
@@ -425,34 +456,14 @@ export default async function CollectionsPage({
             </DrillPanel>
           )}
 
-          {chosen && (
-            <DrillPanel
-              title={chosen.title}
-              subtitle={
-                <>
-                  {fyLabel(fy)}
-                  {verticalName ? ` · ${verticalName}` : ""}
-                  {currency ? ` · received in ${currency}` : ""} · amounts are the part of each
-                  receipt that falls in this tile. Unallocated is the receipt&rsquo;s own
-                  unapplied balance — Zoho does not split it between fee and reimbursement.
-                </>
-              }
-              closeHref={withParams("/collections", params, { drill: null, currency: null })}
-              downloadHref={withParams("/api/export", params, {
-                kind: "collections",
-                fy,
-                vertical: verticalId,
-              })}
-              shown={chosen.rows.length}
-              total={chosen.total}
-            >
-              <DataTable
-                columns={drillColumns(chosen.columns)}
-                rows={chosen.rows.map((r) => renderDrillRow(r, chosen.columns))}
-                emptyMessage="No receipts of this kind in the period."
-              />
-            </DrillPanel>
-          )}
+          {/*
+            "month" is opened from the Collections by month chart, further
+            down the page, so its result renders there instead of here - a
+            reader who clicked a bar should find the list under the bar, not
+            have the page jump back up to where every other drill on this page
+            lands.
+          */}
+          {chosen && drill !== "month" && chosenPanel}
 
           {(unmatched?.n ?? 0) > 0 && (
             <Notice
@@ -559,12 +570,14 @@ export default async function CollectionsPage({
                 const r = Number(row?.ri ?? 0);
                 const sum = f + r;
                 /*
-                  Fee and reimbursement together - the same "total" drill the
-                  currency card already uses - since that is what the bar and
-                  the figure beside it add up to. A month with no receipts has
-                  nothing to open, so it stays a plain row.
+                  Fee and reimbursement together, the same population the
+                  currency card's "total" drill counts - just under its own
+                  name, "month", so the result lands here under the chart
+                  rather than jumping up to where a currency click's does. A
+                  month with no receipts has nothing to open, so it stays a
+                  plain row.
                 */
-                const live = period.monthKey === m.key && drill === "total";
+                const live = period.monthKey === m.key && drill === "month";
                 const content = (
                   <>
                     <span className="w-14 shrink-0 text-[11.5px] text-ink-muted">
@@ -593,7 +606,7 @@ export default async function CollectionsPage({
                     href={withParams("/collections", params, {
                       month: live ? null : m.key,
                       week: null,
-                      drill: live ? null : "total",
+                      drill: live ? null : "month",
                       customer: null,
                     })}
                     scroll={false}
@@ -620,6 +633,8 @@ export default async function CollectionsPage({
               </span>
             </p>
           </Card>
+
+          {chosen && drill === "month" && chosenPanel}
 
         </div>
       </>
