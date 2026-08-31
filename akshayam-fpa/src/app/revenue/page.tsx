@@ -416,10 +416,15 @@ export default async function RevenuePage({
           {/*
             The headline is the budget position, not the invoice register: what
             was targeted for the period, what the ledger actually earned, and
-            the gap. Gross invoiced and the credit-note deduction are still
-            reachable - they hang off the Actual tile and the note below - but
-            they are workings, and workings do not belong in the six numbers a
-            partner reads first.
+            the gap. Gross invoiced stays a working - it hangs off the Actual
+            tile and the note below - but credit notes raised and reimbursement
+            income are read every week and are asked for on the face of the
+            page, so they close the block rather than hiding in prose.
+
+            Both sit below the budget position deliberately. Neither is fee
+            performance: a credit note is revenue given back, and a
+            reimbursement is a client's own cost recharged, so reading either
+            as though it were the Actual above it would overstate the week.
           */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <KpiTile label="Annual Budget" value={compactINR(headline.annual)} note={fyLabel(fy)} />
@@ -486,6 +491,39 @@ export default async function RevenuePage({
                   : withParams("/revenue", params, {
                       drill: drill === "retainers" ? null : "retainers",
                     })
+              }
+            />
+            <KpiTile
+              label="Credit notes raised"
+              value={compactINR(cumCnValue)}
+              note={
+                cumFeeInvoiced
+                  ? `${percent(share(cumCnValue, cumFeeInvoiced))} of fee invoiced`
+                  : "Deducted from the fee invoiced"
+              }
+              tone={cumCnValue ? "negative" : "ink"}
+              active={drill === "credit_notes"}
+              href={withParams("/revenue", params, {
+                drill: drill === "credit_notes" ? null : "credit_notes",
+              })}
+              cumulative={
+                period.cumulative
+                  ? { label: period.shortLabel, value: compactINR(cn) }
+                  : undefined
+              }
+            />
+            <KpiTile
+              label="Reimbursement income"
+              value={compactINR(cumRiValue)}
+              note="Client costs recharged · never counted as fee"
+              active={drill === "ri"}
+              href={withParams("/revenue", params, {
+                drill: drill === "ri" ? null : "ri",
+              })}
+              cumulative={
+                period.cumulative
+                  ? { label: period.shortLabel, value: compactINR(ri) }
+                  : undefined
               }
             />
           </div>
