@@ -1,4 +1,5 @@
 import { queryOne } from "@/lib/db";
+import { dateLabel } from "@/lib/format";
 import {
   fyBounds,
   fyMonths,
@@ -46,6 +47,18 @@ export async function ledgerWrittenTo(
     [entityIds, start, end],
   );
   return row?.d ?? null;
+}
+
+/**
+ * What every ledger-driven report should say about how current it is - one
+ * phrase, so a partner reading the P&L one tab and Cash Flow the next never
+ * has to wonder whether the two are speaking as of different days.
+ *
+ * Null before anything has posted this year, which the pages that call this
+ * already treat as "nothing to report" long before the subtitle is built.
+ */
+export function ledgerAsOfLabel(writtenTo: string | null): string | null {
+  return writtenTo ? `ledger posted through ${dateLabel(writtenTo)}` : null;
 }
 
 /** A date range plus the share of the annual budget it earns. */

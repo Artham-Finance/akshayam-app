@@ -10,7 +10,7 @@ import {
 } from "@/lib/entity";
 import { compactINR, dateLabel, percent, share } from "@/lib/format";
 import { fyLabel } from "@/lib/period";
-import { ledgerWrittenTo, resolvePeriod } from "@/lib/reporting-period";
+import { ledgerAsOfLabel, ledgerWrittenTo, resolvePeriod } from "@/lib/reporting-period";
 import { buildBudgetVsActual } from "@/lib/reports/budget";
 import { buildProfitAndLoss } from "@/lib/reports/statements";
 import { requireEntityAccess } from "@/lib/auth/dal";
@@ -47,9 +47,10 @@ export default async function OverviewPage() {
     // The same year-to-date the reporting pages use - to the last completed
     // week, not the last day of the year. An overview that disagreed with the
     // page it links to would be the first thing anyone noticed.
+    const writtenTo = await ledgerWrittenTo(entity.memberIds, fy);
     const period = resolvePeriod({
       fyStartYear: fy,
-      latest: await ledgerWrittenTo(entity.memberIds, fy),
+      latest: writtenTo,
       params: {},
     });
     const { start, end } = period;
@@ -271,7 +272,9 @@ export default async function OverviewPage() {
       <>
         <PageHeader
           title="Overview"
-          subtitle={`${entity.name} · ${fyLabel(fy)}`}
+          subtitle={`${entity.name} · ${fyLabel(fy)}${
+            ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""
+          }`}
         />
 
         <div className="space-y-4">

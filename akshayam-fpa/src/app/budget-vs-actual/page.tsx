@@ -19,7 +19,7 @@ import {
 } from "@/lib/entity";
 import { withParams } from "@/lib/href";
 import { fyLabel, fyMonths, type QuarterNo } from "@/lib/period";
-import { ledgerWrittenTo } from "@/lib/reporting-period";
+import { ledgerAsOfLabel, ledgerWrittenTo } from "@/lib/reporting-period";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
 import { buildExpenseDetail } from "@/lib/reports/expense-detail";
 import { requireEntityAccess } from "@/lib/auth/dal";
@@ -144,7 +144,9 @@ export default async function BudgetVsActualPage({
       <>
         <PageHeader
           title="Budget vs Actual"
-          subtitle={`${entity.name} · ${fyLabel(fy)} · ${periodLabel}`}
+          subtitle={`${entity.name} · ${fyLabel(fy)} · ${periodLabel}${
+            ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""
+          }`}
           actions={
             <>
               <BvaControls
