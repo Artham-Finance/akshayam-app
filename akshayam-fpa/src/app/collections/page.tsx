@@ -110,7 +110,7 @@ export default async function CollectionsPage({
     const customer =
       pickedCustomer && customers.includes(pickedCustomer) ? pickedCustomer : null;
 
-    const [totals, byMonth, byVertical, unmatched, byCurrency] = await Promise.all([
+    const [totals, byMonth, unmatched, byCurrency] = await Promise.all([
       queryOne<{ fee: number; ri: number; n: number }>(
         `select coalesce(sum(case when a.is_reimbursement then 0 else a.amount_base end),0)::numeric fee,
                 coalesce(sum(case when a.is_reimbursement then a.amount_base else 0 end),0)::numeric ri,
@@ -131,20 +131,6 @@ export default async function CollectionsPage({
             ${verticalScope("$5", "a.vertical_id")}
           group by 1`,
         [entity.memberIds, fyRange.start, fyRange.end, verticalId, entity.verticalIds],
-      ),
-      query<{ code: string | null; name: string | null; fee: number; ri: number }>(
-        `select v.code, v.name,
-                sum(case when a.is_reimbursement then 0 else a.amount_base end)::numeric fee,
-                sum(case when a.is_reimbursement then a.amount_base else 0 end)::numeric ri
-           from payment_allocations a
-           join payments p on p.id = a.payment_id
-           left join verticals v on v.id = a.vertical_id
-          where a.entity_id = any($1::int[]) and p.payment_date between $2 and $3
-            and ($4::int is null or a.vertical_id = $4)
-            ${verticalScope("$5", "a.vertical_id")}
-          group by v.code, v.name
-          order by sum(a.amount_base) desc`,
-        [entity.memberIds, start, end, verticalId, entity.verticalIds],
       ),
       // Exactly the population the "unmatched" drill lists, so the count in the
       // notice and the rows in the table below it can never disagree.
@@ -633,43 +619,6 @@ export default async function CollectionsPage({
                 <span className="h-2 w-3 rounded-sm bg-caution/70" /> Reimbursement
               </span>
             </p>
-          </Card>
-
-          <Card padded={false}>
-            <div className="p-4 sm:p-5">
-              <CardTitle hint="click a vertical for its receipts">By vertical</CardTitle>
-            </div>
-            <DataTable
-              columns={[
-                { header: "Vertical" },
-                { header: "Fee", numeric: true },
-                { header: "Reimbursement", numeric: true },
-                { header: "Total", numeric: true, strong: true },
-              ]}
-              rows={byVertical.map((r) => {
-                const id = r.code ? idByCode.get(r.code as string) : null;
-                return [
-                  id ? (
-                    <Link
-                      key="v"
-                      href={withParams("/collections", params, {
-                        vertical: String(id),
-                        drill: "fee",
-                        customer: null,
-                      })}
-                      className="font-medium text-navy hover:underline"
-                    >
-                      {r.code as string}
-                    </Link>
-                  ) : (
-                    ((r.code as string) ?? "Unmatched")
-                  ),
-                  money(Number(r.fee)),
-                  Number(r.ri) ? money(Number(r.ri)) : "—",
-                  money(Number(r.fee) + Number(r.ri)),
-                ];
-              })}
-            />
           </Card>
 
         </div>
