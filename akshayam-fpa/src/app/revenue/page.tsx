@@ -309,6 +309,35 @@ export default async function RevenuePage({
         })
       : null;
 
+    // Built once and placed at one of two spots below, depending on which
+    // chart the drill came from - see where it is read.
+    const chosenPanel = chosen && (
+      <DrillPanel
+        title={chosen.title}
+        subtitle={
+          <>
+            {fyLabel(fy)}
+            {verticalName ? ` · ${verticalName}` : ""}
+            {currency ? ` · raised in ${currency}` : ""} · amounts are ex-tax, newest first
+          </>
+        }
+        closeHref={withParams("/revenue", params, { drill: null, currency: null })}
+        downloadHref={withParams("/api/export", params, {
+          kind: "revenue",
+          fy,
+          vertical: verticalId,
+        })}
+        shown={chosen.rows.length}
+        total={chosen.total}
+      >
+        <DataTable
+          columns={drillColumns(chosen.columns)}
+          rows={chosen.rows.map((r) => renderDrillRow(r, chosen.columns))}
+          emptyMessage="No documents of this kind in the period."
+        />
+      </DrillPanel>
+    );
+
     // The same figures for the year to date behind the chosen week or month.
     // One quiet week reads like a crisis without the run-rate beside it.
     const toDate = period.cumulative
@@ -586,34 +615,13 @@ export default async function RevenuePage({
             </DrillPanel>
           )}
 
-          {chosen && (
-            <DrillPanel
-              title={chosen.title}
-              subtitle={
-                <>
-                  {fyLabel(fy)}
-                  {verticalName ? ` · ${verticalName}` : ""}
-                  {currency ? ` · raised in ${currency}` : ""} · amounts are ex-tax, newest
-                  first
-                </>
-              }
-              closeHref={withParams("/revenue", params, { drill: null, currency: null })}
-              downloadHref={withParams("/api/export", params, {
-                kind: "revenue",
-                fy,
-                vertical: verticalId,
-              })}
-              shown={chosen.rows.length}
-              total={chosen.total}
-            >
-              <DataTable
-                columns={drillColumns(chosen.columns)}
-                rows={chosen.rows.map((r) => renderDrillRow(r, chosen.columns))}
-                emptyMessage="No documents of this kind in the period."
-              />
-            </DrillPanel>
-          )}
-
+          {/*
+            "month" is opened from the Invoiced by month chart, further down
+            the page, so its result renders there instead of here - a reader
+            who clicked a bar should find the list under the bar, not have the
+            page jump back up to where every other drill on this page lands.
+          */}
+          {chosen && drill !== "month" && chosenPanel}
 
           {(excluded?.n ?? 0) > 0 && (
             <Notice
@@ -709,13 +717,14 @@ export default async function RevenuePage({
                 const r = Number(row?.ri ?? 0);
                 const credit = cnMap.get(m.key) ?? 0;
                 /*
-                  Fee and reimbursement together - the same "all" drill the
-                  currency card already uses - since that is what the total
-                  column beside the bar adds up to. A month billing nothing has
-                  no invoices to open, so it stays a plain row rather than a
-                  link to an empty list.
+                  Fee and reimbursement together, the same population the
+                  currency card's "all" drill counts - just under its own name,
+                  "month", so the result lands here under the chart rather than
+                  jumping up to where a currency click's does. A month billing
+                  nothing has no invoices to open, so it stays a plain row
+                  rather than a link to an empty list.
                 */
-                const live = period.monthKey === m.key && drill === "all";
+                const live = period.monthKey === m.key && drill === "month";
                 const content = (
                   <>
                     <span className="w-14 shrink-0 text-[11.5px] text-ink-muted">
@@ -742,7 +751,7 @@ export default async function RevenuePage({
                     href={withParams("/revenue", params, {
                       month: live ? null : m.key,
                       week: null,
-                      drill: live ? null : "all",
+                      drill: live ? null : "month",
                       customer: null,
                     })}
                     scroll={false}
@@ -770,6 +779,8 @@ export default async function RevenuePage({
               <span className="text-negative">( ) credit notes raised that month</span>
             </p>
           </Card>
+
+          {chosen && drill === "month" && chosenPanel}
 
           <Card padded={false}>
             <div className="p-4 sm:p-5">
