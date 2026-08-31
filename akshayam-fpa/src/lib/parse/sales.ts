@@ -115,6 +115,25 @@ export interface ParsedInvoiceRow {
   status: string | null;
 }
 
+/**
+ * A real client billing raised outside Zoho's normal invoice flow - work the
+ * firm still wants counted as revenue of the vertical that did it. Kept on
+ * its own "OSB" sheet in the same workbook rather than mixed into the main
+ * table, since it carries no Zoho invoice behind it: no separate invoice
+ * date (due_date doubles for both), no item detail, no tax split.
+ */
+export interface ParsedOsbRow {
+  invoiceNumber: string;
+  /** The sheet's own due_date column - there is no separate invoice date. */
+  invoiceDate: string;
+  customerName: string;
+  vertical: string | null;
+  salesperson: string | null;
+  amountBase: number;
+  /** "paid" -> a collection; anything else -> still open, a receivable. */
+  status: string | null;
+}
+
 export interface InvoiceParseResult {
   rows: ParsedInvoiceRow[];
   verticals: Set<string>;
@@ -122,6 +141,103 @@ export interface InvoiceParseResult {
   periodEnd: string | null;
   warnings: string[];
   detected: { sheetName: string; headerRow: number; columns: string[] };
+  /**
+   * Outside-books rows from an "OSB" sheet in the same workbook.
+   * Null when the workbook carries no such sheet at all - most invoice
+   * exports never will - so the commit step knows to leave whatever
+   * outside-books data already exists untouched rather than clearing it.
+   * An empty array means the sheet exists but is (now) empty on purpose.
+   */
+  osbRows: ParsedOsbRow[] | null;
+}
+
+const OSB_SHEET_NAME = /^osb$/i;
+
+/**
+ * The workbook's "OSB" sheet, if it has one.
+ *
+ * A separate lookup from the main table's `locate`: this sheet has no
+ * invoice_date column (only due_date), so it would never satisfy the main
+ * table's own required columns, and is found by name rather than by shape
+ * since the "OSB" tab is a fixed convention, not a report format to detect.
+ */
+async function parseOsbSheet(workbook: ExcelJS.Workbook): Promise<{
+  rows: ParsedOsbRow[];
+  verticals: Set<string>;
+  warnings: string[];
+} | null> {
+  let sheet: ExcelJS.Worksheet | undefined;
+  workbook.eachSheet((s) => {
+    if (!sheet && OSB_SHEET_NAME.test(s.name)) sheet = s;
+  });
+  if (!sheet) return null;
+
+  const table = findTable(sheet, [
+    ["due_date"],
+    CUSTOMER_KEYS,
+    INVOICE_NO_KEYS,
+    ["status"],
+    SALESPERSON_KEYS,
+  ]);
+  if (!table) {
+    return {
+      rows: [],
+      verticals: new Set(),
+      warnings: [
+        "An \"OSB\" sheet was found but its columns didn't match what outside-books " +
+          "invoices need (due date, customer, invoice number, status, salesperson) - " +
+          "outside-books revenue was left as it was.",
+      ],
+    };
+  }
+
+  const rows: ParsedOsbRow[] = [];
+  const verticals = new Set<string>();
+  const warnings: string[] = [];
+  let skipped = 0;
+
+  for (const row of table.rows) {
+    if (isRepeatedRow(row)) continue;
+    const invoiceDate = toDateISO(pick(row, "due_date"));
+    const customerName = toText(pick(row, ...CUSTOMER_KEYS));
+    const invoiceNumber = toText(pick(row, ...INVOICE_NO_KEYS));
+    const amountBase = toNumber(pick(row, "amount_without_tax", "sub_total", "amount"));
+
+    if (!invoiceDate || !customerName || !invoiceNumber || !amountBase) {
+      skipped++;
+      continue;
+    }
+
+    const salesperson = toText(pick(row, ...SALESPERSON_KEYS));
+    const vertical = verticalFromSalesperson(salesperson);
+    if (vertical) verticals.add(vertical);
+
+    rows.push({
+      invoiceNumber,
+      invoiceDate,
+      customerName,
+      vertical,
+      salesperson,
+      amountBase,
+      status: toText(pick(row, "status")),
+    });
+  }
+
+  if (skipped > 0) {
+    warnings.push(
+      `${skipped} row(s) on the "OSB" sheet were missing a due date, customer, invoice ` +
+        "number or amount and were skipped.",
+    );
+  }
+  const noVertical = rows.filter((r) => !r.vertical).length;
+  if (noVertical > 0) {
+    warnings.push(
+      `${noVertical} outside-books row(s) have a salesperson with no "Name - Vertical" ` +
+        "pattern, so they carry no vertical and will not be attributed to one.",
+    );
+  }
+
+  return { rows, verticals, warnings };
 }
 
 export async function parseInvoices(input: Buffer | ArrayBuffer): Promise<InvoiceParseResult> {
@@ -182,6 +298,16 @@ export async function parseInvoices(input: Buffer | ArrayBuffer): Promise<Invoic
     warnings.push("No reporting tag column found, so revenue cannot be split by vertical from this file.");
   }
 
+  // The same workbook's "OSB" sheet, when it has one - a second read rather
+  // than threading the first one through `locate`, which only ever hands
+  // back the table it found, not the workbook it read it from.
+  const osb = await parseOsbSheet(await readWorkbook(input));
+  const osbRows = osb ? osb.rows : null;
+  if (osb) {
+    for (const v of osb.verticals) verticals.add(v);
+    warnings.push(...osb.warnings);
+  }
+
   const dates = rows.map((r) => r.invoiceDate).sort();
   return {
     rows,
@@ -190,6 +316,7 @@ export async function parseInvoices(input: Buffer | ArrayBuffer): Promise<Invoic
     periodEnd: dates[dates.length - 1] ?? null,
     warnings,
     detected: { sheetName: table.sheetName, headerRow: table.headerRow, columns: table.rawHeaders.filter(Boolean) },
+    osbRows,
   };
 }
 
