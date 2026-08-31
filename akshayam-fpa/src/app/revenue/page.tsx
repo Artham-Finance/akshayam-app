@@ -870,9 +870,11 @@ export default async function RevenuePage({
               <span className="text-negative">( ) credit notes raised that month</span>
             </p>
             <p className="mt-2 text-[11.5px] text-ink-muted">
-              This total is full calendar months, so it can run ahead of the tiles above: those
-              stop at the last completed week ({dateLabel(period.cumulative?.end ?? period.end)}),
-              while a month still open here counts everything invoiced to it so far.
+              This total won&rsquo;t match a tile elsewhere on the page, on purpose: it is fee and
+              reimbursement together, before credit notes - the same two colours as the chart -
+              over full calendar months, so it can run ahead of them too. Actual, and the By
+              vertical table&rsquo;s Net column, count fee only, net of credit notes, up to the
+              last completed week ({dateLabel(period.cumulative?.end ?? period.end)}).
             </p>
           </Card>
 
