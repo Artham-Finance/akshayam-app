@@ -141,7 +141,7 @@ export default async function ReceivablesPage({
       scope,
     );
 
-    const [totals, byVertical, topTen, unmatched, terms, byCurrency] = await Promise.all([
+    const [totals, byVertical, topTen, unmatched, byCurrency] = await Promise.all([
       queryOne<Record<string, number>>(
         `select ${bucketSelect},
                 coalesce(sum(balance_base),0)::numeric total, count(*)::int n
@@ -181,14 +181,6 @@ export default async function ReceivablesPage({
         `select count(*)::int n, coalesce(sum(balance_base),0)::numeric v
            from ar_open_items where ${LATEST_SNAPSHOT} and vertical_id is null
              and $2::int is null
-             ${verticalScope("$3")}`,
-        [entity.memberIds, verticalId, entity.verticalIds],
-      ),
-      queryOne<{ with_terms: number; total: number }>(
-        `select count(*) filter (where due_date > invoice_date)::int with_terms,
-                count(*)::int total
-           from ar_open_items where ${LATEST_SNAPSHOT}
-             and ($2::int is null or vertical_id = $2)
              ${verticalScope("$3")}`,
         [entity.memberIds, verticalId, entity.verticalIds],
       ),
@@ -482,17 +474,6 @@ export default async function ReceivablesPage({
                 emptyMessage="No open invoices in this bucket."
               />
             </DrillPanel>
-          )}
-
-          {(terms?.with_terms ?? 0) === 0 && (terms?.total ?? 0) > 0 && (
-            <Notice tone="info" title="Invoices are billed due on receipt">
-              Every open invoice carries a due date equal to its invoice date, so no credit
-              period is recorded in Zoho. &ldquo;Overdue&rdquo; below therefore means
-              <span className="font-medium"> unpaid since it was raised</span>, not past an
-              agreed payment term &mdash; which is why almost nothing sits in
-              &ldquo;not yet due&rdquo;. If the firm does allow a credit period, setting the
-              payment terms in Zoho will make this ageing reflect it.
-            </Notice>
           )}
 
           {(unmatched?.n ?? 0) > 0 && (
