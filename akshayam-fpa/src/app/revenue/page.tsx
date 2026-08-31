@@ -478,6 +478,7 @@ export default async function RevenuePage({
               label="Actual"
               value={compactINR(headline.actual)}
               note="Net of credit notes · matches the P&L"
+              tone="positive"
               active={drill === "fee"}
               href={withParams("/revenue", params, { drill: drill === "fee" ? null : "fee" })}
               cumulative={
@@ -490,6 +491,7 @@ export default async function RevenuePage({
               label="% Achievement"
               value={headline.achievement === null ? "—" : percent(headline.achievement, 2)}
               note="Actual against period budget"
+              tone="caution"
             />
             <KpiTile
               label="Professional fee"
@@ -499,6 +501,7 @@ export default async function RevenuePage({
                   ? "Billed monthly — not split for a single week"
                   : `${percent(share(headline.professional, headline.actual))} of revenue`
               }
+              tone="positive"
             />
             {/*
               The customer-by-customer retainer list hangs off this tile rather
@@ -515,6 +518,7 @@ export default async function RevenuePage({
                   ? "Billed monthly — not split for a single week"
                   : `${percent(share(headline.retainership, headline.actual))} of revenue`
               }
+              tone="positive"
               active={drill === "retainers"}
               href={
                 headline.retainership === null
@@ -532,6 +536,7 @@ export default async function RevenuePage({
                   ? `${percent(share(cumCnValue, cumFeeInvoiced))} of fee invoiced`
                   : "Deducted from the fee invoiced"
               }
+              tone="positive"
               active={drill === "credit_notes"}
               href={withParams("/revenue", params, {
                 drill: drill === "credit_notes" ? null : "credit_notes",
@@ -546,6 +551,7 @@ export default async function RevenuePage({
               label="Reimbursement income"
               value={compactINR(cumRiValue)}
               note="Client costs recharged · never counted as fee"
+              tone="positive"
               active={drill === "ri"}
               href={withParams("/revenue", params, {
                 drill: drill === "ri" ? null : "ri",
