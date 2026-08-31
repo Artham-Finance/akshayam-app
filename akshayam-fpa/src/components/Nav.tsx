@@ -58,12 +58,19 @@ export function Nav({
           fighting the nav buttons for width. */}
       <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:px-6">
         <div className="flex min-w-0 flex-1 items-center gap-2.5 sm:flex-none">
+          {/*
+            The source file is trimmed to the mark itself - the original
+            export carried a wide white margin, which at header size shrank
+            the wings-and-A to a speck. Sized by height with width left to
+            follow the image's own (wide) aspect ratio, rather than forced
+            into a square that would squash it.
+          */}
           <Image
             src="/logo.jpeg"
             alt="Akshayam"
-            width={200}
-            height={200}
-            className="h-9 w-9 shrink-0 rounded-sm object-contain"
+            width={134}
+            height={76}
+            className="h-11 w-auto shrink-0 object-contain"
             priority
           />
           <div className="min-w-0">
