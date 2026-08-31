@@ -233,21 +233,47 @@ export default async function RevenuePage({
         /**
          * Invoiced by the currency it was billed in.
          *
+         * Fee only - professional plus retainership, the same two tiles this
+         * feeds - and net of credit notes, so this card foots to the Actual
+         * tile above it exactly. Reimbursement is a recharge of a client-paid
+         * cost, never fee income, and a credit note here is set off against
+         * the fee it was raised against; both are excluded the same way the
+         * Actual figure already excludes them.
+         *
          * Zoho's export converts every amount to INR and leaves exchange_rate
          * to get back, so the billed figure is amount ÷ rate. Multiplying is
          * the classic mistake and inflates a dollar invoice ninety-fold.
          */
         query<{ currency: string; n: number; inr: number; foreign: number }>(
-          `select coalesce(currency, 'INR') as currency,
-                  count(*)::int as n,
-                  sum(amount_base)::numeric as inr,
-                  sum(amount_base / nullif(exchange_rate, 0))::numeric as foreign
-             from invoice_lines
-            where entity_id=any($1::int[]) and invoice_date between $2 and $3
-              and ($4::int is null or vertical_id=$4) and not (status = any($5))
-              ${verticalScope("$6")}
-            group by 1
-            order by sum(amount_base) desc`,
+          `with fee as (
+             select coalesce(currency, 'INR') as currency,
+                    count(*)::int as n,
+                    sum(amount_base)::numeric as inr,
+                    sum(amount_base / nullif(exchange_rate, 0))::numeric as foreign
+               from invoice_lines
+              where entity_id=any($1::int[]) and invoice_date between $2 and $3
+                and not is_reimbursement
+                and ($4::int is null or vertical_id=$4) and not (status = any($5))
+                ${verticalScope("$6")}
+              group by 1
+           ),
+           cn as (
+             select coalesce(currency, 'INR') as currency,
+                    sum(cn_amount_base)::numeric as inr,
+                    sum(cn_amount_base / nullif(exchange_rate, 0))::numeric as foreign
+               from credit_notes
+              where entity_id=any($1::int[]) and credit_note_date between $2 and $3
+                and is_primary_row and not is_reimbursement
+                and ($4::int is null or vertical_id=$4) and not (status = any($5))
+                ${verticalScope("$6")}
+              group by 1
+           )
+           select coalesce(fee.currency, cn.currency) as currency,
+                  coalesce(fee.n, 0) as n,
+                  coalesce(fee.inr, 0) - coalesce(cn.inr, 0) as inr,
+                  coalesce(fee.foreign, 0) - coalesce(cn.foreign, 0) as foreign
+             from fee full outer join cn on cn.currency = fee.currency
+            order by 3 desc`,
           args,
         ),
       ]);
