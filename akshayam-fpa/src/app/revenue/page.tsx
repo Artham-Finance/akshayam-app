@@ -94,6 +94,17 @@ export default async function RevenuePage({
     const verticalName = verticals.find((v) => v.id === verticalId)?.name ?? null;
 
     /**
+     * The budget table names verticals by code, and a link needs the id. Codes
+     * that appear more than once - the same code in both companies, seen only
+     * in the consolidated view - are left unlinked rather than sent to whichever
+     * of them happened to be first.
+     */
+    const idByCode = new Map<string, number | null>();
+    for (const v of verticals) {
+      idByCode.set(v.code, idByCode.has(v.code) ? null : v.id);
+    }
+
+    /**
      * One customer's invoices, from the start of the year up to the end of the
      * chosen period. Deliberately not the period alone: the question a partner
      * asks of a client is what they have been billed this year, and a single
@@ -623,6 +634,16 @@ export default async function RevenuePage({
               periodLabel={period.shortLabel}
               periodBasis={period.basis}
               cumulativeBasis={period.cumulative?.basis ?? null}
+              hrefFor={(row) => {
+                const id = row.code ? idByCode.get(row.code) : null;
+                return id
+                  ? withParams("/revenue", params, {
+                      vertical: String(id),
+                      drill: "fee",
+                      customer: null,
+                    })
+                  : null;
+              }}
             />
             <p className="px-4 pb-4 text-[11.5px] text-ink-muted sm:px-5">
               Actual is the ledger&rsquo;s Revenue from Operations, so it is net of credit
