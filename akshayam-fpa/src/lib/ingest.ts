@@ -657,6 +657,15 @@ export async function linkByInvoice(client: PoolClient, entityId: number): Promi
     [entityId, REIMBURSEMENT_PREFIX],
   );
 
+  // A credit note carries the invoice it was raised against, not its own RICN-
+  // number - the same fact invoice_lines and payments are flagged from above.
+  await client.query(
+    `update credit_notes set is_reimbursement = (invoice_number like $2)
+      where entity_id = $1 and invoice_number is not null
+        and is_reimbursement <> (invoice_number like $2)`,
+    [entityId, REIMBURSEMENT_PREFIX],
+  );
+
   // Take the vertical from the invoice the payment settles. Only meaningful
   // for single-invoice receipts; multi-invoice ones are handled by the
   // allocation table below, which is what the reports read.
