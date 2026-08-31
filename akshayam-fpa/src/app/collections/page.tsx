@@ -528,6 +528,20 @@ export default async function CollectionsPage({
               periodBasis={period.basis}
               cumulativeBasis={period.cumulative?.basis ?? null}
               hrefFor={(row) => {
+                /*
+                  The unattributed row has no vertical to filter by, so it opens
+                  the receipts themselves. Deliberately the same drill the
+                  notice below already offers: they are one population - a
+                  receipt with no vertical is a receipt nothing traced to an
+                  invoice - and two links to the same figure that opened
+                  different lists would be worse than one.
+                */
+                if (row.unattributed)
+                  return withParams("/collections", params, {
+                    vertical: null,
+                    drill: "unmatched",
+                    customer: null,
+                  });
                 const id = row.code ? idByCode.get(row.code) : null;
                 return id
                   ? withParams("/collections", params, {

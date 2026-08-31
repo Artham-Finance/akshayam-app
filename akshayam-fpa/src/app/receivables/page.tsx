@@ -496,7 +496,23 @@ export default async function ReceivablesPage({
           )}
 
           {(unmatched?.n ?? 0) > 0 && (
-            <Notice tone="info" title={`${compactINR(Number(unmatched?.v ?? 0))} without a vertical`}>
+            <Notice
+              tone="info"
+              title={`${compactINR(Number(unmatched?.v ?? 0))} without a vertical`}
+              action={
+                <Link
+                  href={withParams("/receivables", params, {
+                    vertical: null,
+                    drill: drill === "unattributed" ? null : "unattributed",
+                    customer: null,
+                  })}
+                  scroll={false}
+                  className="whitespace-nowrap rounded-md border border-navy/25 px-2.5 py-1.5 text-[12px] font-medium hover:bg-navy/5"
+                >
+                  {drill === "unattributed" ? "Close" : "Show them"}
+                </Link>
+              }
+            >
               {unmatched?.n} open item(s) have no salesperson on the AR report, so they cannot be
               attributed to a vertical. They are included in the totals above.
             </Notice>
@@ -622,9 +638,10 @@ export default async function ReceivablesPage({
                 /*
                   The vertical is the way into its invoices: filtering the page
                   to it and opening the list in one click, which is also what
-                  points the Excel download at the same rows. Unallocated has
-                  no vertical to filter by, so it stays plain text - the notice
-                  above already says what it is.
+                  points the Excel download at the same rows. Unallocated has no
+                  vertical to filter by, so it opens the items themselves - the
+                  question it provokes is which invoices they are, and the
+                  notice above could only say how many.
                 */
                 r.id ? (
                   <Link
@@ -639,7 +656,17 @@ export default async function ReceivablesPage({
                     {(r.code as string) ?? (r.name as string)}
                   </Link>
                 ) : (
-                  "Unallocated"
+                  <Link
+                    key="v"
+                    href={withParams("/receivables", params, {
+                      vertical: null,
+                      drill: "unattributed",
+                      customer: null,
+                    })}
+                    className="font-medium text-navy hover:underline"
+                  >
+                    Unallocated
+                  </Link>
                 ),
                 money(Number(r.total)),
                 ...AR_BUCKETS.map((b) => (Number(r[b.key]) ? money(Number(r[b.key])) : "—")),

@@ -19,6 +19,9 @@ import { verticalScope, type Entity } from "@/lib/entity";
 
 export type Measure = "revenue" | "collection";
 
+/** Draft key for activity carrying no vertical at all. */
+const UNASSIGNED = "unassigned";
+
 /** One window's worth of figures: what was budgeted, what happened, the gap. */
 export interface BudgetCells {
   periodBudget: number;
@@ -39,6 +42,13 @@ export interface BudgetCells {
 export interface BudgetRow {
   code: string | null;
   name: string;
+  /**
+   * True for the one row holding activity that carries no vertical at all.
+   * Not the same as a null code: a budget line whose vertical has since been
+   * deleted also has none, and that is a gap in the reference data rather than
+   * a document nobody tagged.
+   */
+  unattributed: boolean;
   annual: number;
   /** the chosen week, month or year to date */
   period: BudgetCells;
@@ -242,11 +252,12 @@ export async function buildBudgetVsActual(opts: {
    */
   const codeOf = new Map(verticals.map((v) => [v.id, v.code]));
   const keyOf = (code: string | null, verticalId: number | null) =>
-    code ?? (verticalId === null ? "unassigned" : `id:${verticalId}`);
+    code ?? (verticalId === null ? UNASSIGNED : `id:${verticalId}`);
 
   interface Draft {
     code: string | null;
     name: string;
+    unattributed: boolean;
     /** the budget's own running order; unbudgeted lines sort after it */
     order: number;
     annual: number;
@@ -265,6 +276,7 @@ export async function buildBudgetVsActual(opts: {
       drafts.set(key, {
         code: b.code,
         name: b.name,
+        unattributed: key === UNASSIGNED,
         order: Number(b.sort_order),
         annual: Number(b.annual),
         periodActual: 0,
@@ -288,6 +300,7 @@ export async function buildBudgetVsActual(opts: {
         draft = {
           code,
           name: a.name ?? "Not attributed to a vertical",
+          unattributed: key === UNASSIGNED,
           order: 9999,
           annual: 0,
           periodActual: 0,
@@ -327,6 +340,7 @@ export async function buildBudgetVsActual(opts: {
     .map((d) => ({
       code: d.code,
       name: d.name,
+      unattributed: d.unattributed,
       annual: d.annual,
       period: cells(
         d.annual,
@@ -355,6 +369,7 @@ export async function buildBudgetVsActual(opts: {
   const total: BudgetRow = {
     code: null,
     name: "Total",
+    unattributed: false,
     annual,
     period: cells(
       annual,
