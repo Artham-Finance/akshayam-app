@@ -37,12 +37,10 @@ const UTILITY: { href: string; label: string; needs: Permission }[] = [
 ];
 
 export function Nav({
-  entityName,
   entities,
   currentSlug,
   user,
 }: {
-  entityName: string;
   entities: { slug: string; name: string }[];
   currentSlug: string;
   user: { name: string | null; email: string; role: Role; permissions: Permission[] };
@@ -59,8 +57,14 @@ export function Nav({
           fighting the nav buttons for width. */}
       <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:px-6">
         <div className="min-w-0 flex-1 sm:flex-none">
+          {/*
+            The brand, not the selected company - which one you are looking at
+            is the switcher's job, right beside it. A title that changed with
+            every switch was reading as confirmation of the switch rather than
+            the firm's own name.
+          */}
           <p className="truncate text-[13px] font-semibold tracking-tight text-ink">
-            {entityName}
+            Akshayam Group
           </p>
           <p className="hidden text-[11px] uppercase tracking-[0.14em] text-ink-faint sm:block">
             Management Reporting
