@@ -771,15 +771,28 @@ const REIMBURSEMENT_PREFIX = "RI-%";
  * So invoice_lines (everything except OSB) becomes one row per
  * (invoice, ledger tag, revenue|reimbursement) slice, carrying the ledger's
  * own rupee amount and posting date, joined to invoice_register for the
- * currency, customer and salesperson the ledger does not hold. Credit notes
- * are not rebuilt - only their vertical is re-pointed to the matching ledger
- * creditnote posting. Runs after every ledger, invoice or credit-note commit,
- * since any of the three changes the result.
+ * currency, customer and salesperson the ledger does not hold. credit_notes is
+ * rebuilt the same way from the ledger's creditnote postings. Runs after every
+ * ledger, invoice or credit-note commit, since any of the three changes the
+ * result.
  */
 export async function projectRevenueFromLedger(
   client: PoolClient,
   entityId: number,
 ): Promise<void> {
+  // Nothing to project from, and wiping invoice_lines / credit_notes here would
+  // destroy the only revenue data there is. This is the state when invoices or
+  // credit notes are uploaded before the general ledger - leave everything as
+  // it is until a ledger with revenue postings arrives.
+  const hasLedgerRevenue = await client.query(
+    `select 1 from gl_entries g
+       join accounts a on a.id = g.account_id
+      where g.entity_id = $1 and a.group_code in ('revenue', 'reimbursements')
+      limit 1`,
+    [entityId],
+  );
+  if (hasLedgerRevenue.rowCount === 0) return;
+
   // OSB rows have no ledger behind them by definition - leave them be.
   await client.query(
     "delete from invoice_lines where entity_id = $1 and not is_osb",
@@ -830,10 +843,20 @@ export async function projectRevenueFromLedger(
   // date. Every slice is is_primary_row - each holds its own tag's share and
   // they sum to the credit note total, which is what the revenue queries add
   // up. A credit note the ledger never posted deducts from nothing.
-  await client.query("delete from credit_notes where entity_id = $1", [entityId]);
+  //
+  // Guarded on the ledger actually carrying creditnote postings: a ledger with
+  // revenue but no creditnote rows at all is one exported before the credit
+  // notes existed, and wiping to nothing then would silently drop them. Re-run
+  // the projection against a ledger that includes them to bring them back.
+  const hasLedgerCreditNotes = await client.query(
+    "select 1 from gl_entries where entity_id = $1 and txn_type = 'creditnote' limit 1",
+    [entityId],
+  );
+  if ((hasLedgerCreditNotes.rowCount ?? 0) > 0) {
+    await client.query("delete from credit_notes where entity_id = $1", [entityId]);
 
-  await client.query(
-    `insert into credit_notes
+    await client.query(
+      `insert into credit_notes
        (entity_id, upload_id, credit_note_number, credit_note_date, customer_name,
         vertical_id, status, currency, exchange_rate, cn_amount_base, cn_total_base,
         invoice_number, is_primary_row, is_reimbursement)
@@ -866,8 +889,9 @@ export async function projectRevenueFromLedger(
         and g.txn_number is not null
       group by g.entity_id, g.txn_number, g.txn_date, g.vertical_id, a.group_code
      having sum(g.debit - g.credit) <> 0`,
-    [entityId],
-  );
+      [entityId],
+    );
+  }
 
   await linkByInvoice(client, entityId);
 }
@@ -1130,15 +1154,31 @@ async function rebuildPaymentAllocations(client: PoolClient, entityId: number): 
                     group by invoice_number having count(distinct vertical_id) > 1)
          ) il on il.invoice_number = pr.inv and il.rnk = pr.rnk
      ),
+     -- Prior-year invoices the ledger does not reach: invoice_lines is only this
+     -- year's postings, but a receipt clearing a last-year invoice still needs a
+     -- vertical. The register carries every exported invoice, so fall back to
+     -- its salesperson-derived tag for anything invoice_lines has never seen.
+     register_vertical as (
+       select r.invoice_number,
+              max(r.vertical_hint) as vertical_id,
+              sum(r.total_base)    as total_base
+         from invoice_register r
+        where r.entity_id = $1
+          and not exists (
+            select 1 from invoice_lines il
+             where il.entity_id = $1 and il.invoice_number = r.invoice_number)
+        group by r.invoice_number
+     ),
      joined as (
        select parts.*,
-              coalesce(sv.vertical_id, s.vertical_id) as vertical_id,
-              coalesce(sv.total_base, s.total_base, 0) as weight,
-              (coalesce(sv.vertical_id, s.vertical_id) is not null) as known,
+              coalesce(sv.vertical_id, s.vertical_id, rv.vertical_id) as vertical_id,
+              coalesce(sv.total_base, s.total_base, rv.total_base, 0) as weight,
+              (coalesce(sv.vertical_id, s.vertical_id, rv.vertical_id) is not null) as known,
               coalesce(parts.inv like $2, false) as ri
          from parts
          left join single_vertical s on s.invoice_number = parts.inv
          left join split_vertical sv on sv.payment_id = parts.payment_id and sv.inv = parts.inv
+         left join register_vertical rv on rv.invoice_number = parts.inv
      ),
      weighted as (
        select j.*,

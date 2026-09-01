@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import type { ReactNode } from "react";
-import { dateLabel, money, moneyIn } from "@/lib/format";
+import { dateLabel, money, moneyIn, moneySigned } from "@/lib/format";
 
 export interface Column {
   header: string;
@@ -44,7 +44,10 @@ export function renderDrillRow(
     if (type === "percent") return `${Number(value).toFixed(2)}%`;
     if (type === "money") {
       const n = Number(value);
-      return money(n, Number.isInteger(n) || Math.abs(n) >= 1 ? 0 : 2);
+      const decimals = Number.isInteger(n) || Math.abs(n) >= 1 ? 0 : 2;
+      // Credit-note rows in the fee/reimbursement drills carry a negative
+      // amount so the sheet foots to the net figure; show the sign.
+      return n < 0 ? moneySigned(n, decimals) : money(n, decimals);
     }
     /*
       An amount denominated in the row's own currency. The code lives in the

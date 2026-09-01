@@ -118,7 +118,7 @@ export default async function RevenuePage({
 
     const args = [entity.memberIds, start, end, verticalId, EXCLUDED_STATUS, entity.verticalIds];
 
-    const [totals, credits, byMonth, cnByMonth, byVertical, cnByVertical, retainerByVertical, excluded, byCurrency] =
+    const [totals, credits, byMonth, cnByMonth, byVertical, cnByVertical, retainerByVertical, byCurrency] =
       await Promise.all([
         queryOne<{ fee: number; ri: number; n: number }>(
           `select coalesce(sum(case when is_reimbursement then 0 else amount_base end),0)::numeric fee,
@@ -222,20 +222,6 @@ export default async function RevenuePage({
               [entity.memberIds, start, end, verticalId, entity.verticalIds],
             )
           : Promise.resolve([] as { vertical_id: number | null; amount: number }[]),
-        // Invoices sitting in the register that the ledger never posted - drafts,
-        // and anything void or rejected. Not revenue, so they are off every
-        // figure on this page; counted here so the omission is visible.
-        queryOne<{ n: number; v: number }>(
-          `select count(*)::int n, coalesce(sum(r.amount_base),0)::numeric v
-             from invoice_register r
-            where r.entity_id = any($1::int[])
-              and r.invoice_date between $2 and $3
-              and not exists (
-                select 1 from invoice_lines il
-                 where il.entity_id = r.entity_id and il.invoice_number = r.invoice_number
-              )`,
-          [entity.memberIds, start, end],
-        ),
         /**
          * Invoiced by the currency it was billed in.
          *
@@ -709,28 +695,6 @@ export default async function RevenuePage({
             page jump back up to where every other drill on this page lands.
           */}
           {chosen && drill !== "month" && chosenPanel}
-
-          {(excluded?.n ?? 0) > 0 && (
-            <Notice
-              tone="info"
-              title={`${excluded?.n} invoice(s) not in the ledger — ${compactINR(Number(excluded?.v ?? 0))}`}
-              action={
-                <Link
-                  href={withParams("/revenue", params, {
-                    drill: drill === "excluded" ? null : "excluded",
-                  })}
-                  scroll={false}
-                  className="whitespace-nowrap rounded-md border border-navy/25 px-2.5 py-1.5 text-[12px] font-medium hover:bg-navy/5"
-                >
-                  {drill === "excluded" ? "Close" : "Show them"}
-                </Link>
-              }
-            >
-              Every figure on this page is built from the general ledger. These invoices are
-              in the Zoho register but the ledger has not posted them — drafts, or void and
-              rejected — so they are not revenue and appear nowhere above.
-            </Notice>
-          )}
 
           {showCurrencySplit && (
             <Card padded={false}>

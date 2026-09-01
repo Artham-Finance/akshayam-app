@@ -93,7 +93,6 @@ const TITLES: Record<DrillKind, Record<string, string>> = {
     customer: "Invoices raised on one customer",
     ri: "Reimbursement invoices",
     credit_notes: "Credit notes",
-    excluded: "Invoices in the register but not the ledger",
     // Same population as "all" - fee and reimbursement together - under its
     // own name so a month bar's result can be told apart from a currency
     // click's and placed by the chart it came from rather than at the top.
@@ -515,70 +514,6 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
     };
   }
 
-  if (req.kind === "revenue" && req.drill === "excluded") {
-    // The invoices in the Zoho register that the ledger never posted: drafts,
-    // and anything void or rejected. invoice_lines only holds what the ledger
-    // booked, so this reads the register and subtracts it.
-    const scope = `r.entity_id = any($1::int[]) and r.invoice_date between $2 and $3
-                   and ($4::text is null or r.customer_name = $4)
-                   and not exists (
-                     select 1 from invoice_lines il
-                      where il.entity_id = r.entity_id and il.invoice_number = r.invoice_number
-                   )`;
-    const args = [req.entity.memberIds, req.start, req.end, req.customer ?? null];
-
-    const [rows, count] = await Promise.all([
-      query<{
-        number: string; doc_date: string; company: string; customer_name: string;
-        salesperson: string | null; status: string | null; currency: string;
-        amount_billed: number | null; amount_base: number; total_base: number;
-      }>(
-        `select r.invoice_number as number, r.invoice_date::text as doc_date, e.name as company,
-                r.customer_name, r.salesperson, r.status,
-                upper(coalesce(r.currency, 'INR')) as currency,
-                case when upper(coalesce(r.currency, 'INR')) = 'INR' then r.amount_base
-                     else r.amount_base / nullif(r.exchange_rate, 0) end as amount_billed,
-                r.amount_base, r.total_base
-           from invoice_register r
-           join entities e on e.id = r.entity_id
-          where ${scope}
-          order by r.invoice_date, r.amount_base desc
-          ${cap}`,
-        args,
-      ),
-      queryOne<{ n: number }>(`select count(*)::int n from invoice_register r where ${scope}`, args),
-    ]);
-
-    return {
-      title,
-      columns: [
-        { header: "Invoice", type: "text" },
-        { header: "Date", type: "date" },
-        ...company,
-        { header: "Customer", type: "text" },
-        { header: "Salesperson", type: "text" },
-        { header: "Status", type: "text" },
-        { header: "Raised in", type: "currency" },
-        { header: "Amount billed", type: "money_ccy" },
-        { header: "Amount (INR)", type: "money", strong: true },
-        { header: "Incl. tax (INR)", type: "money" },
-      ],
-      rows: rows.map((r) => [
-        r.number,
-        r.doc_date,
-        ...pickCompany(r),
-        r.customer_name,
-        r.salesperson,
-        r.status,
-        r.currency,
-        r.amount_billed === null ? null : Number(r.amount_billed),
-        Number(r.amount_base),
-        Number(r.total_base),
-      ]),
-      total: Number(count?.n ?? 0),
-    };
-  }
-
   // Revenue. Invoices and credit notes are separate tables with the same shape
   // on screen, so the column names differ but the query does not.
   const isCn = req.drill === "credit_notes";
@@ -595,7 +530,6 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
     fee: "not i.is_reimbursement",
     ri: "i.is_reimbursement",
     credit_notes: "i.is_primary_row",
-    excluded: "true",
     // Fee and reimbursement together: a customer statement that quietly left
     // out the recharges would not agree with what they were actually billed.
     customer: "true",
@@ -603,9 +537,9 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
     // placed under the chart rather than at the top.
     month: "true",
   };
-  // "Excluded" is the one tile that wants exactly what every other figure drops.
-  const statusFilter =
-    req.drill === "excluded" ? "i.status = any($5)" : "not (i.status = any($5))";
+  // A ledger-posted document with no register status is still real - only the
+  // named bad statuses drop out.
+  const statusFilter = "not (coalesce(i.status, '') = any($5))";
   const scope = `i.entity_id = any($1::int[]) and ${dateCol} between $2 and $3
                  and ($4::int is null or i.vertical_id = $4)
                  ${verticalScope("$6", "i.vertical_id")}
@@ -618,13 +552,15 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
     req.currency ? req.currency.toUpperCase() : null,
   ];
 
+  type DrillRow = {
+    number: string | null; doc_date: string; company: string; customer_name: string;
+    salesperson: string | null; status: string | null;
+    currency: string; amount_billed: number | null;
+    amount_base: number; total_base: number;
+  };
+
   const [rows, count] = await Promise.all([
-    query<{
-      number: string | null; doc_date: string; company: string; customer_name: string;
-      salesperson: string | null; status: string | null;
-      currency: string; amount_billed: number | null;
-      amount_base: number; total_base: number;
-    }>(
+    query<DrillRow>(
       `select ${numberCol} as number, ${dateCol}::text as doc_date, e.name as company,
               i.customer_name, ${personCol} as salesperson, i.status,
               upper(coalesce(i.currency, 'INR')) as currency,
@@ -646,6 +582,47 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
     queryOne<{ n: number }>(`select count(*)::int n from ${from} where ${scope}`, args),
   ]);
 
+  /*
+    Fee and reimbursement drills net off their own credit notes, as negative
+    rows, so the sheet's Total foots to the vertical's Actual / Net figure on
+    the page rather than to the gross invoiced amount. The credit_notes drill
+    is the credit notes themselves and the fee+reimbursement drills (all,
+    customer, month) are gross on purpose, so they are left alone.
+  */
+  const netsCreditNotes = req.drill === "fee" || req.drill === "ri";
+  let cnRows: DrillRow[] = [];
+  let cnCount = 0;
+  if (netsCreditNotes) {
+    const cnScope = `c.entity_id = any($1::int[]) and c.credit_note_date between $2 and $3
+                     and ($4::int is null or c.vertical_id = $4)
+                     ${verticalScope("$6", "c.vertical_id")}
+                     and ($7::text is null or c.customer_name = $7)
+                     and ($8::text is null or upper(coalesce(c.currency, 'INR')) = $8)
+                     and not (coalesce(c.status, '') = any($5))
+                     and c.is_primary_row and c.is_reimbursement = ${req.drill === "ri"}`;
+    const [cr, cc] = await Promise.all([
+      query<DrillRow>(
+        `select c.credit_note_number as number, c.credit_note_date::text as doc_date,
+                e.name as company, c.customer_name, null::text as salesperson,
+                'credit note' as status, upper(coalesce(c.currency, 'INR')) as currency,
+                -(case when upper(coalesce(c.currency, 'INR')) = 'INR' then c.cn_amount_base
+                       else c.cn_amount_base / nullif(c.exchange_rate, 0) end) as amount_billed,
+                -c.cn_amount_base as amount_base, -c.cn_total_base as total_base
+           from credit_notes c
+           join entities e on e.id = c.entity_id
+          where ${cnScope}
+          order by c.credit_note_date, c.cn_amount_base desc
+          ${cap}`,
+        args,
+      ),
+      queryOne<{ n: number }>(`select count(*)::int n from credit_notes c where ${cnScope}`, args),
+    ]);
+    cnRows = cr;
+    cnCount = Number(cc?.n ?? 0);
+  }
+
+  const merged = [...rows, ...cnRows].sort((a, b) => a.doc_date.localeCompare(b.doc_date));
+
   return {
     title,
     columns: [
@@ -660,7 +637,7 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
       { header: "Amount (INR)", type: "money", strong: true },
       { header: "Incl. tax (INR)", type: "money" },
     ],
-    rows: rows.map((r) => [
+    rows: merged.map((r) => [
       r.number,
       r.doc_date,
       ...pickCompany(r),
@@ -672,6 +649,6 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
       Number(r.amount_base),
       Number(r.total_base),
     ]),
-    total: Number(count?.n ?? 0),
+    total: Number(count?.n ?? 0) + cnCount,
   };
 }

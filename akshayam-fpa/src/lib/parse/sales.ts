@@ -62,6 +62,22 @@ function verticalOf(row: Record<string, unknown>): string | null {
 }
 
 /**
+ * Salespeople whose name carries no "- Vertical" tail but is itself the
+ * vertical. "Common" and the partner-contribution owners belong to the Common
+ * line, exactly as they already do on the ledger and so on the revenue and
+ * collection reports - the AR export is the only one that names them this way.
+ * Keyed lower-cased; the value resolves through the usual vertical aliases.
+ */
+const SALESPERSON_VERTICAL: Record<string, string> = {
+  common: "COMMON",
+  "jayanth-partner contribution": "COMMON",
+  "jayanth - partner contribution": "COMMON",
+  "partner contribution": "COMMON",
+  "partners contribution": "COMMON",
+  "partner's contribution": "COMMON",
+};
+
+/**
  * Zoho salesperson names embed the vertical:
  *   "Rekha - Corporate Formation & Secretarial Compliances (CFC)"
  *   "Vijay  - Disputes, Litigation & Resolution (DLR)"   (note the double space)
@@ -69,10 +85,13 @@ function verticalOf(row: Record<string, unknown>): string | null {
  * The text after the separator is exactly the reporting tag used on the ledger,
  * so it resolves through the same vertical aliases and the invoice and AR
  * reports line up with the P&L without any extra mapping. A salesperson with no
- * separator - "Others" - yields nothing rather than a bad guess.
+ * separator - "Others" - yields nothing rather than a bad guess, unless it is
+ * one of the known bare names above.
  */
 export function verticalFromSalesperson(salesperson: string | null): string | null {
   if (!salesperson) return null;
+  const known = SALESPERSON_VERTICAL[salesperson.trim().toLowerCase()];
+  if (known) return known;
   const parts = salesperson.split(/\s+-\s+/);
   if (parts.length < 2) return null;
   const tail = parts.slice(1).join(" - ").trim();

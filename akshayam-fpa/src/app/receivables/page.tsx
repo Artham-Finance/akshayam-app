@@ -634,7 +634,8 @@ export default async function ReceivablesPage({
                     })}
                     className="font-medium text-navy hover:underline"
                   >
-                    {(r.code as string) ?? (r.name as string)}
+                    {/* Full name, as the revenue and collection budget tables show it. */}
+                    {(r.name as string) ?? (r.code as string)}
                   </Link>
                 ) : (
                   <Link
