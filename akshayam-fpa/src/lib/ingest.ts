@@ -1154,15 +1154,31 @@ async function rebuildPaymentAllocations(client: PoolClient, entityId: number): 
                     group by invoice_number having count(distinct vertical_id) > 1)
          ) il on il.invoice_number = pr.inv and il.rnk = pr.rnk
      ),
+     -- Prior-year invoices the ledger does not reach: invoice_lines is only this
+     -- year's postings, but a receipt clearing a last-year invoice still needs a
+     -- vertical. The register carries every exported invoice, so fall back to
+     -- its salesperson-derived tag for anything invoice_lines has never seen.
+     register_vertical as (
+       select r.invoice_number,
+              max(r.vertical_hint) as vertical_id,
+              sum(r.total_base)    as total_base
+         from invoice_register r
+        where r.entity_id = $1
+          and not exists (
+            select 1 from invoice_lines il
+             where il.entity_id = $1 and il.invoice_number = r.invoice_number)
+        group by r.invoice_number
+     ),
      joined as (
        select parts.*,
-              coalesce(sv.vertical_id, s.vertical_id) as vertical_id,
-              coalesce(sv.total_base, s.total_base, 0) as weight,
-              (coalesce(sv.vertical_id, s.vertical_id) is not null) as known,
+              coalesce(sv.vertical_id, s.vertical_id, rv.vertical_id) as vertical_id,
+              coalesce(sv.total_base, s.total_base, rv.total_base, 0) as weight,
+              (coalesce(sv.vertical_id, s.vertical_id, rv.vertical_id) is not null) as known,
               coalesce(parts.inv like $2, false) as ri
          from parts
          left join single_vertical s on s.invoice_number = parts.inv
          left join split_vertical sv on sv.payment_id = parts.payment_id and sv.inv = parts.inv
+         left join register_vertical rv on rv.invoice_number = parts.inv
      ),
      weighted as (
        select j.*,
