@@ -222,13 +222,19 @@ export default async function RevenuePage({
               [entity.memberIds, start, end, verticalId, entity.verticalIds],
             )
           : Promise.resolve([] as { vertical_id: number | null; amount: number }[]),
+        // Invoices sitting in the register that the ledger never posted - drafts,
+        // and anything void or rejected. Not revenue, so they are off every
+        // figure on this page; counted here so the omission is visible.
         queryOne<{ n: number; v: number }>(
-          `select count(*)::int n, coalesce(sum(amount_base),0)::numeric v
-             from invoice_lines
-            where entity_id=any($1::int[]) and invoice_date between $2 and $3 and status = any($4)
-              and ($5::int is null or vertical_id = $5)
-              ${verticalScope("$6")}`,
-          [entity.memberIds, start, end, EXCLUDED_STATUS, verticalId, entity.verticalIds],
+          `select count(*)::int n, coalesce(sum(r.amount_base),0)::numeric v
+             from invoice_register r
+            where r.entity_id = any($1::int[])
+              and r.invoice_date between $2 and $3
+              and not exists (
+                select 1 from invoice_lines il
+                 where il.entity_id = r.entity_id and il.invoice_number = r.invoice_number
+              )`,
+          [entity.memberIds, start, end],
         ),
         /**
          * Invoiced by the currency it was billed in.
@@ -707,7 +713,7 @@ export default async function RevenuePage({
           {(excluded?.n ?? 0) > 0 && (
             <Notice
               tone="info"
-              title={`${excluded?.n} invoice(s) excluded — ${compactINR(Number(excluded?.v ?? 0))}`}
+              title={`${excluded?.n} invoice(s) not in the ledger — ${compactINR(Number(excluded?.v ?? 0))}`}
               action={
                 <Link
                   href={withParams("/revenue", params, {
@@ -720,8 +726,9 @@ export default async function RevenuePage({
                 </Link>
               }
             >
-              Void, rejected and draft invoices are left out of every figure on this page, so
-              revenue here agrees with the ledger rather than the raw invoice register.
+              Every figure on this page is built from the general ledger. These invoices are
+              in the Zoho register but the ledger has not posted them — drafts, or void and
+              rejected — so they are not revenue and appear nowhere above.
             </Notice>
           )}
 
@@ -774,9 +781,10 @@ export default async function RevenuePage({
               }}
             />
             <p className="px-4 pb-4 text-[11.5px] text-ink-muted sm:px-5">
-              Actual is the ledger&rsquo;s Revenue from Operations, so it is net of credit
-              notes and equals the P&amp;L line exactly. It will differ from the invoiced
-              figure above where an invoice was raised in one period and posted in another.
+              Actual is the ledger&rsquo;s Revenue from Operations and equals the P&amp;L line
+              exactly — net of the ledger&rsquo;s own credit-note postings. The By vertical
+              table below is built the same way, so its Net column matches this vertical for
+              vertical.
             </p>
             {budget.hasUnbudgeted && (
               <p className="px-4 pb-4 text-[11.5px] text-caution sm:px-5">
