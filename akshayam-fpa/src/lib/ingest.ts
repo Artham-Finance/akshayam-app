@@ -363,6 +363,9 @@ export async function commitGeneralLedger(
     );
 
     await attributeSoleVertical(client, entityId);
+    // Revenue follows the ledger, so a new ledger rebuilds the revenue
+    // projection - the invoice register on its own is only draft billings.
+    await projectRevenueFromLedger(client, entityId);
     return { uploadId, rowsInserted, newAccounts, newVerticals, needsReview };
   });
 }
@@ -427,19 +430,22 @@ export async function commitInvoices(
       parsed.rows.length, { detected: parsed.detected, warnings: parsed.warnings },
     );
 
+    // The export lands in the register verbatim; invoice_lines is rebuilt from
+    // the ledger below. OSB rows are the one thing invoice_lines carries that
+    // has no ledger behind it, so they are still written straight there.
     if (parsed.periodStart && parsed.periodEnd) {
       await client.query(
-        "delete from invoice_lines where entity_id = $1 and invoice_date between $2 and $3 and upload_id <> $4 and not is_osb",
+        "delete from invoice_register where entity_id = $1 and invoice_date between $2 and $3 and upload_id <> $4",
         [entityId, parsed.periodStart, parsed.periodEnd, uploadId],
       );
     }
 
     const rowsInserted = await bulkInsert(
       client,
-      "invoice_lines",
+      "invoice_register",
       [
         "entity_id", "upload_id", "invoice_number", "invoice_date", "due_date",
-        "customer_name", "vertical_id", "salesperson", "item_name", "currency",
+        "customer_name", "vertical_hint", "salesperson", "item_name", "currency",
         "exchange_rate", "amount_base", "total_base", "status",
       ],
       parsed.rows.map((row) => [
@@ -454,7 +460,7 @@ export async function commitInvoices(
       await commitOsb(client, entityId, uploadId, parsed.osbRows, verticalIds);
     }
 
-    await linkByInvoice(client, entityId);
+    await projectRevenueFromLedger(client, entityId);
     return { uploadId, rowsInserted, newAccounts: [], newVerticals, needsReview: [] };
   });
 }
@@ -682,19 +688,21 @@ export async function commitCreditNotes(
       parsed.rows.length, { detected: parsed.detected, warnings: parsed.warnings },
     );
 
+    // The export lands in the register verbatim; credit_notes is rebuilt from
+    // the ledger's own creditnote postings below.
     if (parsed.periodStart && parsed.periodEnd) {
       await client.query(
-        "delete from credit_notes where entity_id = $1 and credit_note_date between $2 and $3 and upload_id <> $4",
+        "delete from credit_note_register where entity_id = $1 and credit_note_date between $2 and $3 and upload_id <> $4",
         [entityId, parsed.periodStart, parsed.periodEnd, uploadId],
       );
     }
 
     const rowsInserted = await bulkInsert(
       client,
-      "credit_notes",
+      "credit_note_register",
       [
         "entity_id", "upload_id", "credit_note_number", "credit_note_date", "customer_name",
-        "vertical_id", "status", "currency", "exchange_rate", "cn_amount_base",
+        "vertical_hint", "status", "currency", "exchange_rate", "cn_amount_base",
         "cn_total_base", "invoice_number", "is_primary_row",
       ],
       parsed.rows.map((row) => [
@@ -705,7 +713,7 @@ export async function commitCreditNotes(
       ]),
     );
 
-    await linkByInvoice(client, entityId);
+    await projectRevenueFromLedger(client, entityId);
     return { uploadId, rowsInserted, newAccounts: [], newVerticals, needsReview: [] };
   });
 }
@@ -752,6 +760,119 @@ async function attributeSoleVertical(client: PoolClient, entityId: number): Prom
 const REIMBURSEMENT_PREFIX = "RI-%";
 
 /**
+ * Rebuild invoice_lines from the ledger's revenue and reimbursement postings.
+ *
+ * The general ledger tags every revenue line with a reporting tag, and splits
+ * one invoice across several where the work was shared; the Invoice Details
+ * export only carries a salesperson, one vertical per invoice. Where the two
+ * disagree the ledger wins - it is the source the P&L is built from - and an
+ * invoice the ledger never posted is a draft, not revenue.
+ *
+ * So invoice_lines (everything except OSB) becomes one row per
+ * (invoice, ledger tag, revenue|reimbursement) slice, carrying the ledger's
+ * own rupee amount and posting date, joined to invoice_register for the
+ * currency, customer and salesperson the ledger does not hold. Credit notes
+ * are not rebuilt - only their vertical is re-pointed to the matching ledger
+ * creditnote posting. Runs after every ledger, invoice or credit-note commit,
+ * since any of the three changes the result.
+ */
+export async function projectRevenueFromLedger(
+  client: PoolClient,
+  entityId: number,
+): Promise<void> {
+  // OSB rows have no ledger behind them by definition - leave them be.
+  await client.query(
+    "delete from invoice_lines where entity_id = $1 and not is_osb",
+    [entityId],
+  );
+
+  await client.query(
+    `insert into invoice_lines
+       (entity_id, upload_id, invoice_number, invoice_date, due_date, customer_name,
+        vertical_id, salesperson, item_name, currency, exchange_rate,
+        amount_base, total_base, status, is_reimbursement)
+     select g.entity_id,
+            min(g.upload_id)                                             as upload_id,
+            g.txn_number                                                 as invoice_number,
+            g.txn_date                                                   as invoice_date,
+            max(reg.due_date)                                            as due_date,
+            coalesce(max(reg.customer_name), '(not in invoice register)') as customer_name,
+            g.vertical_id,
+            max(reg.salesperson)                                         as salesperson,
+            max(reg.item_name)                                           as item_name,
+            coalesce(max(reg.currency), 'INR')                           as currency,
+            coalesce(max(reg.exchange_rate), 1)                          as exchange_rate,
+            sum(g.credit - g.debit)                                      as amount_base,
+            sum(g.credit - g.debit)                                      as total_base,
+            max(reg.status)                                              as status,
+            bool_or(a.group_code = 'reimbursements')                     as is_reimbursement
+       from gl_entries g
+       join accounts a on a.id = g.account_id
+       left join lateral (
+         select r.due_date, r.customer_name, r.salesperson, r.item_name,
+                r.currency, r.exchange_rate, r.status
+           from invoice_register r
+          where r.entity_id = g.entity_id and r.invoice_number = g.txn_number
+          order by r.id
+          limit 1
+       ) reg on true
+      where g.entity_id = $1
+        and g.txn_type = 'invoice'
+        and a.group_code in ('revenue', 'reimbursements')
+        and g.txn_number is not null
+      group by g.entity_id, g.txn_number, g.txn_date, g.vertical_id, a.group_code
+     having sum(g.credit - g.debit) <> 0`,
+    [entityId],
+  );
+
+  // Credit notes the same way: one row per (credit note, ledger tag,
+  // revenue|reimbursement) slice, carrying the ledger's own value and posting
+  // date. Every slice is is_primary_row - each holds its own tag's share and
+  // they sum to the credit note total, which is what the revenue queries add
+  // up. A credit note the ledger never posted deducts from nothing.
+  await client.query("delete from credit_notes where entity_id = $1", [entityId]);
+
+  await client.query(
+    `insert into credit_notes
+       (entity_id, upload_id, credit_note_number, credit_note_date, customer_name,
+        vertical_id, status, currency, exchange_rate, cn_amount_base, cn_total_base,
+        invoice_number, is_primary_row, is_reimbursement)
+     select g.entity_id,
+            min(g.upload_id)                                             as upload_id,
+            g.txn_number                                                 as credit_note_number,
+            g.txn_date                                                   as credit_note_date,
+            coalesce(max(reg.customer_name), '(not in credit note register)') as customer_name,
+            g.vertical_id,
+            max(reg.status)                                              as status,
+            coalesce(max(reg.currency), 'INR')                           as currency,
+            coalesce(max(reg.exchange_rate), 1)                          as exchange_rate,
+            sum(g.debit - g.credit)                                      as cn_amount_base,
+            sum(g.debit - g.credit)                                      as cn_total_base,
+            max(reg.invoice_number)                                      as invoice_number,
+            true                                                        as is_primary_row,
+            bool_or(a.group_code = 'reimbursements')                     as is_reimbursement
+       from gl_entries g
+       join accounts a on a.id = g.account_id
+       left join lateral (
+         select r.customer_name, r.status, r.currency, r.exchange_rate, r.invoice_number
+           from credit_note_register r
+          where r.entity_id = g.entity_id and r.credit_note_number = g.txn_number
+          order by r.id
+          limit 1
+       ) reg on true
+      where g.entity_id = $1
+        and g.txn_type = 'creditnote'
+        and a.group_code in ('revenue', 'reimbursements')
+        and g.txn_number is not null
+      group by g.entity_id, g.txn_number, g.txn_date, g.vertical_id, a.group_code
+     having sum(g.debit - g.credit) <> 0`,
+    [entityId],
+  );
+
+  await linkByInvoice(client, entityId);
+}
+
+/**
  * Fill in what the sales exports leave out.
  *
  * The Payments Received and Credit Note exports carry no reporting tag or
@@ -763,25 +884,15 @@ const REIMBURSEMENT_PREFIX = "RI-%";
  * of the join may arrive first.
  */
 export async function linkByInvoice(client: PoolClient, entityId: number): Promise<void> {
-  await client.query(
-    `update invoice_lines set is_reimbursement = (invoice_number like $2)
-      where entity_id = $1 and is_reimbursement <> (invoice_number like $2)`,
-    [entityId, REIMBURSEMENT_PREFIX],
-  );
-
+  // invoice_lines and credit_notes no longer have is_reimbursement set from the
+  // RI- prefix here: projectRevenueFromLedger sets it per row from the ledger
+  // account the posting hit, which is right even when a mixed document puts
+  // some lines on a reimbursement account and some on a revenue account.
+  // Payments carry no ledger posting of their own, so the prefix still decides.
   await client.query(
     `update payments p set is_reimbursement = (p.invoice_number like $2)
       where p.entity_id = $1 and p.invoice_number is not null
         and p.is_reimbursement <> (p.invoice_number like $2)`,
-    [entityId, REIMBURSEMENT_PREFIX],
-  );
-
-  // A credit note carries the invoice it was raised against, not its own RICN-
-  // number - the same fact invoice_lines and payments are flagged from above.
-  await client.query(
-    `update credit_notes set is_reimbursement = (invoice_number like $2)
-      where entity_id = $1 and invoice_number is not null
-        and is_reimbursement <> (invoice_number like $2)`,
     [entityId, REIMBURSEMENT_PREFIX],
   );
 
