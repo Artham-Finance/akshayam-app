@@ -158,21 +158,14 @@ export function Nav({
     </header>
 
     <div className="no-print mx-auto max-w-[1400px] px-4 pt-3 sm:px-6">
-      <div className="rounded-card border border-navy-tint-strong bg-navy-tint px-4 py-3 text-[13px] text-navy">
-        <ul className="space-y-1 leading-relaxed">
-          <li>
-            <span className="font-semibold">Core Financials</span> — to understand what
-            happened (statements)
-          </li>
-          <li>
-            <span className="font-semibold">Analysis &amp; Planning</span> — why and how it
-            happened (analysis)
-          </li>
-          <li>
-            <span className="font-semibold">Vertical Performance</span> — where it happened
-            (by vertical)
-          </li>
-        </ul>
+      <div className="rounded-card border border-navy-tint-strong bg-navy-tint px-4 py-2.5 text-[13px] leading-relaxed text-navy">
+        <span className="font-semibold">Core Financials</span> — what happened (statements)
+        <span className="mx-2 text-navy/40">|</span>
+        <span className="font-semibold">Analysis &amp; Planning</span> — why and how it
+        happened (analysis)
+        <span className="mx-2 text-navy/40">|</span>
+        <span className="font-semibold">Vertical Performance</span> — where it happened (by
+        vertical)
       </div>
     </div>
     </>
