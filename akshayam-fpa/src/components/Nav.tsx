@@ -14,17 +14,37 @@ import type { Permission, Role } from "@/lib/auth/permissions";
  * through a menu to find the P&L.
  */
 
-const SECTIONS = [
-  { href: "/", label: "Overview" },
-  { href: "/pnl", label: "Profit & Loss" },
-  { href: "/balance-sheet", label: "Balance Sheet" },
-  { href: "/cash-flow", label: "Cash Flow" },
-  { href: "/budget-vs-actual", label: "Budget vs Actual" },
-  { href: "/revenue", label: "Revenue" },
-  { href: "/receivables", label: "Receivables" },
-  { href: "/collections", label: "Collections" },
-  { href: "/dupont", label: "DuPont Analysis" },
-  { href: "/scorecard", label: "Vertical Performance Scorecard" },
+/**
+ * The tabs, grouped so the eye reads them as three jobs: what happened, why,
+ * and where. Overview stands on its own ahead of the groups.
+ */
+const OVERVIEW = { href: "/", label: "Overview" };
+
+const GROUPS: { title: string; items: { href: string; label: string }[] }[] = [
+  {
+    title: "Core Financials",
+    items: [
+      { href: "/balance-sheet", label: "Balance Sheet" },
+      { href: "/pnl", label: "Profit & Loss" },
+      { href: "/cash-flow", label: "Cash Flow" },
+    ],
+  },
+  {
+    title: "Analysis & Planning",
+    items: [
+      { href: "/budget-vs-actual", label: "Budget vs Actual" },
+      { href: "/dupont", label: "DuPont Analysis" },
+    ],
+  },
+  {
+    title: "Segment Performance",
+    items: [
+      { href: "/revenue", label: "Revenue" },
+      { href: "/receivables", label: "Receivables" },
+      { href: "/collections", label: "Collections" },
+      { href: "/scorecard", label: "Vertical Performance Scorecard" },
+    ],
+  },
 ];
 
 /**
@@ -113,28 +133,59 @@ export function Nav({
       </div>
 
       <div className="scroll-fade overflow-x-auto border-t border-line">
-        <div className="mx-auto flex max-w-[1400px] gap-1 px-3 sm:px-5">
-          {SECTIONS.map((item) => {
-            const active = isActive(item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                aria-current={active ? "page" : undefined}
-                className={clsx(
-                  "relative whitespace-nowrap px-3 py-2.5 text-[13px] font-medium transition-colors",
-                  active ? "text-navy" : "text-ink-muted hover:text-ink",
-                )}
-              >
-                {item.label}
-                {active && (
-                  <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-navy" />
-                )}
-              </Link>
-            );
-          })}
+        <div className="mx-auto flex max-w-[1400px] items-stretch gap-2 px-3 sm:px-5">
+          <div className="flex flex-col pr-1">
+            <span className="px-2 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-faint">
+              &nbsp;
+            </span>
+            <div className="flex">
+              <Tab item={OVERVIEW} isActive={isActive} />
+            </div>
+          </div>
+          {GROUPS.map((group) => (
+            <div key={group.title} className="flex flex-col border-l border-line/70 pl-2">
+              <span className="whitespace-nowrap px-2 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-faint">
+                {group.title}
+              </span>
+              <div className="flex">
+                {group.items.map((item) => (
+                  <Tab key={item.href} item={item} isActive={isActive} />
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
+
+      <div className="border-t border-line/60 bg-surface-sunk/30">
+        <p className="mx-auto max-w-[1400px] px-4 py-1.5 text-[11px] italic text-ink-faint sm:px-6">
+          This structure separates what happened (statements) from why it happened (analysis)
+          and where it happened (by vertical).
+        </p>
+      </div>
     </header>
+  );
+}
+
+function Tab({
+  item,
+  isActive,
+}: {
+  item: { href: string; label: string };
+  isActive: (href: string) => boolean;
+}) {
+  const active = isActive(item.href);
+  return (
+    <Link
+      href={item.href}
+      aria-current={active ? "page" : undefined}
+      className={clsx(
+        "relative whitespace-nowrap px-3 py-2.5 text-[13px] font-medium transition-colors",
+        active ? "text-navy" : "text-ink-muted hover:text-ink",
+      )}
+    >
+      {item.label}
+      {active && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-navy" />}
+    </Link>
   );
 }
