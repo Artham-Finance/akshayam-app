@@ -37,7 +37,7 @@ const GROUPS: { title: string; items: { href: string; label: string }[] }[] = [
     ],
   },
   {
-    title: "Segment Performance",
+    title: "Vertical Performance",
     items: [
       { href: "/revenue", label: "Revenue" },
       { href: "/receivables", label: "Receivables" },
@@ -75,6 +75,7 @@ export function Nav({
     href === "/" ? pathname === "/" : pathname.startsWith(href);
 
   return (
+    <>
     <header className="no-print sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur">
       {/* On a phone the company picker drops to its own line rather than
           fighting the nav buttons for width. */}
@@ -132,10 +133,10 @@ export function Nav({
         </nav>
       </div>
 
-      <div className="scroll-fade overflow-x-auto border-t border-line">
+      <div className="scroll-fade overflow-x-auto border-t border-line bg-navy-tint/40">
         <div className="mx-auto flex max-w-[1400px] items-stretch gap-2 px-3 sm:px-5">
           <div className="flex flex-col pr-1">
-            <span className="px-2 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-faint">
+            <span className="px-2 pt-1.5 text-[12px] font-bold uppercase tracking-[0.1em] text-navy">
               &nbsp;
             </span>
             <div className="flex">
@@ -143,8 +144,8 @@ export function Nav({
             </div>
           </div>
           {GROUPS.map((group) => (
-            <div key={group.title} className="flex flex-col border-l border-line/70 pl-2">
-              <span className="whitespace-nowrap px-2 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-faint">
+            <div key={group.title} className="flex flex-col border-l border-navy-tint-strong pl-2">
+              <span className="whitespace-nowrap px-2 pt-1.5 text-[12px] font-bold uppercase tracking-[0.1em] text-navy">
                 {group.title}
               </span>
               <div className="flex">
@@ -156,14 +157,18 @@ export function Nav({
           ))}
         </div>
       </div>
+    </header>
 
-      <div className="border-t border-line/60 bg-surface-sunk/30">
-        <p className="mx-auto max-w-[1400px] px-4 py-1.5 text-[11px] italic text-ink-faint sm:px-6">
+    <div className="no-print mx-auto max-w-[1400px] px-4 pt-3 sm:px-6">
+      <div className="rounded-card border border-navy-tint-strong bg-navy-tint px-4 py-3 text-[13px] text-navy">
+        <p className="font-semibold">How the tabs are grouped</p>
+        <p className="mt-0.5 leading-relaxed opacity-90">
           This structure separates what happened (statements) from why it happened (analysis)
           and where it happened (by vertical).
         </p>
       </div>
-    </header>
+    </div>
+    </>
   );
 }
 
