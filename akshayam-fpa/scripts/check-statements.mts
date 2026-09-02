@@ -14,6 +14,7 @@
  * much on screen.
  */
 import { composeBalanceSheet, type StatementResult } from "../src/lib/reports/compose";
+import { buildDuPont } from "../src/lib/reports/dupont";
 import { fyMonths } from "../src/lib/period";
 
 const months = fyMonths(2026);
@@ -207,6 +208,58 @@ console.log("\n== Empty year ==");
   const result = composeBalanceSheet({ ...base, opening: [], movements: [], pnlMovements: [] });
   check("an empty statement ties rather than throwing", ties(result));
   check("and shows no profit line", !has(result, "profit_for_period"));
+}
+
+/* ---------- DuPont: the three factors must multiply back to RoE ---------- */
+console.log("\n== DuPont decomposition ==");
+{
+  const mk = (groupCode: string, valueAt: (i: number) => number): StatementResult["lines"][number] => ({
+    key: groupCode,
+    name: groupCode,
+    level: 0,
+    isSubtotal: true,
+    sign: 1,
+    groupCode,
+    accountId: null,
+    values: Object.fromEntries(months.map((m, i) => [m.key, valueAt(i)])),
+  });
+  const stmt = (lines: StatementResult["lines"]): StatementResult => ({
+    months,
+    lines,
+    hasUnmapped: false,
+    unmappedTotal: 0,
+  });
+
+  // 5 months of ledger: Sales 100/mo for months 0-4 -> 500 ytd -> 1,200 annualised.
+  // Net income 10/mo -> 50 ytd -> 120 annualised. Later months are nil, as a
+  // real P&L has past the ledger cutoff.
+  const pnl = stmt([
+    mk("revenue", (i) => (i < 5 ? 100 : 0)),
+    mk("pat", (i) => (i < 5 ? 10 : 0)),
+  ]);
+  // Balance sheet is a running position - the same closing balance every month
+  // end: total_assets 400 (debit +), equity -150, reserves -50 (credit).
+  const bs = stmt([
+    mk("total_assets", () => 400),
+    mk("equity", () => -150),
+    mk("reserves", () => -50),
+  ]);
+
+  const d = buildDuPont({ pnl, bs, monthsElapsed: 5 });
+  check("net income annualised", Math.abs(d.inputs.netIncome - 120) < 0.005, `${d.inputs.netIncome}`);
+  check("sales annualised", Math.abs(d.inputs.sales - 1200) < 0.005, `${d.inputs.sales}`);
+  check("total equity from credit balances", Math.abs(d.inputs.totalEquity - 200) < 0.005, `${d.inputs.totalEquity}`);
+  check("net profit margin", Math.abs((d.ratios.netProfitMargin ?? 0) - 0.1) < 1e-9);
+  check("asset turnover", Math.abs((d.ratios.assetTurnover ?? 0) - 3) < 1e-9);
+  check("financial leverage", Math.abs((d.ratios.financialLeverage ?? 0) - 2) < 1e-9);
+  const product =
+    (d.ratios.netProfitMargin ?? 0) * (d.ratios.assetTurnover ?? 0) * (d.ratios.financialLeverage ?? 0);
+  check(
+    "RoE = margin x turnover x leverage = NI / equity",
+    Math.abs(product - (d.ratios.returnOnEquity ?? 0)) < 1e-9 &&
+      Math.abs((d.ratios.returnOnEquity ?? 0) - 120 / 200) < 1e-9,
+    `${d.ratios.returnOnEquity}`,
+  );
 }
 
 console.log(

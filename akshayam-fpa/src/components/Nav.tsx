@@ -23,6 +23,7 @@ const SECTIONS = [
   { href: "/revenue", label: "Revenue" },
   { href: "/receivables", label: "Receivables" },
   { href: "/collections", label: "Collections" },
+  { href: "/dupont", label: "DuPont Analysis" },
 ];
 
 /**
