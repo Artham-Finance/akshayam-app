@@ -136,16 +136,14 @@ export function Nav({
       <div className="scroll-fade overflow-x-auto border-t border-line bg-navy-tint/40">
         <div className="mx-auto flex max-w-[1400px] items-stretch gap-2 px-3 sm:px-5">
           <div className="flex flex-col pr-1">
-            <span className="px-2 pt-1.5 text-[12px] font-bold uppercase tracking-[0.1em] text-navy">
-              &nbsp;
-            </span>
+            <span className="mx-2 my-1 px-2 py-0.5 text-[11px]">&nbsp;</span>
             <div className="flex">
               <Tab item={OVERVIEW} isActive={isActive} />
             </div>
           </div>
           {GROUPS.map((group) => (
             <div key={group.title} className="flex flex-col border-l border-navy-tint-strong pl-2">
-              <span className="whitespace-nowrap px-2 pt-1.5 text-[12px] font-bold uppercase tracking-[0.1em] text-navy">
+              <span className="mx-2 my-1 w-fit whitespace-nowrap rounded bg-navy px-2 py-0.5 text-[11px] font-bold uppercase tracking-[0.1em] text-ink-invert">
                 {group.title}
               </span>
               <div className="flex">
