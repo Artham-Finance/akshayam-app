@@ -15,6 +15,12 @@
  */
 import { composeBalanceSheet, type StatementResult } from "../src/lib/reports/compose";
 import { buildDuPont } from "../src/lib/reports/dupont";
+import {
+  rateAgeingDays,
+  rateBudgetAchievement,
+  rateContributionShare,
+  WEIGHTS,
+} from "../src/lib/reports/scorecard-rating";
 import { fyMonths } from "../src/lib/period";
 
 const months = fyMonths(2026);
@@ -260,6 +266,41 @@ console.log("\n== DuPont decomposition ==");
       Math.abs((d.ratios.returnOnEquity ?? 0) - 120 / 200) < 1e-9,
     `${d.ratios.returnOnEquity}`,
   );
+}
+
+/* ---------- Scorecard rating bands ---------- */
+console.log("\n== Scorecard rating bands ==");
+{
+  check("revenue achievement 100% -> 4", rateBudgetAchievement(1) === 4);
+  check("revenue achievement 82% -> 3", rateBudgetAchievement(0.82) === 3);
+  check("revenue achievement 75% -> 2", rateBudgetAchievement(0.75) === 2);
+  check("revenue achievement 41% -> 1", rateBudgetAchievement(0.41) === 1);
+  check("revenue achievement 30% -> 0", rateBudgetAchievement(0.3) === 0);
+  check("revenue achievement no budget -> 0", rateBudgetAchievement(null) === 0);
+
+  check("contribution 22% -> 4", rateContributionShare(0.22) === 4);
+  check("contribution 18% -> 3", rateContributionShare(0.18) === 3);
+  check("contribution 12% -> 2", rateContributionShare(0.12) === 2);
+  check("contribution 6% -> 1", rateContributionShare(0.06) === 1);
+  check("contribution 3% -> 0", rateContributionShare(0.03) === 0);
+  check("contribution negative -> 0", rateContributionShare(-0.1) === 0);
+
+  check("ageing 0 days (nothing outstanding) -> 4", rateAgeingDays(0) === 4);
+  check("ageing 40 days -> 3", rateAgeingDays(40) === 3);
+  check("ageing 50 days -> 2", rateAgeingDays(50) === 2);
+  check("ageing 100 days -> 1", rateAgeingDays(100) === 1);
+  check("ageing 200 days -> 0", rateAgeingDays(200) === 0);
+
+  const w = WEIGHTS;
+  check(
+    "weights sum to 1",
+    Math.abs(
+      w.revenue + w.collection + w.netRevContrib + w.netCollContrib + w.ageing + w.mgmt - 1,
+    ) < 1e-9,
+  );
+  // composite of straight 3s is 3
+  const c = 3 * (w.revenue + w.collection + w.netRevContrib + w.netCollContrib + w.ageing + w.mgmt);
+  check("composite of all-3 ratings is 3.0", Math.abs(c - 3) < 1e-9);
 }
 
 console.log(
