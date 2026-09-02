@@ -14,15 +14,37 @@ import type { Permission, Role } from "@/lib/auth/permissions";
  * through a menu to find the P&L.
  */
 
-const SECTIONS = [
-  { href: "/", label: "Overview" },
-  { href: "/pnl", label: "Profit & Loss" },
-  { href: "/balance-sheet", label: "Balance Sheet" },
-  { href: "/cash-flow", label: "Cash Flow" },
-  { href: "/budget-vs-actual", label: "Budget vs Actual" },
-  { href: "/revenue", label: "Revenue" },
-  { href: "/receivables", label: "Receivables" },
-  { href: "/collections", label: "Collections" },
+/**
+ * The tabs, grouped so the eye reads them as three jobs: what happened, why,
+ * and where. Overview stands on its own ahead of the groups.
+ */
+const OVERVIEW = { href: "/", label: "Overview" };
+
+const GROUPS: { title: string; items: { href: string; label: string }[] }[] = [
+  {
+    title: "Core Financials",
+    items: [
+      { href: "/balance-sheet", label: "Balance Sheet" },
+      { href: "/pnl", label: "Profit & Loss" },
+      { href: "/cash-flow", label: "Cash Flow" },
+    ],
+  },
+  {
+    title: "Analysis & Planning",
+    items: [
+      { href: "/budget-vs-actual", label: "Budget vs Actual" },
+      { href: "/dupont", label: "DuPont Analysis" },
+    ],
+  },
+  {
+    title: "Vertical Performance",
+    items: [
+      { href: "/revenue", label: "Revenue" },
+      { href: "/receivables", label: "Receivables" },
+      { href: "/collections", label: "Collections" },
+      { href: "/scorecard", label: "Vertical Performance Scorecard" },
+    ],
+  },
 ];
 
 /**
@@ -53,6 +75,7 @@ export function Nav({
     href === "/" ? pathname === "/" : pathname.startsWith(href);
 
   return (
+    <>
     <header className="no-print sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur">
       {/* On a phone the company picker drops to its own line rather than
           fighting the nav buttons for width. */}
@@ -110,29 +133,64 @@ export function Nav({
         </nav>
       </div>
 
-      <div className="scroll-fade overflow-x-auto border-t border-line">
-        <div className="mx-auto flex max-w-[1400px] gap-1 px-3 sm:px-5">
-          {SECTIONS.map((item) => {
-            const active = isActive(item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                aria-current={active ? "page" : undefined}
-                className={clsx(
-                  "relative whitespace-nowrap px-3 py-2.5 text-[13px] font-medium transition-colors",
-                  active ? "text-navy" : "text-ink-muted hover:text-ink",
-                )}
-              >
-                {item.label}
-                {active && (
-                  <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-navy" />
-                )}
-              </Link>
-            );
-          })}
+      <div className="scroll-fade overflow-x-auto border-t border-line bg-navy-tint/40">
+        <div className="mx-auto flex max-w-[1400px] items-stretch gap-2 px-3 sm:px-5">
+          <div className="flex flex-col pr-1">
+            <span className="mx-2 my-1 px-2 py-0.5 text-[11px]">&nbsp;</span>
+            <div className="flex">
+              <Tab item={OVERVIEW} isActive={isActive} />
+            </div>
+          </div>
+          {GROUPS.map((group) => (
+            <div key={group.title} className="flex flex-col border-l border-navy-tint-strong pl-2">
+              <span className="mx-2 my-1 w-fit whitespace-nowrap rounded bg-navy px-2 py-0.5 text-[11px] font-bold uppercase tracking-[0.1em] text-ink-invert">
+                {group.title}
+              </span>
+              <div className="flex">
+                {group.items.map((item) => (
+                  <Tab key={item.href} item={item} isActive={isActive} />
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </header>
+
+    <div className="no-print mx-auto max-w-[1400px] px-4 pt-3 sm:px-6">
+      <div className="rounded-card border border-navy-tint-strong bg-navy-tint px-4 py-2.5 text-[13px] leading-relaxed text-navy">
+        <span className="font-semibold">Core Financials</span> — what happened (statements)
+        <span className="mx-2 text-navy/40">|</span>
+        <span className="font-semibold">Analysis &amp; Planning</span> — why and how it
+        happened (analysis)
+        <span className="mx-2 text-navy/40">|</span>
+        <span className="font-semibold">Vertical Performance</span> — where it happened (by
+        vertical)
+      </div>
+    </div>
+    </>
+  );
+}
+
+function Tab({
+  item,
+  isActive,
+}: {
+  item: { href: string; label: string };
+  isActive: (href: string) => boolean;
+}) {
+  const active = isActive(item.href);
+  return (
+    <Link
+      href={item.href}
+      aria-current={active ? "page" : undefined}
+      className={clsx(
+        "relative whitespace-nowrap px-3 py-2.5 text-[13px] font-medium transition-colors",
+        active ? "text-navy" : "text-ink-muted hover:text-ink",
+      )}
+    >
+      {item.label}
+      {active && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-navy" />}
+    </Link>
   );
 }
