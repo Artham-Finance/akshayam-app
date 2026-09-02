@@ -159,11 +159,20 @@ export function Nav({
 
     <div className="no-print mx-auto max-w-[1400px] px-4 pt-3 sm:px-6">
       <div className="rounded-card border border-navy-tint-strong bg-navy-tint px-4 py-3 text-[13px] text-navy">
-        <p className="font-semibold">How the tabs are grouped</p>
-        <p className="mt-0.5 leading-relaxed opacity-90">
-          This structure separates what happened (statements) from why it happened (analysis)
-          and where it happened (by vertical).
-        </p>
+        <ul className="space-y-1 leading-relaxed">
+          <li>
+            <span className="font-semibold">Core Financials</span> — to understand what
+            happened (statements)
+          </li>
+          <li>
+            <span className="font-semibold">Analysis &amp; Planning</span> — why and how it
+            happened (analysis)
+          </li>
+          <li>
+            <span className="font-semibold">Vertical Performance</span> — where it happened
+            (by vertical)
+          </li>
+        </ul>
       </div>
     </div>
     </>
