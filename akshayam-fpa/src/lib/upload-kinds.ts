@@ -81,6 +81,15 @@ export const UPLOAD_KINDS: Omit<UploadKindInfo, "lastUpload">[] = [
     needsAsOf: false,
   },
   {
+    kind: "tds_26as",
+    title: "Form 26AS — TDS credits",
+    zohoPath: "Not a Zoho report — income tax portal → e-File → Income Tax Returns → View Form 26AS",
+    blurb:
+      "The income tax department's record of what customers deducted and deposited against the firm's PAN. Reconciled on the Receivables tab against the TDS receivable the books raise when an invoice is approved. Download the tax year as XLSX; re-uploading replaces the period rather than adding to it, which is what you want because the department revises entries as deductors file corrections.",
+    cadence: "Quarterly",
+    needsAsOf: false,
+  },
+  {
     kind: "ar_aging",
     title: "AR Aging Details",
     zohoPath: "Reports → Receivables → AR Aging Details",

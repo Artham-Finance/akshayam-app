@@ -85,7 +85,15 @@ console.log("\n== Trial balance ==");
   console.log(`   ${r.rows.length} accounts, debit ${r.totalDebit.toLocaleString("en-IN")}, credit ${r.totalCredit.toLocaleString("en-IN")}`);
   check("all accounts read, total row dropped", r.rows.length === 7, `${r.rows.length}`);
   check("trial balance ties", Math.abs(r.totalDebit - r.totalCredit) < 1);
-  check("no balancing warning raised", r.warnings.length === 0, r.warnings.join("; "));
+  // The fixture is a plain Debit/Credit trial balance with no Opening Balance
+  // column, so falling back to the movement figures - and saying so - is the
+  // correct behaviour. What must not appear is a warning that it does not tie.
+  check("basis fell back to movement", r.basis === "movement", r.basis);
+  check(
+    "no balancing warning raised",
+    !r.warnings.some((w) => /does not balance/i.test(w)),
+    r.warnings.join("; "),
+  );
 }
 
 /* ---------- invoices ---------- */

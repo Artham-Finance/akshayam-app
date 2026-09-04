@@ -7,6 +7,7 @@ import clsx from "clsx";
 const TABS = [
   { href: "/settings/accounts", label: "Account mapping" },
   { href: "/settings/verticals", label: "Verticals" },
+  { href: "/settings/tds-deductors", label: "TDS deductors" },
 ];
 
 /**
