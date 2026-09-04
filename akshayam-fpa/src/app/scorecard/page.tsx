@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import { SetupRequired } from "@/components/SetupRequired";
 import { Card, CardTitle, CompanyOnly, EmptyState, Notice, PageHeader } from "@/components/ui";
+import { RatingScaleCard } from "@/components/RatingScaleCard";
 import { getAvailableFinancialYears, getEntity } from "@/lib/entity";
 import { compactINR, money, percent } from "@/lib/format";
 import { fyBounds, fyLabel, fyMonths, fyStartYearOf, type QuarterNo } from "@/lib/period";
@@ -163,6 +164,8 @@ export default async function ScorecardPage({
               </div>
             </div>
           </Card>
+
+          <RatingScaleCard />
 
           {/* ---------- Ratings summary ---------- */}
           <Card padded={false} className="border-t-2 border-navy">
