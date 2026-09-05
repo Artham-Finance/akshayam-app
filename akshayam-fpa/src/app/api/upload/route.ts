@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { getEntity } from "@/lib/entity";
 import {
   commitArAging,
+  commitTds26as,
   commitBudget,
   commitCreditNotes,
   commitGeneralLedger,
@@ -19,6 +20,7 @@ import { parseGeneralLedger } from "@/lib/parse/gl";
 import { parseRetainers } from "@/lib/parse/retainers";
 import { parseArAging, parseCreditNotes, parseInvoices, parsePayments } from "@/lib/parse/sales";
 import { parseTrialBalance, type TbBasis } from "@/lib/parse/tb";
+import { parseForm26AS } from "@/lib/parse/tds26as";
 import { apiGuard } from "@/lib/auth/dal";
 
 export const runtime = "nodejs";
@@ -27,7 +29,7 @@ export const maxDuration = 300;
 
 const KINDS = [
   "gl", "opening_tb", "invoices", "payments", "ar_aging", "credit_notes", "retainers",
-  "budget",
+  "budget", "tds_26as",
 ] as const;
 type Kind = (typeof KINDS)[number];
 
@@ -229,6 +231,21 @@ export async function POST(request: Request) {
         summary = {
           period: [parsed.periodStart, parsed.periodEnd],
           verticals: [...parsed.verticals],
+        };
+        break;
+      }
+      case "tds_26as": {
+        const parsed = await parseForm26AS(bytes);
+        result = await commitTds26as(entity.id, parsed, meta);
+        warnings = parsed.warnings;
+        detected = parsed.detected;
+        summary = {
+          assessee: parsed.assesseeName,
+          pan: parsed.pan,
+          taxYear: parsed.taxYear,
+          updatedTill: parsed.updatedTill,
+          deductors: parsed.detected.deductors,
+          totalTaxDeducted: parsed.totalTaxDeducted,
         };
         break;
       }

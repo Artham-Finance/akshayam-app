@@ -130,6 +130,21 @@ export default async function UploadedFilesPage() {
                     canDelete={canDelete}
                   />,
                 ])}
+                /* What has been loaded in total: how many files, how many rows
+                   of data behind them, and how much disk the originals take. */
+                footer={[
+                  ...(entity.isGroup ? [""] : []),
+                  `Total — ${rows.length} file${rows.length === 1 ? "" : "s"}`,
+                  "",
+                  rows
+                    .reduce((t, r) => t + (r.row_count ?? 0), 0)
+                    .toLocaleString("en-IN"),
+                  "",
+                  "",
+                  "",
+                  fileSize(rows.reduce((t, r) => t + Number(r.byte_size ?? 0), 0)),
+                  "",
+                ]}
                 emptyMessage="Nothing uploaded yet."
               />
             </Card>

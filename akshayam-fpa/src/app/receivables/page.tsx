@@ -2,6 +2,7 @@ import Link from "next/link";
 import clsx from "clsx";
 import { Bar, DataTable, drillColumns, renderDrillRow } from "@/components/DataTable";
 import { CustomerPicker } from "@/components/CustomerPicker";
+import { TdsRecoSection } from "@/components/TdsRecoSection";
 import { PeriodControls } from "@/components/PeriodControls";
 import { SetupRequired } from "@/components/SetupRequired";
 import {
@@ -662,6 +663,15 @@ export default async function ReceivablesPage({
               ]}
             />
           </Card>
+
+          {/* The tax credit side of the same receivable: what customers
+              deducted, against what the books raised when the invoice went out. */}
+          <TdsRecoSection
+            entity={entity}
+            verticalId={verticalId}
+            customer={customer}
+            params={params}
+          />
 
           {snapshots.length > 1 && (
             <p className="text-[11.5px] text-ink-faint">

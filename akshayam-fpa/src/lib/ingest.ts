@@ -2,6 +2,8 @@ import type { PoolClient } from "pg";
 import { transaction } from "@/lib/db";
 import { suggestMapping } from "@/lib/mapping";
 import type { GlParseResult } from "@/lib/parse/gl";
+import type { Tds26asParseResult } from "@/lib/parse/tds26as";
+import { buildPartyMatcher } from "@/lib/reports/tds-match";
 import type { TbParseResult } from "@/lib/parse/tb";
 import type {
   ArParseResult,
@@ -1337,5 +1339,137 @@ export async function commitBudget(
       needsReview: parsed.entities.flatMap((e) => e.unmatched),
       loaded,
     };
+  });
+}
+
+/* ============================================================
+   Form 26AS / Form 168 - TDS credits per the income tax department
+   ============================================================ */
+
+/**
+ * Resolve every TDS line to a customer and a vertical.
+ *
+ * Run after an upload and again whenever a deductor alias is added, so a
+ * mapping made once is applied to statements already loaded. Deliberately a
+ * full re-resolve rather than an incremental one: it is a few hundred rows, and
+ * a partial pass would leave the report depending on the order things happened.
+ */
+export async function resolveTdsCustomers(
+  client: PoolClient,
+  entityId: number,
+): Promise<{ matched: number; total: number }> {
+  const [{ rows: deductors }, { rows: customerRows }, { rows: aliasRows }] = await Promise.all([
+    client.query<{ deductor_name: string }>(
+      "select distinct deductor_name from tds_entries where entity_id = $1",
+      [entityId],
+    ),
+    // Every name the firm has ever billed, been paid by, or is owed by.
+    client.query<{ customer_name: string }>(
+      `select distinct customer_name from (
+         select entity_id, customer_name from invoice_lines
+         union select entity_id, customer_name from ar_open_items
+         union select entity_id, customer_name from payments) x
+        where entity_id = $1 and customer_name is not null`,
+      [entityId],
+    ),
+    client.query<{ deductor_key: string; customer_name: string }>(
+      "select deductor_key, customer_name from tds_deductor_aliases where entity_id = $1",
+      [entityId],
+    ),
+  ]);
+
+  const match = buildPartyMatcher(
+    customerRows.map((r) => r.customer_name),
+    new Map(aliasRows.map((r) => [r.deductor_key, r.customer_name])),
+  );
+
+  /**
+   * The vertical a customer's work belongs to, by value of what they were
+   * billed. A customer served by two verticals is attributed to the larger:
+   * splitting a single TDS credit across verticals would invent a precision
+   * the deduction itself does not have.
+   */
+  const { rows: verticalRows } = await client.query<{ customer_name: string; vertical_id: number }>(
+    `select distinct on (customer_name) customer_name, vertical_id
+       from invoice_lines
+      where entity_id = $1 and vertical_id is not null
+      group by customer_name, vertical_id
+      order by customer_name, sum(amount_base) desc`,
+    [entityId],
+  );
+  const verticalByCustomer = new Map(verticalRows.map((r) => [r.customer_name, r.vertical_id]));
+
+  let matched = 0;
+  for (const { deductor_name } of deductors) {
+    const result = match(deductor_name);
+    if (result.customerName) matched++;
+    await client.query(
+      `update tds_entries
+          set customer_name = $3,
+              vertical_id   = $4
+        where entity_id = $1 and deductor_name = $2`,
+      [
+        entityId,
+        deductor_name,
+        result.customerName,
+        result.customerName ? (verticalByCustomer.get(result.customerName) ?? null) : null,
+      ],
+    );
+  }
+
+  return { matched, total: deductors.length };
+}
+
+export async function commitTds26as(
+  entityId: number,
+  parsed: Tds26asParseResult,
+  meta: FileMeta,
+): Promise<CommitResult> {
+  return transaction(async (client) => {
+    const dates = parsed.rows.map((r) => r.transactionDate).filter(Boolean).sort() as string[];
+    const periodStart = dates[0] ?? null;
+    const periodEnd = dates[dates.length - 1] ?? null;
+
+    const uploadId = await createUpload(
+      client, entityId, "tds_26as", meta, periodStart, periodEnd, parsed.rows.length,
+      {
+        detected: parsed.detected,
+        warnings: parsed.warnings,
+        pan: parsed.pan,
+        taxYear: parsed.taxYear,
+        updatedTill: parsed.updatedTill,
+        totalTaxDeducted: parsed.totalTaxDeducted,
+      },
+    );
+
+    // A 26AS download is a restatement of the whole period, not an addition to
+    // it: the department revises entries as deductors file corrections.
+    if (periodStart && periodEnd) {
+      await client.query(
+        "delete from tds_entries where entity_id = $1 and transaction_date between $2 and $3 and upload_id <> $4",
+        [entityId, periodStart, periodEnd, uploadId],
+      );
+    }
+
+    const rowsInserted = await bulkInsert(
+      client,
+      "tds_entries",
+      [
+        "entity_id", "upload_id", "deductor_name", "tan", "deductor_pan", "section",
+        "transaction_date", "booking_status", "booking_date", "amount_credited",
+        "tax_deducted", "tds_deposited", "tax_year", "updated_till",
+      ],
+      parsed.rows.map((row) => [
+        entityId, uploadId, row.deductorName, row.tan, row.deductorPan, row.section,
+        row.transactionDate, row.bookingStatus, row.bookingDate, row.amountCredited,
+        row.taxDeducted, row.tdsDeposited, parsed.taxYear, parsed.updatedTill,
+      ]),
+    );
+
+    const { matched, total } = await resolveTdsCustomers(client, entityId);
+    const needsReview =
+      matched < total ? [`${total - matched} deductor(s) could not be matched to a customer`] : [];
+
+    return { uploadId, rowsInserted, newAccounts: [], newVerticals: [], needsReview };
   });
 }
