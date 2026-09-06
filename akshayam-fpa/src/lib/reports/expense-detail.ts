@@ -35,6 +35,14 @@ export interface ExpenseDetailLine {
   label: string;
   /** true where the head has no breakdown and stands as its own line */
   isHeadOnly: boolean;
+  /** a line the budget never carries — actual is captured, budget stays nil */
+  isActualOnly?: boolean;
+  /** actual comes straight from the ledger, not from keyed entries — read-only */
+  isLedger?: boolean;
+  /** actual is a deduction: it subtracts from the Other-expenses total */
+  isDeduction?: boolean;
+  /** small caption under the label, e.g. what an abbreviation stands for */
+  hint?: string;
   sortOrder: number;
   budget: number;
   /** the bills recorded against this line, newest first */
@@ -73,7 +81,7 @@ export async function buildExpenseDetail(opts: {
   const start = periodMonths[0].start;
   const end = periodMonths[periodMonths.length - 1].end;
 
-  const [budgetRows, entryRows, ledgerRows, statementRows, vendorRows] = await Promise.all([
+  const [budgetRows, entryRows, ledgerRows, statementRows, vendorRows, reimbRows] = await Promise.all([
     query<{ head: string; label: string; sort_order: number; amount: number }>(
       `select head, label, min(sort_order) as sort_order, sum(amount) as amount
          from expense_budget_lines
@@ -146,6 +154,24 @@ export async function buildExpenseDetail(opts: {
        ) v order by vendor`,
       [entity.id, entity.memberIds, POOL_GROUPS],
     ),
+    /**
+     * Reimbursements, straight from the ledger, split into the two sides the
+     * breakdown shows as their own lines. The reimbursements group holds one
+     * income account and one expense account; the name is what tells them
+     * apart. Debit-positive for the expense, credit-positive for the income -
+     * each read in its own natural direction.
+     */
+    query<{ expense: number; income: number }>(
+      `select
+         coalesce(sum(g.debit - g.credit) filter (where a.name not ilike '%income%'), 0)::numeric as expense,
+         coalesce(sum(g.credit - g.debit) filter (where a.name ilike '%income%'), 0)::numeric as income
+         from gl_entries g
+         join accounts a on a.id = g.account_id
+        where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
+          and a.statement = 'pnl' and a.group_code = 'reimbursements'
+          and not ($4::boolean and a.is_intercompany)`,
+      [entity.memberIds, start, end, entity.consolidates],
+    ),
   ]);
 
   const entriesByLine = new Map<string, ExpenseEntry[]>();
@@ -184,16 +210,89 @@ export async function buildExpenseDetail(opts: {
     };
   });
 
+  /**
+   * Lines the planning workbook never carries, added here so they survive a
+   * budget re-upload (which wipes and rebuilds every row above from the sheet).
+   * None has a budget:
+   *
+   *  - Misc (Others): bad debts, other income and anything with no budget head.
+   *    Keyed by hand like any bill, at the foot of the Other Expenses breakdown.
+   *  - RE less RI: reimbursement expenses and, under them, reimbursement income
+   *    as a deduction. These two come straight from the ledger, month by month —
+   *    the reimbursements group is a clean pair of accounts, so unlike the
+   *    budget heads there is nothing to mis-match. Read-only.
+   */
+  const actualOnly = (
+    head: string,
+    label: string,
+    opts: { isHeadOnly?: boolean; hint?: string; isDeduction?: boolean; sortOrder: number },
+  ): ExpenseDetailLine => {
+    const entries = entriesByLine.get(`${head}|${label}`) ?? [];
+    const actual = entries.reduce((s, e) => s + e.amount, 0);
+    const signed = opts.isDeduction ? -actual : actual;
+    return {
+      head,
+      label,
+      isHeadOnly: opts.isHeadOnly ?? false,
+      isActualOnly: true,
+      isDeduction: opts.isDeduction,
+      hint: opts.hint,
+      sortOrder: opts.sortOrder,
+      budget: 0,
+      entries,
+      actual,
+      // No budget to vary from; the sign only matters where it feeds the total.
+      variance: -signed,
+    };
+  };
+
+  const lastOther = lines.map((l) => l.head).lastIndexOf("Other Expenses");
+  const misc = actualOnly("Other Expenses", "Misc (Others)", {
+    isHeadOnly: lastOther < 0,
+    hint: "Bad debts, other income and anything with no budget line",
+    sortOrder: lastOther >= 0 ? lines[lastOther].sortOrder + 1 : 9_000,
+  });
+  if (lastOther >= 0) lines.splice(lastOther + 1, 0, misc);
+  else lines.push(misc);
+
+  const reimb = reimbRows[0] ?? { expense: 0, income: 0 };
+  const fromLedger = (
+    label: string,
+    actual: number,
+    opts: { isDeduction?: boolean; sortOrder: number },
+  ): ExpenseDetailLine => ({
+    head: "RE less RI",
+    label,
+    isHeadOnly: false,
+    isActualOnly: true,
+    isLedger: true,
+    isDeduction: opts.isDeduction,
+    sortOrder: opts.sortOrder,
+    budget: 0,
+    entries: [],
+    actual,
+    variance: -(opts.isDeduction ? -actual : actual),
+  });
+
+  lines.push(
+    fromLedger("Reimbursement expenses", Number(reimb.expense), { sortOrder: 9_998 }),
+    fromLedger("Less - Reimbursement income", Number(reimb.income), {
+      isDeduction: true,
+      sortOrder: 9_999,
+    }),
+  );
+
   const sum = (pick: (l: ExpenseDetailLine) => number) =>
     lines.reduce((s, l) => s + pick(l), 0);
+  const signedActual = (l: ExpenseDetailLine) => (l.isDeduction ? -l.actual : l.actual);
 
   return {
-    hasDetail: budgetRows.length > 0,
+    hasDetail: lines.length > 0,
     lines,
     totals: {
       budget: sum((l) => l.budget),
-      actual: sum((l) => l.actual),
-      variance: sum((l) => l.variance),
+      actual: sum(signedActual),
+      variance: sum((l) => l.budget - signedActual(l)),
     },
     statement: {
       budget: Number(statementRows[0]?.amount ?? 0),
