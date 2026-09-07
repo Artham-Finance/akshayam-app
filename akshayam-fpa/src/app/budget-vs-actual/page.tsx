@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { BvaStatement } from "@/components/BvaTable";
 import { ExpenseDetailTable } from "@/components/ExpenseDetailTable";
+import { TeamCostTable } from "@/components/TeamCostTable";
 import { BvaControls } from "@/components/BvaControls";
 import { SetupRequired } from "@/components/SetupRequired";
 import {
@@ -22,6 +23,7 @@ import { fyLabel, fyMonths, type QuarterNo } from "@/lib/period";
 import { ledgerAsOfLabel, ledgerWrittenTo } from "@/lib/reporting-period";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
 import { buildExpenseDetail } from "@/lib/reports/expense-detail";
+import { buildTeamCost } from "@/lib/reports/team-cost";
 import { requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
@@ -48,14 +50,11 @@ export default async function BudgetVsActualPage({
 
   try {
     const entity = await getEntity();
-    if (entity.verticalIds) {
-      return (
-        <>
-          <PageHeader title="Budget vs Actual" />
-          <CompanyOnly what="The budgeted P&L" slice companies={entity.memberIds.length} />
-        </>
-      );
-    }
+    // A slice (RAJA, or one vertical on its own) has no budgeted P&L of its
+    // own, so the statement and the Other-expenses breakdown are held back and
+    // a note stands in their place. The Team cost card still shows: its budget
+    // is hard-coded per vertical, so it works for any cut of the verticals.
+    const isSlice = entity.verticalIds !== null;
 
     const availableYears = await getAvailableFinancialYears(entity.memberIds);
     if (availableYears.length === 0) {
@@ -83,7 +82,7 @@ export default async function BudgetVsActualPage({
 
     const [verticals, statement, writtenTo] = await Promise.all([
       getVerticals(entity),
-      buildBudgetVsActualPnl({ entity, fyStartYear: fy }),
+      isSlice ? null : buildBudgetVsActualPnl({ entity, fyStartYear: fy }),
       ledgerWrittenTo(entity.memberIds, fy),
     ]);
 
@@ -117,21 +116,30 @@ export default async function BudgetVsActualPage({
     }
 
     /**
-     * The breakdown behind Other expenses, for the same period as the
-     * statement. A correction belongs to the month the cost landed in, so the
-     * table is editable only when the period is a single month.
+     * The statement's own Team cost budget, for the period on screen and for
+     * the whole year. The breakdown card prorates its hard-coded annual budget
+     * on the same curve, so the card total ties to the "Team cost" line above.
+     * A slice has no statement, so the card falls back to an even spread.
      */
-    const expenseDetail = await buildExpenseDetail({
-      entity,
-      fyStartYear: fy,
-      periodMonths,
-    });
+    const teamCostLine = statement?.lines.find((l) => l.code === "direct_cost");
+    const budgetOver = (ms: typeof months) =>
+      ms.reduce((s, m) => s + (teamCostLine?.budget[m.key] ?? 0), 0);
+
+    const [expenseDetail, teamCost] = await Promise.all([
+      isSlice ? null : buildExpenseDetail({ entity, fyStartYear: fy, periodMonths }),
+      buildTeamCost({
+        entity,
+        fyStartYear: fy,
+        periodMonths,
+        statementBudget: { period: budgetOver(periodMonths), annual: budgetOver(months) },
+      }),
+    ]);
     const editableMonth = periodMonths.length === 1 ? `${periodMonths[0].key}-01` : null;
 
     // Lines the budget carries but the ledger has not yet posted. Depreciation
     // and tax land at audit and drawings may be booked to the balance sheet, so
     // an empty actual is a timing difference, not a saving.
-    const notYetPosted = statement.lines
+    const notYetPosted = (statement?.lines ?? [])
       .filter(
         (l) =>
           !l.isSubtotal &&
@@ -155,23 +163,33 @@ export default async function BudgetVsActualPage({
                 months={closed.map((m) => ({ value: m.key, label: m.label }))}
                 current={pick}
               />
-              <DownloadExcel
-                href={withParams("/api/export", params, {
-                  kind: "budget-vs-actual",
-                  fy,
-                  vertical: null,
-                  drill: null,
-                  period: null,
-                  week: null,
-                  month: null,
-                })}
-              />
+              {!isSlice && (
+                <DownloadExcel
+                  href={withParams("/api/export", params, {
+                    kind: "budget-vs-actual",
+                    fy,
+                    vertical: null,
+                    drill: null,
+                    period: null,
+                    week: null,
+                    month: null,
+                  })}
+                />
+              )}
             </>
           }
         />
 
         <div className="space-y-4">
-          {!statement.hasBudget && (
+          {isSlice && (
+            <CompanyOnly
+              what="The budgeted P&L"
+              slice
+              companies={entity.memberIds.length}
+            />
+          )}
+
+          {!isSlice && statement && !statement.hasBudget && (
             <Notice
               tone="caution"
               title="No budget loaded for this year"
@@ -196,25 +214,34 @@ export default async function BudgetVsActualPage({
               title={`${notYetPosted.join(", ")} not yet in the ledger`}
             >
               Budgeted for the period but nothing posted. Depreciation and tax
-              are charged once a year at audit, and partners&rsquo; drawings may
-              be taken against the balance sheet rather than the P&amp;L — so
-              the variance on those lines is timing, not a saving. EBITDA is
-              unaffected.
+              are charged once a year at audit — so the variance on those lines
+              is timing, not a saving. EBITDA is unaffected.
             </Notice>
           )}
 
-          <Card padded={false}>
-            <div className="px-4 pt-4 sm:px-5">
-              <CardTitle hint={periodLabel}>Budget vs actual</CardTitle>
-            </div>
-            <BvaStatement
-              lines={statement.lines}
-              months={months}
-              periodMonths={periodMonths}
-            />
-          </Card>
+          {!isSlice && statement && (
+            <Card padded={false}>
+              <div className="px-4 pt-4 sm:px-5">
+                <CardTitle hint={periodLabel}>Budget vs actual</CardTitle>
+              </div>
+              <BvaStatement
+                lines={statement.lines}
+                months={months}
+                periodMonths={periodMonths}
+              />
+            </Card>
+          )}
 
-          {expenseDetail.hasDetail && (
+          {teamCost.hasData && (
+            <Card padded={false}>
+              <div className="px-4 pt-4 sm:px-5">
+                <CardTitle hint={periodLabel}>Team cost — budget vs actual</CardTitle>
+              </div>
+              <TeamCostTable result={teamCost} periodLabel={periodLabel} />
+            </Card>
+          )}
+
+          {!isSlice && expenseDetail?.hasDetail && (
             <Card padded={false}>
               <div className="px-4 pt-4 sm:px-5">
                 <CardTitle
@@ -253,7 +280,7 @@ export default async function BudgetVsActualPage({
             </Card>
           )}
 
-          {verticals.length > 0 && (
+          {!isSlice && verticals.length > 0 && (
             <Notice tone="info">
               Every figure here is the whole company. The Profit &amp; Loss page
               takes a vertical picker if you want one line of business on its

@@ -190,6 +190,16 @@ export async function buildBudgetVsActualPnl(opts: {
     line.budget[row.month_key] += Number(row.amount);
   }
 
+  /**
+   * Partners take their budgeted draw every month. It is a balance-sheet
+   * movement, not a P&L cost, so the ledger's P&L never carries it and the
+   * actual would otherwise read nil against a real budget - a variance that is
+   * only ever "not booked here". The firm's convention is that the draw is
+   * taken as planned, so the actual follows the budget, month by month.
+   */
+  const drawings = byCode.get("partner_drawings")!;
+  for (const m of months) drawings.actual[m.key] = drawings.budget[m.key];
+
   for (const spec of LAYOUT) {
     if (!spec.subtotalOf) continue;
     const target = byCode.get(spec.code)!;
