@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useId, useState, useTransition } from "react";
 import clsx from "clsx";
-import { money } from "@/lib/format";
+import { money, moneySigned } from "@/lib/format";
 import type { ExpenseDetailLine, ExpenseEntry } from "@/lib/reports/expense-detail";
 
 /**
@@ -39,11 +39,15 @@ export function ExpenseDetailTable({
   const vendorListId = useId();
 
   const totals = lines.reduce(
-    (acc, l) => ({
-      budget: acc.budget + l.budget,
-      actual: acc.actual + l.actual,
-      variance: acc.variance + l.variance,
-    }),
+    (acc, l) => {
+      // A deduction line (reimbursement income) subtracts from the total.
+      const actual = l.isDeduction ? -l.actual : l.actual;
+      return {
+        budget: acc.budget + l.budget,
+        actual: acc.actual + actual,
+        variance: acc.variance + (l.budget - actual),
+      };
+    },
     { budget: 0, actual: 0, variance: 0 },
   );
 
@@ -107,8 +111,13 @@ export function ExpenseDetailTable({
             <td className="num border-y border-line-strong px-3 py-2 text-right">
               {money(totals.budget)}
             </td>
-            <td className="num border-y border-line-strong px-3 py-2 text-right">
-              {money(totals.actual)}
+            <td
+              className={clsx(
+                "num border-y border-line-strong px-3 py-2 text-right",
+                totals.actual < 0 && "text-negative",
+              )}
+            >
+              {moneySigned(totals.actual)}
             </td>
             <td
               className={clsx(
@@ -116,7 +125,7 @@ export function ExpenseDetailTable({
                 totals.variance < 0 ? "text-negative" : "text-positive",
               )}
             >
-              {money(totals.variance)}
+              {moneySigned(totals.variance)}
             </td>
             <td className="border-y border-line-strong px-3 py-2" />
           </tr>
@@ -161,30 +170,47 @@ function ExpenseRow({
           className={clsx(cell, "text-left font-normal text-ink", !line.isHeadOnly && "pl-6")}
         >
           {line.label}
+          {line.hint && (
+            <span className="mt-0.5 block text-[11px] font-normal normal-case tracking-normal text-ink-faint">
+              {line.hint}
+            </span>
+          )}
         </th>
-        <td className={clsx(cell, "num text-right")}>{money(line.budget)}</td>
-        <td className={clsx(cell, "num text-right text-ink")}>{money(line.actual)}</td>
+        <td className={clsx(cell, "num text-right", line.isActualOnly && "text-ink-faint")}>
+          {line.isActualOnly ? "—" : money(line.budget)}
+        </td>
+        <td className={clsx(cell, "num text-right text-ink")}>
+          {line.isLedger ? moneySigned(line.actual) : money(line.actual)}
+        </td>
         <td
           className={clsx(
             cell,
             "num text-right",
-            line.variance < 0 ? "text-negative" : "text-ink-muted",
+            line.isActualOnly
+              ? "text-ink-faint"
+              : line.variance < 0
+                ? "text-negative"
+                : "text-ink-muted",
           )}
         >
-          {money(line.variance)}
+          {line.isActualOnly ? "—" : money(line.variance)}
         </td>
         <td className={clsx(cell, "text-right")}>
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            className="rounded-md border border-line px-2 py-0.5 text-[11.5px] font-medium text-ink-muted hover:bg-surface-sunk"
-          >
-            {line.entries.length > 0 ? `${line.entries.length} · ` : ""}
-            {open ? "Close" : month ? "Open" : "View"}
-          </button>
+          {line.isLedger ? (
+            <span className="text-[11px] uppercase tracking-[0.08em] text-ink-faint">Ledger</span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setOpen((v) => !v)}
+              className="rounded-md border border-line px-2 py-0.5 text-[11.5px] font-medium text-ink-muted hover:bg-surface-sunk"
+            >
+              {line.entries.length > 0 ? `${line.entries.length} · ` : ""}
+              {open ? "Close" : month ? "Open" : "View"}
+            </button>
+          )}
         </td>
       </tr>
-      {open && (
+      {open && !line.isLedger && (
         <tr>
           <td colSpan={5} className="border-b border-line bg-surface-sunk/30 px-3 py-3 sm:px-6">
             <EntryPanel

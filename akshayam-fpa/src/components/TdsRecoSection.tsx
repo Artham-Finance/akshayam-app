@@ -75,6 +75,10 @@ export async function TdsRecoSection({
       ? segParam
       : null;
 
+  /* The Unallocated vertical has no id to filter the page by, so it opens
+     its own panel instead of behaving like the other vertical links. */
+  const showUnallocated = params.tdsVert === "unallocated";
+
   const drillCustomer = typeof params.tds === "string" ? params.tds : null;
   const sideParam = typeof params.tdsSide === "string" ? params.tdsSide : "books";
   const side: TdsDrillSide =
@@ -127,8 +131,10 @@ export async function TdsRecoSection({
                 {l.ledger} <span className="num text-ink-muted">{money(l.amount)}</span>
               </span>
             ))}
-            . Excluded: TDS Payable, which is tax the firm deducted from its own vendors, and
-            GST TDS on CGST/SGST, which is reported in GSTR-2A and never appears in Form 26AS.
+            . Excluded: TDS Payable, which is tax the firm deducted from its own vendors; GST
+            TDS on CGST/SGST, which is reported in GSTR-2A and never appears in Form 26AS; and
+            the FY 2025-26 customer ledgers (TDS-2526-…), whose credit belongs to the prior
+            year&rsquo;s statement.
           </p>
         )}
 
@@ -322,7 +328,20 @@ export async function TdsRecoSection({
                 {v.label}
               </Link>
             ) : (
-              <span key={v.key}>{v.label}</span>
+              <Link
+                key={v.key}
+                href={withParams("/receivables", params, {
+                  tdsVert: showUnallocated ? null : "unallocated",
+                  tds: null,
+                  tdsSide: null,
+                })}
+                className={clsx(
+                  "hover:underline",
+                  showUnallocated ? "font-semibold text-navy" : "text-navy",
+                )}
+              >
+                {v.label}
+              </Link>
             ),
             money(v.books),
             money(v.form26as),
@@ -335,6 +354,45 @@ export async function TdsRecoSection({
             moneySigned(reco.totals.difference),
           ]}
         />
+
+        {showUnallocated && (
+          <div className="px-4 pb-4 sm:px-5">
+            <DrillPanel
+              title="Unallocated — TDS with no vertical"
+              subtitle={
+                "A customer lands here when no invoice in the period tells us which vertical " +
+                "served them. On the 26AS side that is usually a deductor whose name is not yet " +
+                "matched to a customer; on the books side, a TDS line whose invoice number does " +
+                "not join the invoice register."
+              }
+              closeHref={withParams("/receivables", params, { tdsVert: null })}
+              shown={reco.unallocated.length}
+              total={reco.unallocated.length}
+            >
+              <DataTable
+                emptyMessage="Nothing unallocated."
+                columns={[
+                  { header: "Customer" },
+                  { header: "Per books", numeric: true },
+                  { header: "Per 26AS", numeric: true },
+                  { header: "Difference", numeric: true, strong: true },
+                ]}
+                rows={reco.unallocated.map((r) => [
+                  r.label,
+                  r.books ? money(r.books) : "—",
+                  r.form26as ? money(r.form26as) : "—",
+                  <DiffCell key={`u-${r.key}`} value={r.difference} />,
+                ])}
+                footer={[
+                  `Total — ${reco.unallocated.length} customer${reco.unallocated.length === 1 ? "" : "s"}`,
+                  money(reco.unallocated.reduce((s, r) => s + r.books, 0)),
+                  money(reco.unallocated.reduce((s, r) => s + r.form26as, 0)),
+                  moneySigned(reco.unallocated.reduce((s, r) => s + r.difference, 0)),
+                ]}
+              />
+            </DrillPanel>
+          </div>
+        )}
       </div>
 
       <div className="border-t border-line">

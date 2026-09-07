@@ -35,12 +35,19 @@ import { verticalScope, type Entity } from "@/lib/entity";
  *                        in GSTR-2A/2B and never appears in Form 26AS, which is
  *                        an income-tax statement, so setting it against 26AS
  *                        compares two different taxes.
+ *   TDS-2526-<CUSTOMER>  a customer ledger for FY 2025-26. The credit belongs
+ *                        to the prior year's Form 26AS, not this one, so it is
+ *                        left out rather than set against a statement that will
+ *                        never carry it. Only the year-tagged prior-year ledgers
+ *                        are dropped - the general "TDS Receivable" and the
+ *                        current-year "TDS-2627-<CUSTOMER>" ledgers stay.
  */
 const TDS_ACCOUNTS = `
   a.name ~* '^\\s*TDS'
   and a.name !~* 'payable'
   and a.name !~* '(c|s|i)gst'
-  and coalesce(a.group_code, '') <> 'other_liab'`;
+  and coalesce(a.group_code, '') <> 'other_liab'
+  and a.name !~* '^\\s*TDS\\s*[-_ ]*\\s*(2526|25\\s*-\\s*26)([^0-9]|$)'`;
 
 /**
  * The customer a books-side TDS line belongs to.
@@ -51,9 +58,25 @@ const TDS_ACCOUNTS = `
 const BOOKS_CUSTOMER = `
   coalesce(
     inv.customer_name,
-    nullif(btrim(regexp_replace(a.name,
-      '^\\s*TDS\\s*[-_ ]*\\s*(26\\s*-?\\s*27|2627|26\\s*-?\\s*27)?\\s*[-_ ]*\\s*', '', 'i')), ''),
-    nullif(btrim(g.description), '')
+    nullif(btrim(g.description), ''),
+    /*
+      A customer-specific ledger names its customer after "TDS" and a financial
+      year: "TDS-2627-ANICUT CAPITAL", "TDS - 2526 - AK Law Chambers". The year
+      is stripped for any year, not just the current one - leaving "2526-" on
+      the front makes the name match nothing and strands the credit in
+      Unallocated. What remains is only a customer name if something is left of
+      it: the generic "TDS Receivable" ledger reduces to "Receivable", which is
+      a ledger, not a party.
+    */
+    nullif(
+      case
+        when lower(btrim(regexp_replace(a.name,
+               '^\\s*TDS\\s*[-_ ]*\\s*((\\d{2}\\s*-\\s*\\d{2})|(\\d{4}))?\\s*[-_ ]*\\s*', '', 'i')))
+             in ('receivable', 'receivables', 'recoverable', 'receivable a/c', '')
+        then null
+        else btrim(regexp_replace(a.name,
+               '^\\s*TDS\\s*[-_ ]*\\s*((\\d{2}\\s*-\\s*\\d{2})|(\\d{4}))?\\s*[-_ ]*\\s*', '', 'i'))
+      end, '')
   )`;
 
 /**
@@ -128,6 +151,13 @@ export interface TdsReco {
   /** the ledgers making up the books figure, largest first */
   ledgers: TdsLedgerBasis[];
   unmatchedDeductors: TdsUnmatchedDeductor[];
+  /**
+   * The customers behind the "Unallocated" vertical line - TDS on either side
+   * that no vertical could be attributed to. Kept at the customer-and-vertical
+   * grain the vertical table is built from, so it foots to that row rather
+   * than to the customer table, which groups differently.
+   */
+  unallocated: TdsRecoRow[];
   /** books-side TDS that could not be tied to a customer name at all */
   booksUnattributed: number;
   hasData: boolean;
@@ -161,6 +191,7 @@ export async function buildTdsReco({ entity, verticalId, customer }: Scope): Pro
       byCustomer: [],
       byVertical: [],
       segments: [],
+      unallocated: [],
       ledgers: [],
       unmatchedDeductors: [],
       booksUnattributed: 0,
@@ -283,6 +314,21 @@ export async function buildTdsReco({ entity, verticalId, customer }: Scope): Pro
     }))
     .sort((a, b) => Math.abs(b.difference) - Math.abs(a.difference) || b.form26as - a.form26as);
 
+  /* The Unallocated vertical line, opened up by customer. */
+  const unallocatedByCustomer = new Map<string, TdsRecoRow>();
+  for (const row of byCustomerVertical) {
+    if (row.verticalId !== null) continue;
+    const existing = unallocatedByCustomer.get(row.label);
+    if (existing) {
+      existing.books += row.books;
+      existing.form26as += row.form26as;
+      existing.difference += row.difference;
+      existing.segment = tdsSegmentOf(existing.books, existing.form26as);
+    } else {
+      unallocatedByCustomer.set(row.label, { ...row, key: row.label });
+    }
+  }
+
   const verticalTotals = new Map<string, TdsRecoRow>();
   for (const row of byCustomerVertical) {
     const key = row.verticalCode ?? "(none)";
@@ -387,6 +433,9 @@ export async function buildTdsReco({ entity, verticalId, customer }: Scope): Pro
       amount: Number(r.amount),
       lines: r.lines,
     })),
+    unallocated: [...unallocatedByCustomer.values()].sort(
+      (x, y) => Math.abs(y.difference) - Math.abs(x.difference) || y.form26as - x.form26as,
+    ),
     byVertical: [...verticalTotals.values()].sort(
       (a, b) => Math.abs(b.difference) - Math.abs(a.difference),
     ),
