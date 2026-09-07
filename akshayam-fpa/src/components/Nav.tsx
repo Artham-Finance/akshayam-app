@@ -30,7 +30,7 @@ const GROUPS: { title: string; items: { href: string; label: string }[] }[] = [
     ],
   },
   {
-    title: "Analysis & Planning",
+    title: "Financial Planning & Analysis",
     items: [
       { href: "/budget-vs-actual", label: "Budget vs Actual" },
       { href: "/dupont", label: "DuPont Analysis" },
@@ -161,8 +161,8 @@ export function Nav({
       <div className="rounded-card border border-navy-tint-strong bg-navy-tint px-4 py-2.5 text-[13px] leading-relaxed text-navy">
         <span className="font-semibold">Core Financials</span> — what happened (statements)
         <span className="mx-2 text-navy/40">|</span>
-        <span className="font-semibold">Analysis &amp; Planning</span> — why and how it
-        happened (analysis)
+        <span className="font-semibold">Financial Planning &amp; Analysis</span> — why and
+        how it happened (analysis)
         <span className="mx-2 text-navy/40">|</span>
         <span className="font-semibold">Vertical Performance</span> — where it happened (by
         vertical)
