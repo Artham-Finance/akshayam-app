@@ -1,5 +1,5 @@
 import type { Entity } from "@/lib/entity";
-import { fyLabel, fyMonths, groupByQuarter, quarterLabel } from "@/lib/period";
+import { fyLabel, fyMonths, groupByQuarter, quarterLabel, type FyMonth } from "@/lib/period";
 import { buildApportionment } from "@/lib/reports/apportionment";
 import { BASIS_LABEL, HEAD_BASIS } from "@/lib/reports/apportionment";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
@@ -110,14 +110,31 @@ export async function buildStatementWorkbook(opts: {
   fyStartYear: number;
   verticalId?: number | null;
   verticalName?: string | null;
+  /** the reporting-period window, when it is a sub-year range */
+  window?: { start: string; end: string };
+  /** balance-sheet "as of" date */
+  asOf?: string;
+  /** the whole months the period touches - the columns of the BvA sheet */
+  periodMonths?: FyMonth[];
+  /** the period's human label, for the sheet's context line */
+  periodLabel?: string;
 }) {
-  const { kind, entity, fyStartYear, verticalId = null, verticalName = null } = opts;
+  const {
+    kind,
+    entity,
+    fyStartYear,
+    verticalId = null,
+    verticalName = null,
+    window,
+    asOf,
+    periodLabel,
+  } = opts;
   const workbook = createWorkbook();
-  const context = [entity.name, fyLabel(fyStartYear)];
+  const context = [entity.name, periodLabel ?? fyLabel(fyStartYear)];
   if (verticalName) context.push(verticalName);
 
   if (kind === "pnl") {
-    const statement = await buildProfitAndLoss({ entity, fyStartYear, verticalId });
+    const statement = await buildProfitAndLoss({ entity, fyStartYear, verticalId, window });
     addSheet(workbook, {
       ...statementSheet(statement, {
         name: "Profit and Loss",
@@ -130,7 +147,7 @@ export async function buildStatementWorkbook(opts: {
   }
 
   if (kind === "balance-sheet") {
-    const statement = await buildBalanceSheet({ entity, fyStartYear });
+    const statement = await buildBalanceSheet({ entity, fyStartYear, asOf });
     addSheet(workbook, {
       ...statementSheet(statement, {
         name: "Balance Sheet",
@@ -143,7 +160,7 @@ export async function buildStatementWorkbook(opts: {
   }
 
   if (kind === "cash-flow") {
-    const statement = await buildCashFlow({ entity, fyStartYear });
+    const statement = await buildCashFlow({ entity, fyStartYear, window });
     addSheet(workbook, {
       ...statementSheet(statement, {
         name: "Cash Flow",
@@ -164,8 +181,8 @@ export async function buildStatementWorkbook(opts: {
 
   // ---------- budget vs actual: three sheets ----------
 
-  const months = fyMonths(fyStartYear);
-  const statement = await buildBudgetVsActualPnl({ entity, fyStartYear, verticalId });
+  const months = opts.periodMonths ?? fyMonths(fyStartYear);
+  const statement = await buildBudgetVsActualPnl({ entity, fyStartYear, verticalId, window });
 
   addSheet(workbook, {
     name: "Budget vs Actual",

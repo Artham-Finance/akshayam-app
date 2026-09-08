@@ -1,4 +1,3 @@
-import { PeriodControls } from "@/components/PeriodControls";
 import { SetupRequired } from "@/components/SetupRequired";
 import {
   Card,
@@ -10,8 +9,11 @@ import {
 } from "@/components/ui";
 import { getAvailableFinancialYears, getEntity } from "@/lib/entity";
 import { compactINR, dateLabel, money, percent } from "@/lib/format";
-import { fyBounds, fyLabel, fyStartYearOf, monthsElapsed } from "@/lib/period";
-import { ledgerAsOfLabel, ledgerWrittenTo } from "@/lib/reporting-period";
+import {
+  getReportingPeriod,
+  ledgerAsOfLabel,
+  ledgerWrittenTo,
+} from "@/lib/reporting-period";
 import { buildDuPont } from "@/lib/reports/dupont";
 import { buildBalanceSheet, buildProfitAndLoss } from "@/lib/reports/statements";
 import { requireEntityAccess } from "@/lib/auth/dal";
@@ -28,13 +30,8 @@ export const dynamic = "force-dynamic";
  * Assets and Equity are the balance sheet's closing position. A whole-company
  * statement - a slice has no balance sheet to strike leverage against.
  */
-export default async function DuPontPage({
-  searchParams,
-}: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
+export default async function DuPontPage() {
   await requireEntityAccess();
-  const params = await searchParams;
 
   try {
     const entity = await getEntity();
@@ -61,20 +58,24 @@ export default async function DuPontPage({
       );
     }
 
-    const requestedFy = Number(params.fy);
-    const fy = availableYears.includes(requestedFy)
-      ? requestedFy
-      : (availableYears[0] ?? fyStartYearOf());
+    // The global reporting period. The P&L is annualised from the months it
+    // covers; the balance sheet is the position as at its end.
+    const preview = await getReportingPeriod(entity, availableYears);
+    const writtenTo = await ledgerWrittenTo(entity.memberIds, preview.fyStartYear);
+    const period = await getReportingPeriod(entity, availableYears, writtenTo);
+    const fy = period.fyStartYear;
+    const asOf = period.asOf;
+    const months = period.monthsElapsed;
 
-    const [pnl, bs, writtenTo] = await Promise.all([
-      buildProfitAndLoss({ entity, fyStartYear: fy, detail: false }),
-      buildBalanceSheet({ entity, fyStartYear: fy, detail: false }),
-      ledgerWrittenTo(entity.memberIds, fy),
+    const [pnl, bs] = await Promise.all([
+      buildProfitAndLoss({
+        entity,
+        fyStartYear: fy,
+        detail: false,
+        window: { start: period.start, end: period.end },
+      }),
+      buildBalanceSheet({ entity, fyStartYear: fy, detail: false, asOf }),
     ]);
-
-    const { end: fyEnd } = fyBounds(fy, entity.fy_start_month);
-    const months = monthsElapsed(fy, writtenTo ?? fyEnd, entity.fy_start_month);
-    const asOf = writtenTo ?? fyEnd;
 
     const data = buildDuPont({ pnl, bs, monthsElapsed: months });
     const { inputs, ratios } = data;
@@ -88,18 +89,9 @@ export default async function DuPontPage({
       <>
         <PageHeader
           title="DuPont Analysis"
-          subtitle={`${fyLabel(fy)} · Return on Equity, decomposed${
+          subtitle={`${period.label} · Return on Equity, decomposed${
             months > 0 && months < 12 ? ` · annualised from ${months} month${months === 1 ? "" : "s"}` : ""
           }${ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""}`}
-          actions={
-            <PeriodControls
-              financialYears={availableYears}
-              currentFy={fy}
-              verticals={[]}
-              currentVerticalId={null}
-              showVerticalPicker={false}
-            />
-          }
         />
 
         <div className="space-y-4">

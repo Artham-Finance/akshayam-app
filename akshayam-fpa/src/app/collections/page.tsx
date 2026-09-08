@@ -1,10 +1,10 @@
-import clsx from "clsx";
 import Link from "next/link";
 import { BudgetTable } from "@/components/BudgetTable";
 import { CurrencySplit, type CurrencyRow } from "@/components/CurrencySplit";
 import { CustomerPicker } from "@/components/CustomerPicker";
 import { DataTable, drillColumns, renderDrillRow } from "@/components/DataTable";
 import { PeriodControls } from "@/components/PeriodControls";
+import { PeriodLink } from "@/components/PeriodLink";
 import { SetupRequired } from "@/components/SetupRequired";
 import {
   Card,
@@ -20,7 +20,11 @@ import { getEntity, getVerticalsInScope, verticalScope } from "@/lib/entity";
 import { compactINR, dateLabel, money, monthLabel, percent, share } from "@/lib/format";
 import { withParams } from "@/lib/href";
 import { fyBounds, fyLabel, fyMonths } from "@/lib/period";
-import { ledgerAsOfLabel, ledgerWrittenTo, resolvePeriod } from "@/lib/reporting-period";
+import {
+  getReportingPeriod,
+  ledgerAsOfLabel,
+  ledgerWrittenTo,
+} from "@/lib/reporting-period";
 import { buildBudgetVsActual } from "@/lib/reports/budget";
 import { isDrill, runDrill, UNTRACEABLE_RECEIPT } from "@/lib/reports/drilldowns";
 import { listCustomers } from "@/lib/reports/customer-statement";
@@ -71,20 +75,20 @@ export default async function CollectionsPage({
       );
     }
 
-    const requestedFy = Number(params.fy);
-    const fy = availableYears.includes(requestedFy) ? requestedFy : availableYears[0];
+    // The global reporting period drives every figure on the page except the
+    // by-month trend, which stays on the full year so its shape stays readable.
+    const preview = await getReportingPeriod(entity, availableYears);
+    const writtenTo = await ledgerWrittenTo(entity.memberIds, preview.fyStartYear);
+    const period = await getReportingPeriod(entity, availableYears, writtenTo);
+    const fy = period.fyStartYear;
     const months = fyMonths(fy);
-
-    // The period picker drives every figure on the page except the by-month
-    // trend, which stays on the full year so the shape of it remains readable.
     const fyRange = fyBounds(fy);
-    const writtenTo = await ledgerWrittenTo(entity.memberIds, fy);
-    const period = resolvePeriod({
-      fyStartYear: fy,
-      latest: writtenTo,
-      params,
-    });
     const { start, end } = period;
+    /** the picked month, when the period is exactly one calendar month */
+    const monthKey =
+      period.periodMonths.length === 1 && period.monthAligned
+        ? period.periodMonths[0].key
+        : null;
 
     const requestedVertical = Number(params.vertical);
     const verticalId = verticals.some((v) => v.id === requestedVertical) ? requestedVertical : null;
@@ -254,7 +258,6 @@ export default async function CollectionsPage({
         closeHref={withParams("/collections", params, { drill: null, currency: null })}
         downloadHref={withParams("/api/export", params, {
           kind: "collections",
-          fy,
           vertical: verticalId,
         })}
         shown={chosen.rows.length}
@@ -325,20 +328,16 @@ export default async function CollectionsPage({
       <>
         <PageHeader
           title="Collections"
-          subtitle={`${fyLabel(fy)} · ${period.label}${verticalName ? ` · ${verticalName}` : ""}${
+          subtitle={`${period.label}${verticalName ? ` · ${verticalName}` : ""}${
             ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""
           } · fee receipts shown separately from reimbursement recoveries`}
           actions={
             <>
               <PeriodControls
-                financialYears={availableYears}
-                currentFy={fy}
+                financialYears={[]}
+                currentFy={0}
                 verticals={verticals.map((v) => ({ id: v.id, name: v.name }))}
                 currentVerticalId={verticalId}
-                months={period.months.map((m) => ({ value: m.key, label: m.label }))}
-                weeks={period.weeks.map((w) => ({ value: String(w.number), label: w.label }))}
-                currentMonth={period.monthKey}
-                currentWeek={period.weekNumber === null ? null : String(period.weekNumber)}
               />
               <CustomerPicker customers={customers} current={customer} />
             </>
@@ -454,7 +453,6 @@ export default async function CollectionsPage({
               downloadHref={withParams("/api/export", params, {
                 kind: "collections",
                 drill: "customer",
-                fy,
                 vertical: verticalId,
                 customer,
               })}
@@ -469,14 +467,7 @@ export default async function CollectionsPage({
             </DrillPanel>
           )}
 
-          {/*
-            "month" is opened from the Collections by month chart, further
-            down the page, so its result renders there instead of here - a
-            reader who clicked a bar should find the list under the bar, not
-            have the page jump back up to where every other drill on this page
-            lands.
-          */}
-          {chosen && drill !== "month" && chosenPanel}
+          {chosen && chosenPanel}
 
           {(unmatched?.n ?? 0) > 0 && (
             <Notice
@@ -573,7 +564,7 @@ export default async function CollectionsPage({
           </Card>
 
           <Card>
-            <CardTitle hint={`peak month ${compactINR(peak)} · full year · click a month for its receipts`}>
+            <CardTitle hint={`peak month ${compactINR(peak)} · full year · click a month to view it`}>
               Collections by month
             </CardTitle>
             <div className="space-y-1.5">
@@ -582,15 +573,8 @@ export default async function CollectionsPage({
                 const f = Number(row?.fee ?? 0);
                 const r = Number(row?.ri ?? 0);
                 const sum = f + r;
-                /*
-                  Fee and reimbursement together, the same population the
-                  currency card's "total" drill counts - just under its own
-                  name, "month", so the result lands here under the chart
-                  rather than jumping up to where a currency click's does. A
-                  month with no receipts has nothing to open, so it stays a
-                  plain row.
-                */
-                const live = period.monthKey === m.key && drill === "month";
+                // Clicking a month takes the whole report to that month.
+                const live = monthKey === m.key;
                 const content = (
                   <>
                     <span className="w-14 shrink-0 text-[11.5px] text-ink-muted">
@@ -614,22 +598,16 @@ export default async function CollectionsPage({
                   </>
                 );
                 return sum > 0 ? (
-                  <Link
+                  <PeriodLink
                     key={m.key}
-                    href={withParams("/collections", params, {
-                      month: live ? null : m.key,
-                      week: null,
-                      drill: live ? null : "month",
-                      customer: null,
-                    })}
-                    scroll={false}
-                    className={clsx(
-                      "-mx-1 flex items-center gap-3 rounded-sm px-1 transition-colors hover:bg-surface-sunk/50",
-                      live && "bg-surface-sunk/50",
-                    )}
+                    from={m.start}
+                    to={m.end}
+                    active={live}
+                    activeClassName="bg-surface-sunk/50"
+                    className="-mx-1 flex w-full items-center gap-3 rounded-sm px-1 text-left transition-colors hover:bg-surface-sunk/50"
                   >
                     {content}
-                  </Link>
+                  </PeriodLink>
                 ) : (
                   <div key={m.key} className="flex items-center gap-3">
                     {content}
@@ -658,8 +636,6 @@ export default async function CollectionsPage({
               while a month still open here counts everything posted to it so far.
             </p>
           </Card>
-
-          {chosen && drill === "month" && chosenPanel}
 
         </div>
       </>

@@ -47,12 +47,15 @@ export function StatementTable({
   initialScale = "lakhs",
   aggregate = "sum",
   drillHref,
+  totalLabel,
 }: {
   months: FyMonth[];
   lines: ClientLine[];
   /** group codes to render with extra weight, e.g. EBITDA and PAT */
   emphasise?: string[];
   initialScale?: Scale;
+  /** heading of the last column; defaults to "FY Total" / "Year end" */
+  totalLabel?: string;
   /**
    * How a quarter or year column combines its months.
    *   sum      P&L: three months of trading add up
@@ -104,13 +107,13 @@ export function StatementTable({
     }
     cols.push({
       key: "fy-total",
-      label: aggregate === "closing" ? "Year end" : "FY Total",
+      label: totalLabel ?? (aggregate === "closing" ? "Year end" : "FY Total"),
       months: months.map((m) => m.key),
       kind: "total",
       startsGroup: true,
     });
     return cols;
-  }, [quarters, expandedQuarters, months, aggregate]);
+  }, [quarters, expandedQuarters, months, aggregate, totalLabel]);
 
   const toggleQuarter = (quarter: QuarterNo) =>
     setExpandedQuarters((prev) => {

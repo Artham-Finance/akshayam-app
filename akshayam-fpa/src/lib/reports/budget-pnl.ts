@@ -102,10 +102,18 @@ export async function buildBudgetVsActualPnl(opts: {
   entity: Entity;
   fyStartYear: number;
   verticalId?: number | null;
+  /**
+   * A sub-year window for the actual side only. The budget still loads the
+   * whole year (the caller sums it over whole months); the ledger figure is
+   * for the exact dates.
+   */
+  window?: { start: string; end: string };
 }): Promise<BvaResult> {
-  const { entity, fyStartYear, verticalId = null } = opts;
+  const { entity, fyStartYear, verticalId = null, window } = opts;
   const months = fyMonths(fyStartYear);
-  const { start, end } = fyBounds(fyStartYear);
+  const fyRange = fyBounds(fyStartYear);
+  const start = window?.start ?? fyRange.start;
+  const end = window?.end ?? fyRange.end;
 
   const [glRows, osbRows, budgetRows] = await Promise.all([
     query<{ month_key: string; group_code: string | null; amount: number }>(
