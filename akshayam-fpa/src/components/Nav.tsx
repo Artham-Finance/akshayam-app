@@ -5,8 +5,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
 import { EntitySwitcher } from "@/components/EntitySwitcher";
+import { PeriodPicker } from "@/components/PeriodPicker";
 import { UserMenu } from "@/components/UserMenu";
 import type { Permission, Role } from "@/lib/auth/permissions";
+import type { PeriodCookie } from "@/lib/period-presets";
 
 /**
  * Primary navigation. One row of labelled tabs, scrollable on narrow screens.
@@ -62,10 +64,17 @@ const UTILITY: { href: string; label: string; needs: Permission }[] = [
 export function Nav({
   entities,
   currentSlug,
+  period,
+  periodLabel,
+  periodFyBounds,
   user,
 }: {
   entities: { slug: string; name: string }[];
   currentSlug: string;
+  /** the global reporting-period choice, or null when the shell has no db */
+  period: PeriodCookie | null;
+  periodLabel: string;
+  periodFyBounds: { start: string; end: string } | null;
   user: { name: string | null; email: string; role: Role; permissions: Permission[] };
 }) {
   const pathname = usePathname();
@@ -114,6 +123,15 @@ export function Nav({
         <div className="order-3 w-full sm:order-none sm:w-auto">
           <EntitySwitcher entities={entities} current={currentSlug} />
         </div>
+        {period && periodFyBounds && (
+          <div className="order-3 w-full sm:order-none sm:w-auto">
+            <PeriodPicker
+              current={period}
+              currentLabel={periodLabel}
+              fyBounds={periodFyBounds}
+            />
+          </div>
+        )}
         <nav className="ml-auto flex shrink-0 items-center gap-1">
           {UTILITY.filter((item) => allowed.has(item.needs)).map((item) => (
             <Link
