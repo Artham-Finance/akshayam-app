@@ -66,6 +66,13 @@ export interface ApportionedVertical {
    * of the arrangement.
    */
   receivesApportionment: boolean;
+  /**
+   * The ledger vertical this column edits its head count against - the row in
+   * `verticals` whose code this receiver carries, within the entity in scope.
+   * Null for the lines outside the nine, and for a receiver split across two
+   * companies when both are in scope (the group).
+   */
+  verticalId: number | null;
   revenue: number;
   directCost: number;
   /** head of cost -> amount charged to this vertical */
@@ -74,6 +81,7 @@ export interface ApportionedVertical {
   totalCost: number;
   /** revenue less all cost: the figure VPP is struck on */
   contribution: number;
+  /** average head count over the window; a whole number when a single month is shown */
   heads: number;
 }
 
@@ -89,6 +97,10 @@ export interface ApportionmentResult {
    */
   applicable: boolean;
   quarter: QuarterNo;
+  /** the single month the table is narrowed to, YYYY-MM, or null for the quarter */
+  month: string | null;
+  /** the financial year, for saving a head-count edit against */
+  fyStartYear: number;
   label: string;
   start: string;
   end: string;
@@ -123,7 +135,7 @@ export async function buildApportionment(opts: {
   const end = months[months.length - 1].end;
   const labels = ["Q1 Apr-Jun", "Q2 Jul-Sep", "Q3 Oct-Dec", "Q4 Jan-Mar"];
 
-  const [rows, headcounts] = await Promise.all([
+  const [rows, headcounts, verticalRows] = await Promise.all([
     query<{
       code: string | null;
       group_code: string | null;
@@ -147,16 +159,40 @@ export async function buildApportionment(opts: {
         group by v.code, a.group_code, a.name`,
       [entity.memberIds, start, end],
     ),
+    /**
+     * Head count, averaged over the months this apportionment is struck for.
+     *
+     * RBJV rotates trainees between verticals month to month, so a fixed annual
+     * figure would keep charging the vertical a trainee has left. Each month in
+     * the window takes that month's own count where one is recorded
+     * (vertical_headcount rows with `month` set) and the annual baseline
+     * (`month is null`) otherwise; the average is what the bases spread on. A
+     * trainee who spent one of a quarter's three months in a vertical adds
+     * about a third of a head to it for that quarter.
+     */
     query<{ code: string; heads: number }>(
-      `select v.code, sum(h.heads)::int as heads
-         from vertical_headcount h join verticals v on v.id = h.vertical_id
-        where h.fy_start_year = $1 and v.entity_id = any($2::int[])
+      `select v.code, avg(coalesce(mh.heads, ah.heads))::numeric as heads
+         from verticals v
+         cross join unnest($3::date[]) as wm(month)
+         left join vertical_headcount mh
+           on mh.vertical_id = v.id and mh.fy_start_year = $1 and mh.month = wm.month
+         left join vertical_headcount ah
+           on ah.vertical_id = v.id and ah.fy_start_year = $1 and ah.month is null
+        where v.entity_id = any($2::int[])
+          and coalesce(mh.heads, ah.heads) is not null
         group by v.code`,
-      [fyStartYear, entity.memberIds],
+      [fyStartYear, entity.memberIds, months.map((m) => m.start)],
+    ),
+    // The vertical id behind each column, so its head count can be keyed in.
+    query<{ id: number; code: string }>(
+      `select id, code from verticals where entity_id = any($1::int[])`,
+      [entity.memberIds],
     ),
   ]);
 
+  const round2 = (n: number) => Math.round(n * 100) / 100;
   const headsByCode = new Map(headcounts.map((h) => [h.code, Number(h.heads)]));
+  const idByCode = new Map(verticalRows.map((v) => [v.code, v.id]));
   const receiverOf = new Map<string, (typeof RECEIVERS)[number]>();
   for (const r of RECEIVERS) for (const code of r.codes) receiverOf.set(code, r);
 
@@ -164,13 +200,14 @@ export async function buildApportionment(opts: {
     key: r.key,
     label: r.label,
     receivesApportionment: true,
+    verticalId: r.codes.map((c) => idByCode.get(c)).find((id) => id != null) ?? null,
     revenue: 0,
     directCost: 0,
     apportioned: {},
     apportionedTotal: 0,
     totalCost: 0,
     contribution: 0,
-    heads: r.codes.reduce((sum, c) => sum + (headsByCode.get(c) ?? 0), 0),
+    heads: round2(r.codes.reduce((sum, c) => sum + (headsByCode.get(c) ?? 0), 0)),
   }));
   const byKey = new Map(verticals.map((v) => [v.key, v]));
 
@@ -229,6 +266,7 @@ export async function buildApportionment(opts: {
       key: o.label,
       label: NAMES[o.label] ?? o.label,
       receivesApportionment: false,
+      verticalId: null,
       revenue: o.revenue,
       directCost: o.directCost,
       apportioned: {},
@@ -294,6 +332,8 @@ export async function buildApportionment(opts: {
   return {
     applicable: active > 1 && poolTotal !== 0,
     quarter,
+    month: picked ? picked.key : null,
+    fyStartYear,
     label: picked ? picked.label : labels[quarter - 1],
     start,
     end,

@@ -4,6 +4,7 @@ import { PeriodControls } from "@/components/PeriodControls";
 import { QuarterTabs } from "@/components/QuarterTabs";
 import { SetupRequired } from "@/components/SetupRequired";
 import { StatementTable, type ClientLine } from "@/components/StatementTable";
+import { VerticalContributionCard } from "@/components/VerticalContributionCard";
 import {
   Card,
   CardTitle,
@@ -20,7 +21,7 @@ import {
 } from "@/lib/entity";
 import { withParams } from "@/lib/href";
 import { compactINR } from "@/lib/format";
-import { fyMonths, type QuarterNo } from "@/lib/period";
+import { fyBounds, fyMonths, type QuarterNo } from "@/lib/period";
 import {
   getReportingPeriod,
   ledgerAsOfLabel,
@@ -28,8 +29,13 @@ import {
 } from "@/lib/reporting-period";
 import { buildApportionment, receiverKeyFor } from "@/lib/reports/apportionment";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
+import {
+  buildScorecard,
+  resolveScorecardScope,
+  type ScorecardRow,
+} from "@/lib/reports/scorecard";
 import { buildProfitAndLoss } from "@/lib/reports/statements";
-import { requireEntityAccess } from "@/lib/auth/dal";
+import { can, requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -43,10 +49,11 @@ export default async function ProfitAndLossPage({
 
   try {
     const entity = await getEntity();
-    const [verticals, availableYears, unmapped] = await Promise.all([
+    const [verticals, availableYears, unmapped, canEditHeads] = await Promise.all([
       getVerticals(entity),
       getAvailableFinancialYears(entity.memberIds),
       countUnmappedAccounts(entity.memberIds),
+      can("verticals.manage"),
     ]);
 
     if (availableYears.length === 0) {
@@ -72,6 +79,10 @@ export default async function ProfitAndLossPage({
     const period = await getReportingPeriod(entity, availableYears, writtenTo);
     const fy = period.fyStartYear;
     const window = { start: period.start, end: period.end };
+
+    // A team lead signs in against a single-vertical slice; the P&L is then
+    // their own vertical's, with a contribution card that ties to the scorecard.
+    const scope = await resolveScorecardScope(entity);
 
     const requestedVertical = Number(params.vertical);
     const verticalId = verticals.some((v) => v.id === requestedVertical)
@@ -119,9 +130,26 @@ export default async function ProfitAndLossPage({
        * Common cost is spread over the verticals that use it, so computing it
        * for one alone would hand that vertical the whole pool. The spread is
        * the company's; only the column shown narrows to the picker.
+       *
+       * A slice gets the scorecard-matching card instead, so this is skipped.
        */
-      buildApportionment({ entity, fyStartYear: fy, quarter, month: apportionMonth }),
+      scope.isSlice
+        ? null
+        : buildApportionment({ entity, fyStartYear: fy, quarter, month: apportionMonth }),
     ]);
+
+    /**
+     * A team lead's net revenue contribution, struck exactly as the Vertical
+     * Performance Scorecard does it - the whole book the slice is cut from,
+     * cumulative to the last quarter the ledger reaches - then narrowed to
+     * their own row. Same builder, so the two pages cannot disagree.
+     */
+    const contribution = await buildSliceContribution({
+      scope,
+      fy,
+      writtenTo,
+      sliceVerticalCodes: verticals.map((v) => v.code),
+    });
 
     /**
      * The table, narrowed to the picked vertical.
@@ -137,7 +165,7 @@ export default async function ProfitAndLossPage({
     // apportionment still has a column of its own to show.
     const focusKey = receiverKeyFor(focusCode) ?? focusCode;
     const shownApportionment =
-      verticalId === null
+      !apportionment || verticalId === null
         ? apportionment
         : {
             ...apportionment,
@@ -162,7 +190,11 @@ export default async function ProfitAndLossPage({
           subtitle={
             <>
               {period.label}
-              {verticalName ? ` · ${verticalName}` : " · All verticals"}
+              {verticalName
+                ? ` · ${verticalName}`
+                : scope.isSlice
+                  ? ` · ${verticals.map((v) => v.name).join(" + ")}`
+                  : " · All verticals"}
               {ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""} · click
               a quarter heading to open its months
             </>
@@ -172,7 +204,7 @@ export default async function ProfitAndLossPage({
               <PeriodControls
                 financialYears={[]}
                 currentFy={0}
-                verticals={verticals.map((v) => ({ id: v.id, name: v.name }))}
+                verticals={scope.isSlice ? [] : verticals.map((v) => ({ id: v.id, name: v.name }))}
                 currentVerticalId={verticalId}
               />
               <DownloadExcel
@@ -252,6 +284,21 @@ export default async function ProfitAndLossPage({
             totalLabel={period.periodMonths.length < 12 ? period.shortLabel : undefined}
           />
 
+          {contribution && (
+            <Card padded={false}>
+              <div className="px-4 pt-4 sm:px-5">
+                <CardTitle hint={`${contribution.quarterLabel} · as on the scorecard`}>
+                  Net revenue contribution — direct &amp; apportioned cost
+                </CardTitle>
+              </div>
+              <VerticalContributionCard
+                rows={contribution.rows}
+                firmTotals={contribution.firmTotals}
+                apportionedByHead={contribution.apportionedByHead}
+              />
+            </Card>
+          )}
+
           <Card padded={false}>
             <div className="px-4 pt-4 sm:px-5">
               <CardTitle hint="percentage of revenue">
@@ -280,8 +327,8 @@ export default async function ProfitAndLossPage({
                   hrefFor={(q, m) => withParams("/pnl", params, { q: `q${q}`, qm: m })}
                 />
               </div>
-              <ApportionmentTable data={shownApportionment} />
-              {verticalId === null && apportionment.outside.length > 0 && (
+              <ApportionmentTable data={shownApportionment} canEditHeads={canEditHeads} />
+              {verticalId === null && apportionment && apportionment.outside.length > 0 && (
                 <p className="px-4 pb-4 text-[11.5px] text-ink-muted sm:px-5">
                   Outside the nine budgeted verticals:{" "}
                   {apportionment.outside
@@ -304,4 +351,84 @@ export default async function ProfitAndLossPage({
       err instanceof Error ? err.message : "Could not reach the database.";
     return <SetupRequired message={message} />;
   }
+}
+
+/**
+ * A team lead's net revenue contribution, struck exactly as the Vertical
+ * Performance Scorecard strikes it - the whole book the slice is cut from,
+ * cumulative to the last quarter the ledger reaches - then narrowed to their
+ * own row. Uses the same builder as the scorecard, so the numbers match; the
+ * per-head apportioned breakdown is folded from the same quarters.
+ */
+async function buildSliceContribution(opts: {
+  scope: Awaited<ReturnType<typeof resolveScorecardScope>>;
+  fy: number;
+  writtenTo: string | null;
+  sliceVerticalCodes: string[];
+}): Promise<{
+  rows: ScorecardRow[];
+  firmTotals: {
+    revenue: number;
+    directCost: number;
+    apportionedCost: number;
+    contribution: number;
+  };
+  apportionedByHead: Record<string, number>;
+  quarterLabel: string;
+} | null> {
+  const { scope, fy, writtenTo, sliceVerticalCodes } = opts;
+  if (!scope.isSlice || !scope.visibleCodes || scope.visibleCodes.size === 0) {
+    return null;
+  }
+
+  const { end: fyEnd } = fyBounds(fy, scope.benchmark.fy_start_month);
+  const latestQuarter =
+    (fyMonths(fy, scope.benchmark.fy_start_month)
+      .filter((m) => m.start <= (writtenTo ?? fyEnd))
+      .at(-1)?.quarter as QuarterNo | undefined) ?? 1;
+  const quartersInRange = ([1, 2, 3, 4] as QuarterNo[]).filter((q) => q <= latestQuarter);
+
+  const [sc, aps] = await Promise.all([
+    buildScorecard({
+      entity: scope.benchmark,
+      fyStartYear: fy,
+      quarter: latestQuarter,
+      cumulative: true,
+    }),
+    Promise.all(
+      quartersInRange.map((q) =>
+        buildApportionment({ entity: scope.benchmark, fyStartYear: fy, quarter: q }),
+      ),
+    ),
+  ]);
+
+  const rows = sc.rows.filter((r) => scope.visibleCodes!.has(r.code));
+  if (rows.length === 0) return null;
+
+  const focusKeys = new Set(
+    sliceVerticalCodes
+      .map((c) => receiverKeyFor(c))
+      .filter((k): k is string => k !== null),
+  );
+  const apportionedByHead: Record<string, number> = {};
+  for (const ap of aps) {
+    for (const v of ap.verticals) {
+      if (!focusKeys.has(v.key)) continue;
+      for (const [h, amt] of Object.entries(v.apportioned)) {
+        apportionedByHead[h] = (apportionedByHead[h] ?? 0) + Number(amt);
+      }
+    }
+  }
+
+  return {
+    rows,
+    firmTotals: {
+      revenue: sc.rows.reduce((s, r) => s + r.contributionRevenue, 0),
+      directCost: sc.rows.reduce((s, r) => s + r.directCost, 0),
+      apportionedCost: sc.rows.reduce((s, r) => s + r.apportionedCost, 0),
+      contribution: sc.rows.reduce((s, r) => s + r.revenueContribution, 0),
+    },
+    apportionedByHead,
+    quarterLabel: sc.window.label,
+  };
 }

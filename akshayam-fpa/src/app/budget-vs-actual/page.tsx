@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { BvaStatement } from "@/components/BvaTable";
+import { EstablishmentCostTable } from "@/components/EstablishmentCostTable";
 import { ExpenseDetailTable } from "@/components/ExpenseDetailTable";
 import { TeamCostTable } from "@/components/TeamCostTable";
 import { SetupRequired } from "@/components/SetupRequired";
@@ -25,6 +26,7 @@ import {
   ledgerWrittenTo,
 } from "@/lib/reporting-period";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
+import { buildEstablishmentDetail } from "@/lib/reports/establishment-detail";
 import { buildExpenseDetail } from "@/lib/reports/expense-detail";
 import { buildTeamCost } from "@/lib/reports/team-cost";
 import { requireEntityAccess } from "@/lib/auth/dal";
@@ -108,14 +110,20 @@ export default async function BudgetVsActualPage({
     const budgetOver = (ms: typeof months) =>
       ms.reduce((s, m) => s + (teamCostLine?.budget[m.key] ?? 0), 0);
 
-    const [expenseDetail, teamCost] = await Promise.all([
+    const [expenseDetail, teamCost, establishment] = await Promise.all([
       isSlice ? null : buildExpenseDetail({ entity, fyStartYear: fy, periodMonths }),
       buildTeamCost({
         entity,
-        fyStartYear: fy,
         periodMonths,
         statementBudget: { period: budgetOver(periodMonths), annual: budgetOver(months) },
       }),
+      isSlice
+        ? null
+        : buildEstablishmentDetail({
+            entity,
+            periodMonths,
+            window: { start: period.start, end: period.end },
+          }),
     ]);
     const editableMonth = periodMonths.length === 1 ? `${periodMonths[0].key}-01` : null;
 
@@ -209,6 +217,15 @@ export default async function BudgetVsActualPage({
                 <CardTitle hint={periodLabel}>Team cost — budget vs actual</CardTitle>
               </div>
               <TeamCostTable result={teamCost} periodLabel={periodLabel} />
+            </Card>
+          )}
+
+          {!isSlice && establishment?.hasData && (
+            <Card padded={false}>
+              <div className="px-4 pt-4 sm:px-5">
+                <CardTitle hint={periodLabel}>Establishment cost — budget vs actual</CardTitle>
+              </div>
+              <EstablishmentCostTable result={establishment} periodLabel={periodLabel} />
             </Card>
           )}
 

@@ -1,74 +1,42 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import clsx from "clsx";
 import { dateLabel, money, moneySigned, percent } from "@/lib/format";
-import type {
-  TeamCostResult,
-  TeamCostRoleLine,
-  TeamCostScope,
-} from "@/lib/reports/team-cost";
+import type { EstablishmentLine, EstablishmentResult } from "@/lib/reports/establishment-detail";
 
 /**
- * Team cost by role, with a vertical picker and a drill-down on every line.
+ * The breakdown behind Establishment cost - rent, office upkeep, electricity -
+ * budget against actual, with the ledger postings behind each line.
  *
- * The budget is hard-coded (see src/lib/reports/team-cost.ts). The actual is
- * read straight from the general ledger - every direct_cost entry carries a
- * vertical tag - so nothing here is entered by hand. Opening a line shows the
- * ledger postings that make up its actual.
- *
- * One scope shows at a time: the whole company by default, or a vertical from
- * the picker.
+ * Read-only: the budget split is the office schedule the partners agreed, and
+ * the actual is read straight from the ledger's establishment-cost accounts, so
+ * there is nothing to enter here. The card total ties to the Establishment cost
+ * line on the statement above. Open a line for the postings that make it up.
  */
-
-export function TeamCostTable({
+export function EstablishmentCostTable({
   result,
   periodLabel,
 }: {
-  result: TeamCostResult;
+  result: EstablishmentResult;
   periodLabel: string;
 }) {
-  const [scopeCode, setScopeCode] = useState("ALL");
   const [open, setOpen] = useState<string | null>(null);
 
-  const scope: TeamCostScope = useMemo(() => {
-    if (scopeCode === "ALL") return result.company;
-    return result.verticals.find((v) => v.code === scopeCode) ?? result.company;
-  }, [scopeCode, result]);
-
-  const isCompany = scope.verticalId === null;
   const head =
     "border-y border-line px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-faint";
+  const { totals } = result;
+  const totalPct = totals.budget ? (totals.variance / totals.budget) * 100 : null;
 
   return (
     <div className="overflow-x-auto">
-      <div className="flex flex-wrap items-center gap-2 px-4 pb-3 sm:px-5">
-        <label className="text-[11px] font-medium uppercase tracking-[0.08em] text-ink-faint">
-          Vertical
-        </label>
-        <select
-          value={scopeCode}
-          onChange={(e) => {
-            setScopeCode(e.target.value);
-            setOpen(null);
-          }}
-          className="rounded-md border border-line bg-surface px-2 py-1 text-[12px] text-ink outline-none focus:border-navy"
-        >
-          <option value="ALL">Whole company</option>
-          {result.verticals.map((v) => (
-            <option key={v.code} value={v.code}>
-              {v.name}
-            </option>
-          ))}
-        </select>
-        <span className="text-[11.5px] text-ink-muted">
-          Budget hard-coded from the plan; actuals are the vertical-tagged
-          direct-cost postings in the ledger. Open a line for the postings behind
-          it.
-        </span>
-      </div>
-
       <table className="w-full min-w-max border-collapse text-[13px]">
+        <caption className="px-4 pb-3 text-left text-[11.5px] text-ink-muted">
+          Budget is the office schedule, spread evenly. Actual is the
+          establishment-cost postings in the ledger — rent, building maintenance
+          and electricity — so the total ties to the statement above. Open a line
+          for the postings behind it.
+        </caption>
         <thead>
           <tr>
             <th scope="col" className={clsx(head, "text-left")}>
@@ -81,7 +49,7 @@ export function TeamCostTable({
               Period budget
             </th>
             <th scope="col" className={clsx(head, "text-right")}>
-              Actuals
+              Actual
             </th>
             <th scope="col" className={clsx(head, "text-right")}>
               Variance
@@ -92,14 +60,13 @@ export function TeamCostTable({
           </tr>
         </thead>
         <tbody>
-          {scope.roles.map((line) => (
-            <RoleRow
-              key={line.role}
+          {result.lines.map((line) => (
+            <EstablishmentRow
+              key={line.label}
               line={line}
-              showVertical={isCompany}
-              open={open === line.role}
+              open={open === line.label}
               onToggle={() =>
-                setOpen((cur) => (cur === line.role ? null : line.role))
+                setOpen((cur) => (cur === line.label ? null : line.label))
               }
             />
           ))}
@@ -107,34 +74,30 @@ export function TeamCostTable({
         <tfoot>
           <tr className="bg-surface-sunk font-semibold">
             <th scope="row" className="border-y border-line-strong px-3 py-2 text-left">
-              Team cost — {scope.name} · {periodLabel}
+              Establishment cost — {periodLabel}
             </th>
+            <td className="num border-y border-line-strong px-3 py-2 text-right" />
             <td className="num border-y border-line-strong px-3 py-2 text-right">
-              {money(scope.annualBudget)}
+              {money(totals.budget)}
             </td>
             <td className="num border-y border-line-strong px-3 py-2 text-right">
-              {money(scope.periodBudget)}
-            </td>
-            <td className="num border-y border-line-strong px-3 py-2 text-right">
-              {money(scope.actual)}
+              {money(totals.actual)}
             </td>
             <td
               className={clsx(
                 "num border-y border-line-strong px-3 py-2 text-right",
-                scope.variance < 0 ? "text-negative" : "text-positive",
+                totals.variance < 0 ? "text-negative" : "text-positive",
               )}
             >
-              {moneySigned(scope.variance)}
+              {moneySigned(totals.variance)}
             </td>
             <td
               className={clsx(
                 "num border-y border-line-strong px-3 py-2 text-right",
-                scope.variancePct !== null && scope.variancePct < 0
-                  ? "text-negative"
-                  : "text-positive",
+                totalPct !== null && totalPct < 0 ? "text-negative" : "text-positive",
               )}
             >
-              {scope.variancePct === null ? "—" : percent(scope.variancePct)}
+              {totalPct === null ? "—" : percent(totalPct)}
             </td>
           </tr>
         </tfoot>
@@ -143,14 +106,12 @@ export function TeamCostTable({
   );
 }
 
-function RoleRow({
+function EstablishmentRow({
   line,
-  showVertical,
   open,
   onToggle,
 }: {
-  line: TeamCostRoleLine;
-  showVertical: boolean;
+  line: EstablishmentLine;
   open: boolean;
   onToggle: () => void;
 }) {
@@ -187,17 +148,18 @@ function RoleRow({
                   {line.entries.length} posting{line.entries.length === 1 ? "" : "s"}
                 </span>
               )}
-              {line.hint && (
-                <span className="mt-0.5 block text-[11px] font-normal text-ink-faint">
-                  {line.hint}
-                </span>
-              )}
             </span>
           </button>
         </th>
-        <td className={clsx(cell, "num text-right text-ink")}>{money(line.annualBudget)}</td>
-        <td className={clsx(cell, "num text-right text-ink-muted")}>
-          {money(line.periodBudget)}
+        <td
+          className={clsx(cell, "num text-right", line.isActualOnly ? "text-ink-faint" : "text-ink")}
+        >
+          {line.isActualOnly ? "—" : money(line.annualBudget)}
+        </td>
+        <td
+          className={clsx(cell, "num text-right", line.isActualOnly ? "text-ink-faint" : "text-ink-muted")}
+        >
+          {line.isActualOnly ? "—" : money(line.budget)}
         </td>
         <td className={clsx(cell, "num text-right text-ink")}>
           {line.actual ? money(line.actual) : "—"}
@@ -206,10 +168,14 @@ function RoleRow({
           className={clsx(
             cell,
             "num text-right",
-            line.variance < 0 ? "text-negative" : "text-ink-muted",
+            line.isActualOnly
+              ? "text-ink-faint"
+              : line.variance < 0
+                ? "text-negative"
+                : "text-ink-muted",
           )}
         >
-          {moneySigned(line.variance)}
+          {line.isActualOnly ? "—" : moneySigned(line.variance)}
         </td>
         <td
           className={clsx(
@@ -227,7 +193,7 @@ function RoleRow({
       {open && canOpen && (
         <tr>
           <td colSpan={6} className="border-b border-line bg-surface-sunk/30 px-3 py-3 sm:px-6">
-            <DrillTable line={line} showVertical={showVertical} />
+            <DrillTable line={line} />
           </td>
         </tr>
       )}
@@ -235,13 +201,7 @@ function RoleRow({
   );
 }
 
-function DrillTable({
-  line,
-  showVertical,
-}: {
-  line: TeamCostRoleLine;
-  showVertical: boolean;
-}) {
+function DrillTable({ line }: { line: EstablishmentLine }) {
   const cell = "border-t border-line px-2 py-1.5";
 
   return (
@@ -251,9 +211,6 @@ function DrillTable({
           <th scope="col" className="px-2 py-1 text-left font-medium">Date</th>
           <th scope="col" className="px-2 py-1 text-left font-medium">Particulars</th>
           <th scope="col" className="px-2 py-1 text-left font-medium">Description</th>
-          {showVertical && (
-            <th scope="col" className="px-2 py-1 text-left font-medium">Vertical</th>
-          )}
           <th scope="col" className="px-2 py-1 text-right font-medium">Amount</th>
         </tr>
       </thead>
@@ -263,23 +220,15 @@ function DrillTable({
             <td className={clsx(cell, "num whitespace-nowrap text-ink-muted")}>
               {dateLabel(e.date)}
             </td>
-            <td className={cell}>
-              {e.description}
-              {e.account && (
-                <span className="ml-1.5 text-[11px] text-ink-faint">({e.account})</span>
-              )}
-            </td>
-            <td className={clsx(cell, "text-ink-muted")}>{e.reference || "—"}</td>
-            {showVertical && (
-              <td className={clsx(cell, "text-ink-muted")}>{e.verticalCode}</td>
-            )}
+            <td className={cell}>{e.particulars}</td>
+            <td className={clsx(cell, "text-ink-muted")}>{e.description || "—"}</td>
             <td className={clsx(cell, "num text-right font-medium")}>{money(e.amount)}</td>
           </tr>
         ))}
       </tbody>
       <tfoot>
         <tr className="font-semibold text-ink">
-          <td className={clsx(cell, "border-t-line-strong")} colSpan={showVertical ? 4 : 3}>
+          <td className={clsx(cell, "border-t-line-strong")} colSpan={3}>
             {line.entries.length} posting{line.entries.length === 1 ? "" : "s"}
           </td>
           <td className={clsx(cell, "num border-t-line-strong text-right")}>

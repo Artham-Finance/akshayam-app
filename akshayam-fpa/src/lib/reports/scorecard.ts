@@ -1,5 +1,5 @@
 import { query } from "@/lib/db";
-import type { Entity } from "@/lib/entity";
+import { getVerticals, listAllEntities, type Entity } from "@/lib/entity";
 import { fyMonths, type QuarterNo } from "@/lib/period";
 import { buildApportionment } from "@/lib/reports/apportionment";
 import { buildBudgetVsActual } from "@/lib/reports/budget";
@@ -45,7 +45,7 @@ const AGE_BUCKETS = [
  * Raja's pool column). `codes` is every ledger code that rolls into the row -
  * "Raja - AIF & GIFT" is one row across both companies, as in the workbook.
  */
-const ROWS: { code: string; label: string; codes: string[]; apportKey: string | null }[] = [
+export const ROWS: { code: string; label: string; codes: string[]; apportKey: string | null }[] = [
   { code: "DLR", label: "Vijay - DLR", codes: ["DLR"], apportKey: "DLR" },
   { code: "CMRGA", label: "Gayathri - CMRGA", codes: ["CMRGA"], apportKey: "CMRGA" },
   { code: "CFC", label: "Rekha - CFC", codes: ["CFC"], apportKey: "CFC" },
@@ -53,11 +53,59 @@ const ROWS: { code: string; label: string; codes: string[]; apportKey: string | 
   { code: "ECM", label: "Vasudharini - ECM", codes: ["ECM"], apportKey: "ECM" },
   { code: "GADD", label: "Ekta - GADD", codes: ["GADD"], apportKey: "GADD" },
   { code: "ACC", label: "Meenakshi - ACC", codes: ["ACC"], apportKey: "ACC" },
-  { code: "COMMON", label: "Common incl PC", codes: ["COMMON"], apportKey: "COMMON" },
+  { code: "COMMON", label: "Common incl partners contribution", codes: ["COMMON"], apportKey: "COMMON" },
   { code: "AIF_GIFT", label: "Raja - AIF & GIFT", codes: ["AIF", "GIFT"], apportKey: "GIFT" },
   { code: "JIPO", label: "Jayanth - IPO", codes: ["JIPO"], apportKey: null },
   { code: "HRCM", label: "Mahalakshmi - HRCM", codes: ["HRCM"], apportKey: "HRCM" },
 ];
+
+/**
+ * The scorecard row a ledger vertical code rolls into, or null for one the
+ * scorecard does not track. AIF and GIFT share Raja's row, so this is the
+ * mapping a caller narrowing the card to a slice's verticals needs.
+ */
+export function scorecardRowCodeFor(verticalCode: string): string | null {
+  return ROWS.find((r) => r.codes.includes(verticalCode))?.code ?? null;
+}
+
+export interface ScorecardScope {
+  /** the current entity is a single-vertical slice - a team lead's own book */
+  isSlice: boolean;
+  /**
+   * The company (or the group) the scorecard is struck across. A slice's own
+   * figures cannot carry the contribution shares and firm totals, so those are
+   * always computed on the whole book the slice is cut from.
+   */
+  benchmark: Entity;
+  /** scorecard row codes this viewer may see, or null for every row */
+  visibleCodes: Set<string> | null;
+}
+
+/**
+ * Who sees which rows of the scorecard.
+ *
+ * A whole-company (or group) entity sees everything. A slice - a team lead
+ * granted only their own vertical - sees the scorecard struck across the
+ * company it belongs to, narrowed to their own row(s).
+ */
+export async function resolveScorecardScope(entity: Entity): Promise<ScorecardScope> {
+  if (entity.verticalIds === null) {
+    return { isSlice: false, benchmark: entity, visibleCodes: null };
+  }
+  const all = await listAllEntities();
+  const sameCompanies = (e: Entity) =>
+    !e.verticalIds &&
+    [...e.memberIds].sort().join(",") === [...entity.memberIds].sort().join(",");
+  const benchmark =
+    all.find(sameCompanies) ?? all.find((e) => e.slug === "group") ?? entity;
+  const sliceVerticals = await getVerticals(entity);
+  const visibleCodes = new Set(
+    sliceVerticals
+      .map((v) => scorecardRowCodeFor(v.code))
+      .filter((c): c is string => c !== null),
+  );
+  return { isSlice: true, benchmark, visibleCodes };
+}
 
 export interface ScorecardRow {
   code: string;
@@ -68,7 +116,20 @@ export interface ScorecardRow {
   collectionBudget: number;
   collectionActual: number;
   collectionAchievement: number | null;
+  /** the vertical's own directly-tagged cost */
+  directCost: number;
+  /** its share of the apportioned common pool */
+  apportionedCost: number;
+  /** directCost + apportionedCost - the figure contribution is struck on */
   cost: number;
+  /**
+   * Ledger revenue for the vertical - what net revenue contribution is struck
+   * on. Differs from `revenueActual` when the vertical bills outside the books:
+   * that out-of-books revenue counts towards the budget rating but has no cost
+   * line beneath it, so the contribution card leaves it out and stays
+   * arithmetically clean (revenue - direct - apportioned = contribution).
+   */
+  contributionRevenue: number;
   revenueContribution: number;
   revenueContributionShare: number | null;
   collectionContribution: number;
@@ -174,12 +235,19 @@ export async function buildScorecard(opts: {
   ]);
 
   // ----- fold apportionment across the quarters in range, keyed by receiver -----
-  const apport = new Map<string, { revenue: number; cost: number; contribution: number }>();
+  const apport = new Map<
+    string,
+    { revenue: number; cost: number; directCost: number; apportionedCost: number; contribution: number }
+  >();
   for (const ap of apportionments) {
     for (const v of ap.verticals) {
-      const cur = apport.get(v.key) ?? { revenue: 0, cost: 0, contribution: 0 };
+      const cur =
+        apport.get(v.key) ??
+        { revenue: 0, cost: 0, directCost: 0, apportionedCost: 0, contribution: 0 };
       cur.revenue += v.revenue;
       cur.cost += v.totalCost;
+      cur.directCost += v.directCost;
+      cur.apportionedCost += v.apportionedTotal;
       cur.contribution += v.contribution;
       apport.set(v.key, cur);
     }
@@ -202,7 +270,10 @@ export async function buildScorecard(opts: {
     // apportionment engine. A vertical it does not model (JIPO) carries no
     // apportioned cost here, so its contribution is revenue less nil.
     const ap = def.apportKey ? apport.get(def.apportKey) : undefined;
+    const directCost = ap?.directCost ?? 0;
+    const apportionedCost = ap?.apportionedCost ?? 0;
     const cost = ap?.cost ?? 0;
+    const contributionRevenue = ap?.revenue ?? rev;
     const revContribution = ap?.contribution ?? rev - cost;
     const collContribution = coll - cost;
 
@@ -236,7 +307,10 @@ export async function buildScorecard(opts: {
       collectionBudget: collBud,
       collectionActual: coll,
       collectionAchievement: collBud > 0 ? coll / collBud : null,
+      directCost,
+      apportionedCost,
       cost,
+      contributionRevenue,
       revenueContribution: revContribution,
       revenueContributionShare: null,
       collectionContribution: collContribution,

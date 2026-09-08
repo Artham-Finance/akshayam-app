@@ -255,6 +255,30 @@ export async function buildExpenseDetail(opts: {
   if (lastOther >= 0) lines.splice(lastOther + 1, 0, misc);
   else lines.push(misc);
 
+  /**
+   * Named lines the sheet never carries, placed at the foot of the head they
+   * belong to. Each shows only when its head is on the statement, and - like
+   * Misc above - survives a budget re-upload. None has a budget: the two
+   * "Others (not budgeted)" lines are a catch-all for unplanned spend, and the
+   * two memberships are named but budgeted as nil (the whole dues budget sits
+   * on ICSI membership).
+   */
+  const TRAILING: { head: string; label: string }[] = [
+    { head: "Computer - subscription", label: "Others (not budgeted)" },
+    { head: "Computer maintenance charges", label: "Others (not budgeted)" },
+    { head: "Dues and subscription", label: "IBBI membership" },
+    { head: "Dues and subscription", label: "Other" },
+  ];
+  for (const t of TRAILING) {
+    const at = lines.map((l) => l.head).lastIndexOf(t.head);
+    if (at < 0) continue;
+    lines.splice(
+      at + 1,
+      0,
+      actualOnly(t.head, t.label, { sortOrder: lines[at].sortOrder + 1 }),
+    );
+  }
+
   const reimb = reimbRows[0] ?? { expense: 0, income: 0 };
   const fromLedger = (
     label: string,

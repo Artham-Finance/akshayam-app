@@ -32,6 +32,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   let period: PeriodCookie | null = null;
   let periodLabel = "";
   let periodFyBounds: { start: string; end: string } | null = null;
+  let isSlice = false;
 
   const user = await getCurrentUser();
 
@@ -42,6 +43,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       );
       const [entity, all] = await Promise.all([getEntity(), listEntities()]);
       currentSlug = entity.slug;
+      isSlice = entity.verticalIds !== null;
       entities = all.map((e) => ({ slug: e.slug, name: e.name }));
 
       // The global reporting period, resolved once here and read on every tab.
@@ -74,6 +76,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             period={period}
             periodLabel={periodLabel}
             periodFyBounds={periodFyBounds}
+            isSlice={isSlice}
             user={{
               name: user.name,
               email: user.email,

@@ -2,6 +2,7 @@ import Link from "next/link";
 import clsx from "clsx";
 import { Bar, DataTable, drillColumns, renderDrillRow } from "@/components/DataTable";
 import { CustomerPicker } from "@/components/CustomerPicker";
+import { DscTokenCard } from "@/components/DscTokenCard";
 import { TdsRecoSection } from "@/components/TdsRecoSection";
 import { PeriodControls } from "@/components/PeriodControls";
 import { SetupRequired } from "@/components/SetupRequired";
@@ -35,6 +36,7 @@ import {
   runDrill,
 } from "@/lib/reports/drilldowns";
 import { buildCustomerStatement, listCustomers } from "@/lib/reports/customer-statement";
+import { buildDscToken } from "@/lib/reports/dsc-token";
 import { fyBounds, fyLabel, fyStartYearOf } from "@/lib/period";
 import { requireEntityAccess } from "@/lib/auth/dal";
 
@@ -204,6 +206,20 @@ export default async function ReceivablesPage({
      * containing the snapshot is the only one a statement could mean.
      */
     const statementFy = fyStartYearOf(new Date(`${asOf}T00:00:00`));
+
+    // DSC and support buys and sells digital-signature tokens; when it is the
+    // picked vertical, the token stock-take sits above the TDS reconciliation.
+    const dscVertical = verticals.find((v) => v.id === verticalId)?.code === "DSC";
+    const dscToken = dscVertical
+      ? await buildDscToken({
+          entity,
+          verticalId: verticalId!,
+          fyStartYear: statementFy,
+          latest: asOf,
+          month: typeof params.dscm === "string" ? params.dscm : null,
+        })
+      : null;
+
     const statement = customer
       ? await buildCustomerStatement({
           entity,
@@ -663,6 +679,21 @@ export default async function ReceivablesPage({
               ]}
             />
           </Card>
+
+          {dscToken && (
+            <Card padded={false}>
+              <div className="px-4 pt-4 sm:px-5">
+                <CardTitle hint={`${dscToken.monthKey} · book vs count`}>
+                  DSC tokens — books vs count in hand
+                </CardTitle>
+              </div>
+              <DscTokenCard
+                key={dscToken.monthKey}
+                result={dscToken}
+                verticalId={verticalId!}
+              />
+            </Card>
+          )}
 
           {/* The tax credit side of the same receivable: what customers
               deducted, against what the books raised when the invoice went out. */}
