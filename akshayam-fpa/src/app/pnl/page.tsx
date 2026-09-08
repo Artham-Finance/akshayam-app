@@ -20,8 +20,12 @@ import {
 } from "@/lib/entity";
 import { withParams } from "@/lib/href";
 import { compactINR } from "@/lib/format";
-import { fyLabel, fyMonths, fyStartYearOf, type QuarterNo } from "@/lib/period";
-import { ledgerAsOfLabel, ledgerWrittenTo } from "@/lib/reporting-period";
+import { fyMonths, type QuarterNo } from "@/lib/period";
+import {
+  getReportingPeriod,
+  ledgerAsOfLabel,
+  ledgerWrittenTo,
+} from "@/lib/reporting-period";
 import { buildApportionment, receiverKeyFor } from "@/lib/reports/apportionment";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
 import { buildProfitAndLoss } from "@/lib/reports/statements";
@@ -62,10 +66,12 @@ export default async function ProfitAndLossPage({
       );
     }
 
-    const requestedFy = Number(params.fy);
-    const fy = availableYears.includes(requestedFy)
-      ? requestedFy
-      : (availableYears[0] ?? fyStartYearOf());
+    // The global reporting period from the header picker.
+    const preview = await getReportingPeriod(entity, availableYears);
+    const writtenTo = await ledgerWrittenTo(entity.memberIds, preview.fyStartYear);
+    const period = await getReportingPeriod(entity, availableYears, writtenTo);
+    const fy = period.fyStartYear;
+    const window = { start: period.start, end: period.end };
 
     const requestedVertical = Number(params.vertical);
     const verticalId = verticals.some((v) => v.id === requestedVertical)
@@ -74,12 +80,12 @@ export default async function ProfitAndLossPage({
     const verticalName =
       verticals.find((v) => v.id === verticalId)?.name ?? null;
 
-    // Neither of these needs the other, so they go together rather than one
-    // after the next.
-    const [statement, writtenTo] = await Promise.all([
-      buildProfitAndLoss({ entity, fyStartYear: fy, verticalId }),
-      ledgerWrittenTo(entity.memberIds, fy),
-    ]);
+    const statement = await buildProfitAndLoss({
+      entity,
+      fyStartYear: fy,
+      verticalId,
+      window,
+    });
 
     /**
      * The two vertical-wise sections that used to live on Budget vs Actual.
@@ -90,9 +96,9 @@ export default async function ProfitAndLossPage({
      * statement they are derived from.
      */
     const months = fyMonths(fy);
-    const reachedQuarter = (months
-      .filter((m) => !writtenTo || m.start <= writtenTo)
-      .pop() ?? months[0]).quarter;
+    // The apportionment card defaults to the last quarter the period touches.
+    const reachedQuarter =
+      period.periodMonths[period.periodMonths.length - 1]?.quarter ?? months[0].quarter;
 
     const requestedQuarter = /^q([1-4])$/.exec(String(params.q ?? ""));
     const quarter: QuarterNo = requestedQuarter
@@ -106,7 +112,7 @@ export default async function ProfitAndLossPage({
       months.find((m) => m.key === requestedMonth && m.quarter === quarter)?.key ?? null;
 
     const [bva, apportionment] = await Promise.all([
-      buildBudgetVsActualPnl({ entity, fyStartYear: fy, verticalId }),
+      buildBudgetVsActualPnl({ entity, fyStartYear: fy, verticalId, window }),
       /**
        * Always struck across every vertical, even when one is picked.
        *
@@ -155,7 +161,7 @@ export default async function ProfitAndLossPage({
           title="Profit & Loss"
           subtitle={
             <>
-              {fyLabel(fy)}
+              {period.label}
               {verticalName ? ` · ${verticalName}` : " · All verticals"}
               {ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""} · click
               a quarter heading to open its months
@@ -164,20 +170,16 @@ export default async function ProfitAndLossPage({
           actions={
             <>
               <PeriodControls
-                financialYears={availableYears}
-                currentFy={fy}
+                financialYears={[]}
+                currentFy={0}
                 verticals={verticals.map((v) => ({ id: v.id, name: v.name }))}
                 currentVerticalId={verticalId}
               />
               <DownloadExcel
                 href={withParams("/api/export", params, {
                   kind: "pnl",
-                  fy,
                   vertical: verticalId,
                   drill: null,
-                  period: null,
-                  week: null,
-                  month: null,
                 })}
               />
             </>
@@ -247,6 +249,7 @@ export default async function ProfitAndLossPage({
             months={statement.months}
             lines={lines}
             emphasise={["gross_profit", "ebitda", "pat"]}
+            totalLabel={period.periodMonths.length < 12 ? period.shortLabel : undefined}
           />
 
           <Card padded={false}>

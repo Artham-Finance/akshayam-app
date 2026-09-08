@@ -61,10 +61,18 @@ export async function buildProfitAndLoss(opts: {
   verticalId?: number | null;
   /** include the ledger accounts beneath each group heading */
   detail?: boolean;
+  /**
+   * A sub-year window. When given, only the months it touches become columns
+   * and the first/last are legitimately partial - the figure is for the exact
+   * dates, not the whole month.
+   */
+  window?: { start: string; end: string };
 }): Promise<StatementResult> {
-  const { entity, fyStartYear, verticalId = null, detail = true } = opts;
-  const months = fyMonths(fyStartYear);
-  const { start, end } = fyBounds(fyStartYear);
+  const { entity, fyStartYear, verticalId = null, detail = true, window } = opts;
+  const months = window
+    ? fyMonths(fyStartYear).filter((m) => m.start <= window.end && m.end >= window.start)
+    : fyMonths(fyStartYear);
+  const { start, end } = window ?? fyBounds(fyStartYear);
 
   type FlatRow = {
     month_key: string;
@@ -139,10 +147,19 @@ export async function buildBalanceSheet(opts: {
   entity: Entity;
   fyStartYear: number;
   detail?: boolean;
+  /**
+   * The date to report the position at. Defaults to the year end. The opening
+   * position is always the start of the financial year, so a mid-year `asOf`
+   * just stops the running balance earlier - the last column is the close on
+   * that date.
+   */
+  asOf?: string;
 }): Promise<StatementResult> {
   const { entity, fyStartYear, detail = true } = opts;
-  const months = fyMonths(fyStartYear);
-  const { start, end } = fyBounds(fyStartYear);
+  const fyRange = fyBounds(fyStartYear);
+  const start = fyRange.start;
+  const end = opts.asOf && opts.asOf < fyRange.end ? opts.asOf : fyRange.end;
+  const months = fyMonths(fyStartYear).filter((m) => m.start <= end);
   const ids = entity.memberIds;
   const consolidating = entity.consolidates;
 
@@ -300,10 +317,18 @@ export async function buildCashFlow(opts: {
   entity: Entity;
   fyStartYear: number;
   detail?: boolean;
+  /**
+   * A sub-year window. Opening cash becomes the position at `window.start`
+   * (not the year opening), so the statement still ties: closing cash is that
+   * opening plus the window's own net movement.
+   */
+  window?: { start: string; end: string };
 }): Promise<CashFlowResult> {
-  const { entity, fyStartYear, detail = true } = opts;
-  const months = fyMonths(fyStartYear);
-  const { start, end } = fyBounds(fyStartYear);
+  const { entity, fyStartYear, detail = true, window } = opts;
+  const months = window
+    ? fyMonths(fyStartYear).filter((m) => m.start <= window.end && m.end >= window.start)
+    : fyMonths(fyStartYear);
+  const { start, end } = window ?? fyBounds(fyStartYear);
   const ids = entity.memberIds;
   const consolidating = entity.isGroup;
 

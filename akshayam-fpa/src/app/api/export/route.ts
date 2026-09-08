@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
-import { getEntity, getVerticals } from "@/lib/entity";
+import { getAvailableFinancialYears, getEntity, getVerticals } from "@/lib/entity";
 import { apiGuard } from "@/lib/auth/dal";
-import { fyBounds, fyLabel, fyStartYearOf } from "@/lib/period";
+import {
+  getReportingPeriod,
+  ledgerWrittenTo,
+} from "@/lib/reporting-period";
 import { isDrill, runDrill, type DrillKind } from "@/lib/reports/drilldowns";
 import {
   buildStatementWorkbook,
@@ -43,9 +46,15 @@ export async function GET(request: Request) {
   try {
     const entity = await getEntity();
 
-    const requestedFy = Number(url.searchParams.get("fy"));
-    const fy = Number.isFinite(requestedFy) && requestedFy > 2000 ? requestedFy : fyStartYearOf();
-    const { start, end } = fyBounds(fy);
+    // The reporting period comes from the same cookie the pages read, so a
+    // download always matches the screen it came from.
+    const availableYears = await getAvailableFinancialYears(entity.memberIds);
+    const preview = await getReportingPeriod(entity, availableYears);
+    const writtenTo = await ledgerWrittenTo(entity.memberIds, preview.fyStartYear);
+    const period = await getReportingPeriod(entity, availableYears, writtenTo);
+    const fy = period.fyStartYear;
+    const start = period.start;
+    const end = period.end;
 
     const requestedVertical = Number(url.searchParams.get("vertical"));
     const verticalId =
@@ -64,6 +73,10 @@ export async function GET(request: Request) {
         fyStartYear: fy,
         verticalId,
         verticalName,
+        window: { start, end },
+        asOf: period.asOf,
+        periodMonths: period.periodMonths,
+        periodLabel: period.label,
       });
       const buffer = await workbook.xlsx.writeBuffer();
       return spreadsheet(buffer, exportFilename(entity.name, statementTitle(kind)));
@@ -91,7 +104,7 @@ export async function GET(request: Request) {
     if (!result) return NextResponse.json({ error: "Nothing to export." }, { status: 404 });
 
     const context = [entity.name];
-    if (kind !== "receivables") context.push(fyLabel(fy));
+    if (kind !== "receivables") context.push(period.label);
     if (verticalId) context.push("filtered to one vertical");
     if (customer) context.push(customer);
     if (currency) context.push(`raised in ${currency.toUpperCase()}`);

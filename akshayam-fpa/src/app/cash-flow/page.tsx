@@ -1,4 +1,3 @@
-import { PeriodControls } from "@/components/PeriodControls";
 import { SetupRequired } from "@/components/SetupRequired";
 import { StatementTable, type ClientLine } from "@/components/StatementTable";
 import {
@@ -12,8 +11,11 @@ import { queryOne } from "@/lib/db";
 import { getAvailableFinancialYears, getEntity } from "@/lib/entity";
 import { withParams } from "@/lib/href";
 import { money } from "@/lib/format";
-import { fyLabel, fyStartYearOf } from "@/lib/period";
-import { ledgerAsOfLabel, ledgerWrittenTo } from "@/lib/reporting-period";
+import {
+  getReportingPeriod,
+  ledgerAsOfLabel,
+  ledgerWrittenTo,
+} from "@/lib/reporting-period";
 import { buildCashFlow } from "@/lib/reports/statements";
 import { requireEntityAccess } from "@/lib/auth/dal";
 
@@ -70,45 +72,35 @@ export default async function CashFlowPage({
       );
     }
 
-    const requestedFy = Number(params.fy);
-    const fy = availableYears.includes(requestedFy)
-      ? requestedFy
-      : (availableYears[0] ?? fyStartYearOf());
+    // The global reporting period. Opening cash is the position at its start,
+    // so the statement still ties over a mid-year window.
+    const preview = await getReportingPeriod(entity, availableYears);
+    const writtenTo = await ledgerWrittenTo(entity.memberIds, preview.fyStartYear);
+    const period = await getReportingPeriod(entity, availableYears, writtenTo);
+    const fy = period.fyStartYear;
 
-    const [statement, writtenTo] = await Promise.all([
-      buildCashFlow({ entity, fyStartYear: fy }),
-      ledgerWrittenTo(entity.memberIds, fy),
-    ]);
+    const statement = await buildCashFlow({
+      entity,
+      fyStartYear: fy,
+      window: { start: period.start, end: period.end },
+    });
     const lines: ClientLine[] = statement.lines.map((line) => ({ ...line }));
 
     return (
       <>
         <PageHeader
           title="Cash Flow"
-          subtitle={`${fyLabel(fy)} · indirect method${
+          subtitle={`${period.label} · indirect method${
             ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""
           } · click a quarter heading to open its months`}
           actions={
-            <>
-              <PeriodControls
-                financialYears={availableYears}
-                currentFy={fy}
-                verticals={[]}
-                currentVerticalId={null}
-                showVerticalPicker={false}
-              />
-              <DownloadExcel
-                href={withParams("/api/export", params, {
-                  kind: "cash-flow",
-                  fy,
-                  vertical: null,
-                  drill: null,
-                  period: null,
-                  week: null,
-                  month: null,
-                })}
-              />
-            </>
+            <DownloadExcel
+              href={withParams("/api/export", params, {
+                kind: "cash-flow",
+                vertical: null,
+                drill: null,
+              })}
+            />
           }
         />
 
@@ -188,6 +180,7 @@ export default async function CashFlowPage({
             months={statement.months}
             lines={lines}
             emphasise={["cfo", "net_change", "closing_cash"]}
+            totalLabel={period.periodMonths.length < 12 ? period.shortLabel : undefined}
           />
         </div>
       </>

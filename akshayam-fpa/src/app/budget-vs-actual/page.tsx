@@ -2,7 +2,6 @@ import Link from "next/link";
 import { BvaStatement } from "@/components/BvaTable";
 import { ExpenseDetailTable } from "@/components/ExpenseDetailTable";
 import { TeamCostTable } from "@/components/TeamCostTable";
-import { BvaControls } from "@/components/BvaControls";
 import { SetupRequired } from "@/components/SetupRequired";
 import {
   Card,
@@ -19,8 +18,12 @@ import {
   getVerticals,
 } from "@/lib/entity";
 import { withParams } from "@/lib/href";
-import { fyLabel, fyMonths, type QuarterNo } from "@/lib/period";
-import { ledgerAsOfLabel, ledgerWrittenTo } from "@/lib/reporting-period";
+import { fyMonths } from "@/lib/period";
+import {
+  getReportingPeriod,
+  ledgerAsOfLabel,
+  ledgerWrittenTo,
+} from "@/lib/reporting-period";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
 import { buildExpenseDetail } from "@/lib/reports/expense-detail";
 import { buildTeamCost } from "@/lib/reports/team-cost";
@@ -74,46 +77,26 @@ export default async function BudgetVsActualPage({
       );
     }
 
-    const requestedFy = Number(params.fy);
-    const fy = availableYears.includes(requestedFy)
-      ? requestedFy
-      : availableYears[0];
+    // The global reporting period. The budget side snaps to whole months
+    // (`periodMonths`); the actual side uses the exact dates (`window`).
+    const preview = await getReportingPeriod(entity, availableYears);
+    const writtenTo = await ledgerWrittenTo(entity.memberIds, preview.fyStartYear);
+    const period = await getReportingPeriod(entity, availableYears, writtenTo);
+    const fy = period.fyStartYear;
     const months = fyMonths(fy);
+    const periodMonths = period.periodMonths;
+    const periodLabel = period.label;
 
-    const [verticals, statement, writtenTo] = await Promise.all([
+    const [verticals, statement] = await Promise.all([
       getVerticals(entity),
-      isSlice ? null : buildBudgetVsActualPnl({ entity, fyStartYear: fy }),
-      ledgerWrittenTo(entity.memberIds, fy),
+      isSlice
+        ? null
+        : buildBudgetVsActualPnl({
+            entity,
+            fyStartYear: fy,
+            window: { start: period.start, end: period.end },
+          }),
     ]);
-
-    /**
-     * The period this page compares on: whole months, up to and including the
-     * month the ledger has reached. A part month counts in full - a ledger
-     * pasted to 24 August carries five months of budget, not four and
-     * three-quarters. That is the firm's own convention and the same rule the
-     * revenue and collections pages use, so the three pages never disagree
-     * about how far the year has run.
-     */
-    const closed = months.filter((m) => !writtenTo || m.start <= writtenTo);
-    const lastClosed = closed[closed.length - 1] ?? months[0];
-    const pick = typeof params.period === "string" ? params.period : "ytd";
-
-    let periodMonths = closed.length > 0 ? closed : [months[0]];
-    let periodLabel = `Year to date · ${months[0].label} to ${lastClosed.label}`;
-
-    const month = months.find((m) => m.key === pick);
-    const quarterPick = /^q([1-4])$/.exec(pick);
-    if (month) {
-      periodMonths = [month];
-      periodLabel = month.label;
-    } else if (quarterPick) {
-      const q = Number(quarterPick[1]) as QuarterNo;
-      periodMonths = months.filter((m) => m.quarter === q);
-      periodLabel = `Q${q}`;
-    } else if (pick === "full") {
-      periodMonths = months;
-      periodLabel = `Full year ${fyLabel(fy)}`;
-    }
 
     /**
      * The statement's own Team cost budget, for the period on screen and for
@@ -152,31 +135,19 @@ export default async function BudgetVsActualPage({
       <>
         <PageHeader
           title="Budget vs Actual"
-          subtitle={`${entity.name} · ${fyLabel(fy)} · ${periodLabel}${
+          subtitle={`${entity.name} · ${periodLabel}${
             ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""
           }`}
           actions={
-            <>
-              <BvaControls
-                financialYears={availableYears}
-                currentFy={fy}
-                months={closed.map((m) => ({ value: m.key, label: m.label }))}
-                current={pick}
+            !isSlice && (
+              <DownloadExcel
+                href={withParams("/api/export", params, {
+                  kind: "budget-vs-actual",
+                  vertical: null,
+                  drill: null,
+                })}
               />
-              {!isSlice && (
-                <DownloadExcel
-                  href={withParams("/api/export", params, {
-                    kind: "budget-vs-actual",
-                    fy,
-                    vertical: null,
-                    drill: null,
-                    period: null,
-                    week: null,
-                    month: null,
-                  })}
-                />
-              )}
-            </>
+            )
           }
         />
 

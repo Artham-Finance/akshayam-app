@@ -2,6 +2,12 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Nav } from "@/components/Nav";
 import { getCurrentUser } from "@/lib/auth/dal";
+import { fyBounds } from "@/lib/period";
+import type { PeriodCookie } from "@/lib/period-presets";
+import {
+  getReportingPeriod,
+  readReportingPeriodCookie,
+} from "@/lib/reporting-period";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
@@ -23,15 +29,30 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   // blank the whole app - the setup page needs to stay reachable.
   let entities: { slug: string; name: string }[] = [];
   let currentSlug = "";
+  let period: PeriodCookie | null = null;
+  let periodLabel = "";
+  let periodFyBounds: { start: string; end: string } | null = null;
 
   const user = await getCurrentUser();
 
   if (user) {
     try {
-      const { getEntity, listEntities } = await import("@/lib/entity");
+      const { getEntity, listEntities, getAvailableFinancialYears } = await import(
+        "@/lib/entity"
+      );
       const [entity, all] = await Promise.all([getEntity(), listEntities()]);
       currentSlug = entity.slug;
       entities = all.map((e) => ({ slug: e.slug, name: e.name }));
+
+      // The global reporting period, resolved once here and read on every tab.
+      const years = await getAvailableFinancialYears(entity.memberIds);
+      const [cookie, resolved] = await Promise.all([
+        readReportingPeriodCookie(),
+        getReportingPeriod(entity, years),
+      ]);
+      period = cookie;
+      periodLabel = resolved.shortLabel;
+      periodFyBounds = fyBounds(resolved.fyStartYear, entity.fy_start_month);
     } catch {
       // Database not reachable yet, or this user has been granted no company.
       // Either way the shell still renders; the page below says what is wrong.
@@ -50,6 +71,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           <Nav
             entities={entities}
             currentSlug={currentSlug}
+            period={period}
+            periodLabel={periodLabel}
+            periodFyBounds={periodFyBounds}
             user={{
               name: user.name,
               email: user.email,

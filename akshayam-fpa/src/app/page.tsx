@@ -10,7 +10,11 @@ import {
 } from "@/lib/entity";
 import { compactINR, dateLabel, percent, share } from "@/lib/format";
 import { fyLabel } from "@/lib/period";
-import { ledgerAsOfLabel, ledgerWrittenTo, resolvePeriod } from "@/lib/reporting-period";
+import {
+  getReportingPeriod,
+  ledgerAsOfLabel,
+  ledgerWrittenTo,
+} from "@/lib/reporting-period";
 import { buildBudgetVsActual } from "@/lib/reports/budget";
 import { buildProfitAndLoss } from "@/lib/reports/statements";
 import { requireEntityAccess } from "@/lib/auth/dal";
@@ -43,22 +47,24 @@ export default async function OverviewPage() {
       );
     }
 
-    const fy = availableYears[0] ?? new Date().getFullYear();
-    // The same year-to-date the reporting pages use - to the last completed
-    // week, not the last day of the year. An overview that disagreed with the
-    // page it links to would be the first thing anyone noticed.
-    const writtenTo = await ledgerWrittenTo(entity.memberIds, fy);
-    const period = resolvePeriod({
-      fyStartYear: fy,
-      latest: writtenTo,
-      params: {},
-    });
+    // The global reporting period from the header picker. Resolved once without
+    // the ledger date to learn the year, then again with it so a "to date"
+    // preset stops where the books do.
+    const preview = await getReportingPeriod(entity, availableYears);
+    const writtenTo = await ledgerWrittenTo(entity.memberIds, preview.fyStartYear);
+    const period = await getReportingPeriod(entity, availableYears, writtenTo);
+    const fy = period.fyStartYear;
     const { start, end } = period;
 
     const [statement, arSnapshot, topTen, revenueBudget, collectionBudget] =
       await Promise.all([
       availableYears.length
-        ? buildProfitAndLoss({ entity, fyStartYear: fy, detail: false })
+        ? buildProfitAndLoss({
+            entity,
+            fyStartYear: fy,
+            detail: false,
+            window: { start, end },
+          })
         : null,
       // Each company at its own most recent snapshot. Pinning both to the
       // latest date across the group would drop whichever company's AR export
@@ -198,7 +204,7 @@ export default async function OverviewPage() {
             // question and answers none of it. Reimbursement recoveries are a
             // recharge of client-paid costs and are not collection performance.
             value: compactINR(collectionBudget.total.period.actual),
-            note: `Fee receipts ${period.label.replace("Year to date · ", "")}`,
+            note: `Fee receipts · ${period.label}`,
             href: "/collections",
             tone: "positive",
           },
@@ -272,7 +278,7 @@ export default async function OverviewPage() {
       <>
         <PageHeader
           title="Overview"
-          subtitle={`${entity.name} · ${fyLabel(fy)}${
+          subtitle={`${entity.name} · ${period.label}${
             ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""
           }`}
         />

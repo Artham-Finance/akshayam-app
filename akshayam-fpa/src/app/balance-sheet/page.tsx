@@ -1,4 +1,3 @@
-import { PeriodControls } from "@/components/PeriodControls";
 import { SetupRequired } from "@/components/SetupRequired";
 import { StatementTable, type ClientLine } from "@/components/StatementTable";
 import {
@@ -9,15 +8,15 @@ import {
   DownloadExcel,
 } from "@/components/ui";
 import { queryOne } from "@/lib/db";
-import {
-  getAvailableFinancialYears,
-  getEntity,
-  getVerticals,
-} from "@/lib/entity";
+import { getAvailableFinancialYears, getEntity } from "@/lib/entity";
 import { withParams } from "@/lib/href";
-import { money } from "@/lib/format";
-import { fyBounds, fyLabel, fyStartYearOf } from "@/lib/period";
-import { ledgerAsOfLabel, ledgerWrittenTo } from "@/lib/reporting-period";
+import { dateLabel, money } from "@/lib/format";
+import { fyBounds, fyLabel } from "@/lib/period";
+import {
+  getReportingPeriod,
+  ledgerAsOfLabel,
+  ledgerWrittenTo,
+} from "@/lib/reporting-period";
 import { buildBalanceSheet } from "@/lib/reports/statements";
 import { requireEntityAccess } from "@/lib/auth/dal";
 
@@ -41,10 +40,7 @@ export default async function BalanceSheetPage({
         </>
       );
     }
-    const [verticals, availableYears] = await Promise.all([
-      getVerticals(entity),
-      getAvailableFinancialYears(entity.memberIds),
-    ]);
+    const availableYears = await getAvailableFinancialYears(entity.memberIds);
 
     if (availableYears.length === 0) {
       return (
@@ -62,10 +58,12 @@ export default async function BalanceSheetPage({
       );
     }
 
-    const requestedFy = Number(params.fy);
-    const fy = availableYears.includes(requestedFy)
-      ? requestedFy
-      : (availableYears[0] ?? fyStartYearOf());
+    // The global reporting period; the balance sheet is the position as at its
+    // end date.
+    const preview = await getReportingPeriod(entity, availableYears);
+    const writtenTo = await ledgerWrittenTo(entity.memberIds, preview.fyStartYear);
+    const period = await getReportingPeriod(entity, availableYears, writtenTo);
+    const fy = period.fyStartYear;
 
     /**
      * Opening balances only seed the statement when they are dated before the
@@ -90,10 +88,11 @@ export default async function BalanceSheetPage({
     const openingApplies = openingRow?.applies ?? 0;
     const openingMisdated = (openingRow?.total ?? 0) - openingApplies;
 
-    const [statement, writtenTo] = await Promise.all([
-      buildBalanceSheet({ entity, fyStartYear: fy }),
-      ledgerWrittenTo(entity.memberIds, fy),
-    ]);
+    const statement = await buildBalanceSheet({
+      entity,
+      fyStartYear: fy,
+      asOf: period.asOf,
+    });
 
     const lines: ClientLine[] = statement.lines.map((line) => ({ ...line }));
 
@@ -112,30 +111,17 @@ export default async function BalanceSheetPage({
       <>
         <PageHeader
           title="Balance Sheet"
-          subtitle={`${fyLabel(fy)} · position at each period end${
+          subtitle={`${period.label} · position as at ${dateLabel(period.asOf)}${
             ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""
           } · click a quarter heading to open its months`}
           actions={
-            <>
-              <PeriodControls
-                financialYears={availableYears}
-                currentFy={fy}
-                verticals={verticals.map((v) => ({ id: v.id, name: v.name }))}
-                currentVerticalId={null}
-                showVerticalPicker={false}
-              />
-              <DownloadExcel
-                href={withParams("/api/export", params, {
-                  kind: "balance-sheet",
-                  fy,
-                  vertical: null,
-                  drill: null,
-                  period: null,
-                  week: null,
-                  month: null,
-                })}
-              />
-            </>
+            <DownloadExcel
+              href={withParams("/api/export", params, {
+                kind: "balance-sheet",
+                vertical: null,
+                drill: null,
+              })}
+            />
           }
         />
 
@@ -253,6 +239,9 @@ export default async function BalanceSheetPage({
             lines={lines}
             emphasise={["total_assets", "total_eq_liab"]}
             aggregate="closing"
+            totalLabel={
+              period.periodMonths.length < 12 ? dateLabel(period.asOf) : undefined
+            }
           />
         </div>
       </>
