@@ -25,7 +25,11 @@ jobs:
     # 021_seed_missing_vertical_budgets had to go back and repair.
     services:
       postgres:
-        image: postgres:15
+        # Pinned to the major version production runs (Ubuntu 22.04's default,
+        # see infrastructure/prod.yml). CI on a newer PostgreSQL than the box
+        # is worse than no CI for migrations: 054 used `unique nulls not
+        # distinct`, which is 15-only, went green here and broke the deploy.
+        image: postgres:14
         env:
           POSTGRES_USER: akshayam
           POSTGRES_PASSWORD: akshayam

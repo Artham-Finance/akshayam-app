@@ -29,9 +29,19 @@ alter table vertical_headcount add column month date;
 alter table vertical_headcount
   drop constraint vertical_headcount_vertical_id_fy_start_year_key;
 
-alter table vertical_headcount
-  add constraint vertical_headcount_vertical_fy_month_key
-  unique nulls not distinct (vertical_id, fy_start_year, month);
+-- One row per vertical per month, and still one annual baseline per vertical.
+-- A plain unique (vertical_id, fy_start_year, month) would not give the second
+-- of those: null months never collide, so a vertical could collect any number
+-- of annual rows. `unique nulls not distinct` says it in a single constraint,
+-- but that is PostgreSQL 15 and production is on 14 - so two partial indexes,
+-- which mean the same thing on both.
+create unique index vertical_headcount_vertical_fy_month_key
+  on vertical_headcount (vertical_id, fy_start_year, month)
+  where month is not null;
+
+create unique index vertical_headcount_vertical_fy_annual_key
+  on vertical_headcount (vertical_id, fy_start_year)
+  where month is null;
 
 -- RBJV: twelve monthly rows per vertical, seeded from the annual baseline.
 insert into vertical_headcount (vertical_id, fy_start_year, month, heads)
@@ -44,4 +54,4 @@ select h.vertical_id,
   join entities e on e.id = v.entity_id
   cross join generate_series(0, 11) as n
  where e.slug = 'rbjv' and h.fy_start_year = 2026 and h.month is null
-on conflict on constraint vertical_headcount_vertical_fy_month_key do nothing;
+on conflict (vertical_id, fy_start_year, month) where month is not null do nothing;
