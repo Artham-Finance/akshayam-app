@@ -1,12 +1,18 @@
+import type { ReactNode } from "react";
 import clsx from "clsx";
 import { SetupRequired } from "@/components/SetupRequired";
-import { Card, CardTitle, CompanyOnly, EmptyState, Notice, PageHeader } from "@/components/ui";
+import { Card, CardTitle, EmptyState, Notice, PageHeader } from "@/components/ui";
 import { RatingScaleCard } from "@/components/RatingScaleCard";
 import { getAvailableFinancialYears, getEntity } from "@/lib/entity";
 import { compactINR, money, percent } from "@/lib/format";
 import { fyBounds, fyLabel, fyMonths, fyStartYearOf, type QuarterNo } from "@/lib/period";
 import { ledgerAsOfLabel, ledgerWrittenTo } from "@/lib/reporting-period";
-import { buildScorecard, WEIGHTS, MGMT_APPRAISAL_DEFAULT } from "@/lib/reports/scorecard";
+import {
+  buildScorecard,
+  resolveScorecardScope,
+  WEIGHTS,
+  MGMT_APPRAISAL_DEFAULT,
+} from "@/lib/reports/scorecard";
 import { requireEntityAccess } from "@/lib/auth/dal";
 import { ScorecardControls } from "./ScorecardControls";
 
@@ -28,20 +34,15 @@ export default async function ScorecardPage({
 
   try {
     const entity = await getEntity();
-    if (entity.verticalIds) {
-      return (
-        <>
-          <PageHeader title="Vertical Performance Scorecard" />
-          <CompanyOnly
-            what="The vertical performance scorecard"
-            slice
-            companies={entity.memberIds.length}
-          />
-        </>
-      );
-    }
 
-    const availableYears = await getAvailableFinancialYears(entity.memberIds);
+    // A team lead is granted only their own single-vertical slice. The
+    // scorecard is still struck across the whole company (or companies) the
+    // slice is cut from, so the contribution shares and the firm totals read
+    // the same figure a partner sees; the rows are then narrowed to the
+    // vertical(s) the lead owns.
+    const { isSlice, benchmark, visibleCodes } = await resolveScorecardScope(entity);
+
+    const availableYears = await getAvailableFinancialYears(benchmark.memberIds);
     if (availableYears.length === 0) {
       return (
         <>
@@ -59,16 +60,25 @@ export default async function ScorecardPage({
       ? Number(params.fy)
       : (availableYears[0] ?? fyStartYearOf());
 
-    const writtenTo = await ledgerWrittenTo(entity.memberIds, fy);
-    const { end: fyEnd } = fyBounds(fy, entity.fy_start_month);
+    const writtenTo = await ledgerWrittenTo(benchmark.memberIds, fy);
+    const { end: fyEnd } = fyBounds(fy, benchmark.fy_start_month);
     const latestQuarter =
-      (fyMonths(fy, entity.fy_start_month).filter((m) => m.start <= (writtenTo ?? fyEnd)).at(-1)
+      (fyMonths(fy, benchmark.fy_start_month).filter((m) => m.start <= (writtenTo ?? fyEnd)).at(-1)
         ?.quarter as QuarterNo | undefined) ?? 1;
 
     const q = ([1, 2, 3, 4].includes(Number(params.q)) ? Number(params.q) : latestQuarter) as QuarterNo;
     const cumulative = params.basis !== "quarter"; // default cumulative
 
-    const data = await buildScorecard({ entity, fyStartYear: fy, quarter: q, cumulative });
+    const data = await buildScorecard({
+      entity: benchmark,
+      fyStartYear: fy,
+      quarter: q,
+      cumulative,
+    });
+    // The rows on show: every rated vertical, or just the slice's own.
+    const shown = visibleCodes
+      ? data.rows.filter((r) => visibleCodes!.has(r.code))
+      : data.rows;
 
     const weightRow = [
       ["Revenue vs budget", WEIGHTS.revenue],
@@ -112,6 +122,8 @@ export default async function ScorecardPage({
     const num = "px-3 py-2.5 text-right text-[12.5px] num";
 
     // ---- card totals ----
+    // Always the whole firm, even on a slice's own scorecard: the footer is
+    // the benchmark the team lead is read against, not a sum of what is shown.
     const rows = data.rows;
     const sum = (f: (r: (typeof rows)[number]) => number) => rows.reduce((s, r) => s + f(r), 0);
     const avg = (f: (r: (typeof rows)[number]) => number) =>
@@ -121,8 +133,18 @@ export default async function ScorecardPage({
     const revActTot = sum((r) => r.revenueActual);
     const collBudTot = sum((r) => r.collectionBudget);
     const collActTot = sum((r) => r.collectionActual);
-    const costTot = sum((r) => r.cost);
+    const directCostTot = sum((r) => r.directCost);
+    const apportCostTot = sum((r) => r.apportionedCost);
+    const contribRevTot = sum((r) => r.contributionRevenue);
     const revContribTot = sum((r) => r.revenueContribution);
+
+    // The Revenue-vs-budget card counts out-of-books billing; contribution is
+    // struck on the ledger only. Their difference is the whole gap between the
+    // two firm-total revenue figures, so it is named under the contribution card.
+    const osbRows = data.rows
+      .map((r) => ({ code: r.label.split(" - ").pop() ?? r.label, osb: r.revenueActual - r.contributionRevenue }))
+      .filter((x) => x.osb > 0.5);
+    const osbTotal = osbRows.reduce((s, x) => s + x.osb, 0);
     const collContribTot = sum((r) => r.collectionContribution);
     const ageBucketTot = [0, 1, 2, 3, 4, 5].map((i) => sum((r) => r.ageingBuckets[i] ?? 0));
     const ageGrandTot = ageBucketTot.reduce((s, b) => s + b, 0);
@@ -149,6 +171,14 @@ export default async function ScorecardPage({
         />
 
         <div className="space-y-4">
+          {isSlice && (
+            <Notice tone="info" title="Your vertical only">
+              {shown.length > 0
+                ? "Every card below is narrowed to your vertical; the footer row is the whole firm, as a benchmark."
+                : "Your vertical is not rated on the partners’ scorecard this quarter — it carries no budget or activity in the period, or is not a rated line. The footer rows below are the whole firm."}
+            </Notice>
+          )}
+
           <Card padded={false}>
             <div className="p-4 sm:p-5">
               <CardTitle hint="composite = weighted average of the six metrics">Weightage</CardTitle>
@@ -188,7 +218,7 @@ export default async function ScorecardPage({
                   </tr>
                 </thead>
                 <tbody>
-                  {data.rows.map((r, i) => (
+                  {shown.map((r, i) => (
                     <tr key={r.code} className="border-b border-line/70 odd:bg-surface-sunk/20">
                       <td className={clsx(td, "text-ink-muted")}>{i + 1}</td>
                       <td className={clsx(td, "font-medium text-ink")}>{r.label}</td>
@@ -214,7 +244,7 @@ export default async function ScorecardPage({
                 <tfoot>
                   <tr className="border-t-2 border-line-strong bg-surface-sunk/50 font-semibold">
                     <td className={td} />
-                    <td className={clsx(td, "text-ink")}>Average</td>
+                    <td className={clsx(td, "text-ink")}>{isSlice ? "Firm average" : "Average"}</td>
                     <td className={clsx(num, "text-center")}>{avg((r) => r.ratings.revenue).toFixed(1)}</td>
                     <td className={clsx(num, "text-center")}>{avg((r) => r.ratings.collection).toFixed(1)}</td>
                     <td className={clsx(num, "text-center")}>{avg((r) => r.ratings.netRevContrib).toFixed(1)}</td>
@@ -233,7 +263,7 @@ export default async function ScorecardPage({
             title="Revenue — budget vs actual"
             accent="border-navy"
             head={["Vertical", "Period budget", "Actual", "Achievement", "Rating"]}
-            rows={data.rows.map((r) => ({
+            rows={shown.map((r) => ({
               cells: [
                 r.label,
                 compactINR(r.revenueBudget),
@@ -243,7 +273,7 @@ export default async function ScorecardPage({
               rating: r.ratings.revenue,
             }))}
             foot={[
-              "Total",
+              isSlice ? "Firm total" : "Total",
               compactINR(revBudTot),
               compactINR(revActTot),
               revBudTot > 0 ? percent((revActTot / revBudTot) * 100, 1) : "–",
@@ -254,7 +284,7 @@ export default async function ScorecardPage({
             title="Collection — budget vs actual"
             accent="border-navy"
             head={["Vertical", "Period budget", "Actual", "Achievement", "Rating"]}
-            rows={data.rows.map((r) => ({
+            rows={shown.map((r) => ({
               cells: [
                 r.label,
                 compactINR(r.collectionBudget),
@@ -264,7 +294,7 @@ export default async function ScorecardPage({
               rating: r.ratings.collection,
             }))}
             foot={[
-              "Total",
+              isSlice ? "Firm total" : "Total",
               compactINR(collBudTot),
               compactINR(collActTot),
               collBudTot > 0 ? percent((collActTot / collBudTot) * 100, 1) : "–",
@@ -274,44 +304,77 @@ export default async function ScorecardPage({
           <WorkingCard
             title="Net revenue contribution"
             accent="border-positive"
-            head={["Vertical", "Revenue", "Cost", "Contribution", "% of total", "Rating"]}
-            rows={data.rows.map((r) => ({
+            head={[
+              "Vertical",
+              "Revenue",
+              "Direct cost",
+              "Apportioned cost",
+              "Contribution",
+              "% of total",
+              "Rating",
+            ]}
+            rows={shown.map((r) => ({
               cells: [
                 r.label,
-                compactINR(r.revenueActual),
-                compactINR(r.cost),
+                compactINR(r.contributionRevenue),
+                compactINR(r.directCost),
+                compactINR(r.apportionedCost),
                 compactINR(r.revenueContribution),
                 r.revenueContributionShare === null ? "–" : percent(r.revenueContributionShare * 100, 1),
               ],
               rating: r.ratings.netRevContrib,
             }))}
             foot={[
-              "Total",
-              compactINR(revActTot),
-              compactINR(costTot),
+              isSlice ? "Firm total" : "Total",
+              compactINR(contribRevTot),
+              compactINR(directCostTot),
+              compactINR(apportCostTot),
               compactINR(revContribTot),
               percent(100, 0),
               "",
             ]}
+            note={
+              osbTotal > 0.5 ? (
+                <>
+                  Revenue here is the ledger&rsquo;s. A further{" "}
+                  <span className="num font-medium">{compactINR(osbTotal)}</span> of
+                  out-of-books billing ({osbRows.map((x) => x.code).join(", ")}) is rated
+                  against budget in the Revenue card above but left out here — it carries
+                  no cost, so counting it would overstate contribution. That is the whole
+                  of the difference between the two firm-total revenue figures{" "}
+                  ({compactINR(revActTot)} vs {compactINR(contribRevTot)}).
+                </>
+              ) : undefined
+            }
           />
           <WorkingCard
             title="Net collection contribution"
             accent="border-positive"
-            head={["Vertical", "Collection", "Cost", "Contribution", "% of total", "Rating"]}
-            rows={data.rows.map((r) => ({
+            head={[
+              "Vertical",
+              "Collection",
+              "Direct cost",
+              "Apportioned cost",
+              "Contribution",
+              "% of total",
+              "Rating",
+            ]}
+            rows={shown.map((r) => ({
               cells: [
                 r.label,
                 compactINR(r.collectionActual),
-                compactINR(r.cost),
+                compactINR(r.directCost),
+                compactINR(r.apportionedCost),
                 compactINR(r.collectionContribution),
                 r.collectionContributionShare === null ? "–" : percent(r.collectionContributionShare * 100, 1),
               ],
               rating: r.ratings.netCollContrib,
             }))}
             foot={[
-              "Total",
+              isSlice ? "Firm total" : "Total",
               compactINR(collActTot),
-              compactINR(costTot),
+              compactINR(directCostTot),
+              compactINR(apportCostTot),
               compactINR(collContribTot),
               percent(100, 0),
               "",
@@ -321,7 +384,7 @@ export default async function ScorecardPage({
             title={`Receivables ageing${data.arAsOf ? ` — as at ${data.arAsOf}` : ""}`}
             accent="border-caution"
             head={["Vertical", ...BUCKET_LABELS, "Total", "Wtd avg days", "Rating"]}
-            rows={data.rows.map((r) => ({
+            rows={shown.map((r) => ({
               cells: [
                 r.label,
                 ...r.ageingBuckets.map((b) => (b ? money(b) : "–")),
@@ -331,7 +394,7 @@ export default async function ScorecardPage({
               rating: r.ratings.ageing,
             }))}
             foot={[
-              "Total",
+              isSlice ? "Firm total" : "Total",
               ...ageBucketTot.map((b) => (b ? money(b) : "–")),
               money(ageGrandTot),
               ageBlendedDays === null ? "–" : ageBlendedDays.toFixed(0),
@@ -347,8 +410,11 @@ export default async function ScorecardPage({
               </li>
               <li>
                 Budgets are the annual figure × {data.window.months}/12; revenue and collection
-                actuals are the ledger&rsquo;s, net of credit notes. Cost is the vertical&rsquo;s
-                direct cost plus its apportioned share of common cost.
+                actuals are the ledger&rsquo;s, net of credit notes. Cost is shown in two parts —
+                the vertical&rsquo;s own directly-tagged cost, and its apportioned share of the
+                common pool — and contribution is struck after both. The revenue on the
+                contribution card is ledger revenue only; any out-of-books billing is rated
+                against budget above but has no cost beneath it, so it is left off here.
               </li>
               <li>
                 Management appraisal is fixed at {MGMT_APPRAISAL_DEFAULT} for every vertical — it
@@ -393,6 +459,7 @@ function WorkingCard({
   head,
   rows,
   foot,
+  note,
 }: {
   title: string;
   /** border-* colour token for the card's top accent */
@@ -400,6 +467,8 @@ function WorkingCard({
   head: string[];
   rows: { cells: (string | number)[]; rating: number | null }[];
   foot?: (string | number)[];
+  /** an explanatory line shown under the table */
+  note?: ReactNode;
 }) {
   return (
     <Card padded={false} className={clsx("border-t-2", accent)}>
@@ -460,6 +529,11 @@ function WorkingCard({
           )}
         </table>
       </div>
+      {note && (
+        <p className="border-t border-line px-4 py-3 text-[11.5px] leading-relaxed text-ink-muted sm:px-5">
+          {note}
+        </p>
+      )}
     </Card>
   );
 }

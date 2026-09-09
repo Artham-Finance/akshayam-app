@@ -114,6 +114,8 @@ export const TEAM_COST_ANNUAL_BUDGET: Record<
   RRG: { team_lead: 466200, vpp: 1007665, trainee: 372000 },
   CFC: { team_lead: 831600, vpp: 1518906, trainee: 525720 },
   AIF: {},
+  // DSC and support - Vaithy is the team lead; no budget agreed, so nil.
+  DSC: {},
   HRCM: { team_lead: 352800, external_consultant: 1200000, vpp: 200000, employee: 120000 },
   ACC: { team_lead: 554400, vpp: 800000, trainee: 623280 },
   COMMON: {
@@ -135,6 +137,8 @@ export interface TeamCostEntry {
   date: string;
   /** the bill's narration, or the transaction type when it has none */
   description: string;
+  /** the ledger's reference-number field, shown as its own Description column */
+  reference: string;
   /** the vertical it is tagged to - shown in the whole-company view */
   verticalCode: string;
   /**
@@ -243,7 +247,6 @@ function rollUp(
 
 export async function buildTeamCost(opts: {
   entity: Entity;
-  fyStartYear: number;
   /** the months being compared on, from the page's period picker */
   periodMonths: FyMonth[];
   /**
@@ -254,7 +257,7 @@ export async function buildTeamCost(opts: {
    */
   statementBudget: { period: number; annual: number };
 }): Promise<TeamCostResult> {
-  const { entity, fyStartYear, periodMonths, statementBudget } = opts;
+  const { entity, periodMonths, statementBudget } = opts;
   const start = periodMonths[0].start;
   const end = periodMonths[periodMonths.length - 1].end;
   const monthsInPeriod = periodMonths.length;
@@ -289,6 +292,7 @@ export async function buildTeamCost(opts: {
     account_name: string;
     txn_date: string;
     description: string | null;
+    reference: string | null;
     txn_type: string | null;
     amount: number;
   }>(
@@ -297,6 +301,7 @@ export async function buildTeamCost(opts: {
             a.name as account_name,
             to_char(g.txn_date, 'YYYY-MM-DD') as txn_date,
             nullif(btrim(g.description), '') as description,
+            nullif(btrim(g.reference), '')  as reference,
             g.txn_type,
             (g.debit - g.credit) as amount
        from gl_entries g
@@ -324,6 +329,7 @@ export async function buildTeamCost(opts: {
     list.push({
       date: r.txn_date,
       description: r.description ?? r.txn_type ?? "—",
+      reference: r.reference ?? "",
       verticalCode: r.vertical_code ?? "—",
       account: usualAccounts.get(role)?.includes(r.account_name) ? "" : r.account_name,
       amount,

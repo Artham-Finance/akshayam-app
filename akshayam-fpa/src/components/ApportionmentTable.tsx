@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useState, useTransition } from "react";
 import clsx from "clsx";
 import { money, scaled, scaleLabel, type Scale } from "@/lib/format";
 // Types only from the report itself: importing a value from it would pull the
@@ -28,12 +29,41 @@ import { BASIS_LABEL, HEAD_BASIS } from "@/lib/reports/apportionment-rules";
 export function ApportionmentTable({
   data,
   initialScale = "abs",
+  canEditHeads = false,
 }: {
   data: ApportionmentResult;
   initialScale?: Scale;
+  /** the viewer may key head count in - only takes effect on a single-month view */
+  canEditHeads?: boolean;
 }) {
+  const router = useRouter();
   const [scale, setScale] = useState<Scale>(initialScale);
   const [showHeads, setShowHeads] = useState(true);
+  const [applyForward, setApplyForward] = useState(true);
+  const [saving, startSave] = useTransition();
+
+  // Head count can be keyed in only when the table is narrowed to one month -
+  // a quarter shows the average of three, which is not a figure to overwrite.
+  const editHeads = canEditHeads && data.month !== null;
+
+  const saveHeads = async (verticalId: number, heads: number) => {
+    try {
+      await fetch("/api/vertical-headcount", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          verticalId,
+          fyStartYear: data.fyStartYear,
+          month: `${data.month}-01`,
+          heads,
+          applyForward,
+        }),
+      });
+      startSave(() => router.refresh());
+    } catch {
+      /* a failed save leaves the field as typed; the next edit retries */
+    }
+  };
 
   // Every figure in the table goes through this, so the scale can never apply
   // to some rows and not others. Lakhs and crores keep two decimals, the same
@@ -127,13 +157,26 @@ export function ApportionmentTable({
   return (
     <>
       <div className="no-print flex flex-wrap items-center justify-between gap-3 px-3 pb-3">
-        <button
-          type="button"
-          onClick={() => setShowHeads((v) => !v)}
-          className="rounded-md border border-line px-2.5 py-1.5 text-[12px] font-medium text-ink-muted transition-colors hover:border-line-strong hover:text-ink"
-        >
-          {showHeads ? "Hide cost detail" : "Show cost detail"}
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowHeads((v) => !v)}
+            className="rounded-md border border-line px-2.5 py-1.5 text-[12px] font-medium text-ink-muted transition-colors hover:border-line-strong hover:text-ink"
+          >
+            {showHeads ? "Hide cost detail" : "Show cost detail"}
+          </button>
+          {editHeads && (
+            <label className="flex items-center gap-1.5 text-[12px] text-ink-muted">
+              <input
+                type="checkbox"
+                checked={applyForward}
+                onChange={(e) => setApplyForward(e.target.checked)}
+                className="accent-navy"
+              />
+              Apply to {data.label} and the rest of the year
+            </label>
+          )}
+        </div>
 
         <label className="flex items-center gap-2 text-[12px] text-ink-muted">
           <span>Figures</span>
@@ -200,7 +243,49 @@ export function ApportionmentTable({
           </tr>
         </thead>
         <tbody>
-          <Row label="Head count" pick={(v) => v.heads} raw />
+          {editHeads ? (
+            <tr className="hover:bg-surface-sunk/50">
+              <th
+                scope="row"
+                className="border-b border-line px-3 py-2 text-left font-normal text-ink"
+              >
+                Head count
+                <span className="block text-[10px] font-normal text-ink-faint">
+                  {data.label} · keyed{applyForward ? " · fills the rest of the year" : ""}
+                </span>
+              </th>
+              {data.verticals.map((v) => (
+                <td
+                  key={v.key}
+                  className="num border-b border-line px-3 py-2 text-right text-ink-faint"
+                >
+                  {v.verticalId != null ? (
+                    <HeadInput
+                      value={v.heads}
+                      disabled={saving}
+                      onSave={(h) => saveHeads(v.verticalId!, h)}
+                    />
+                  ) : v.heads === 0 ? (
+                    "—"
+                  ) : (
+                    String(v.heads)
+                  )}
+                </td>
+              ))}
+              {showTotal && (
+                <td className="num border-b border-line border-l border-line px-3 py-2 text-right font-semibold text-ink">
+                  {String(total((v) => v.heads))}
+                </td>
+              )}
+            </tr>
+          ) : (
+            <Row
+              label="Head count"
+              pick={(v) => v.heads}
+              raw
+              note={canEditHeads ? "pick a month above to key it in" : undefined}
+            />
+          )}
           <Row label="Revenue" pick={(v) => v.revenue} tone="ink" />
           <Row label="Direct cost" pick={(v) => v.directCost} tone="ink" />
 
@@ -245,5 +330,48 @@ export function ApportionmentTable({
         )}
       </p>
     </>
+  );
+}
+
+/** A whole-number field for a vertical's head count in the chosen month. */
+function HeadInput({
+  value,
+  disabled,
+  onSave,
+}: {
+  value: number;
+  disabled: boolean;
+  onSave: (v: number) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+
+  const commit = () => {
+    if (draft === null) return;
+    const raw = draft.trim();
+    setDraft(null);
+    const n = raw === "" ? 0 : Number(raw);
+    if (Number.isInteger(n) && n >= 0 && n !== value) onSave(n);
+  };
+
+  return (
+    <input
+      value={draft ?? String(value)}
+      disabled={disabled}
+      onChange={(e) => setDraft(e.target.value.replace(/[^0-9]/g, ""))}
+      onFocus={(e) => {
+        setDraft(String(value));
+        e.currentTarget.select();
+      }}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+        if (e.key === "Escape") {
+          setDraft(null);
+          e.currentTarget.blur();
+        }
+      }}
+      inputMode="numeric"
+      className="num w-14 rounded-md border border-line bg-surface px-1.5 py-0.5 text-right text-[12px] text-ink outline-none focus:border-navy disabled:opacity-50"
+    />
   );
 }

@@ -68,6 +68,7 @@ export function Nav({
   periodLabel,
   periodFyBounds,
   user,
+  isSlice = false,
 }: {
   entities: { slug: string; name: string }[];
   currentSlug: string;
@@ -76,9 +77,23 @@ export function Nav({
   periodLabel: string;
   periodFyBounds: { start: string; end: string } | null;
   user: { name: string | null; email: string; role: Role; permissions: Permission[] };
+  /**
+   * The active company is a single-vertical slice - a team lead's own book.
+   * Only the vertical-performance tabs mean anything for them; the statement
+   * and analysis tabs are company-only and are dropped from the nav.
+   */
+  isSlice?: boolean;
 }) {
   const pathname = usePathname();
   const allowed = new Set(user.permissions);
+  // A team lead's slice sees their own P&L, then the vertical-performance tabs.
+  // The statement sits under Core Financials, right after Overview.
+  const groups = isSlice
+    ? [
+        { title: "Core Financials", items: [{ href: "/pnl", label: "Profit & Loss" }] },
+        ...GROUPS.filter((g) => g.title === "Vertical Performance"),
+      ]
+    : GROUPS;
 
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -159,7 +174,7 @@ export function Nav({
               <Tab item={OVERVIEW} isActive={isActive} />
             </div>
           </div>
-          {GROUPS.map((group) => (
+          {groups.map((group) => (
             <div key={group.title} className="flex flex-col border-l border-navy-tint-strong pl-2">
               <span className="mx-2 my-1 w-fit whitespace-nowrap rounded bg-navy px-2 py-0.5 text-[11px] font-bold uppercase tracking-[0.1em] text-ink-invert">
                 {group.title}
@@ -177,13 +192,23 @@ export function Nav({
 
     <div className="no-print mx-auto max-w-[1400px] px-4 pt-3 sm:px-6">
       <div className="rounded-card border border-navy-tint-strong bg-navy-tint px-4 py-2.5 text-[13px] leading-relaxed text-navy">
-        <span className="font-semibold">Core Financials</span> — what happened (statements)
-        <span className="mx-2 text-navy/40">|</span>
-        <span className="font-semibold">Financial Planning &amp; Analysis</span> — why and
-        how it happened (analysis)
-        <span className="mx-2 text-navy/40">|</span>
-        <span className="font-semibold">Vertical Performance</span> — where it happened (by
-        vertical)
+        {isSlice ? (
+          <>
+            <span className="font-semibold">Profit &amp; Loss</span> and{" "}
+            <span className="font-semibold">Vertical Performance</span> — the statement, plus
+            revenue, receivables, collections and the scorecard, all for your vertical
+          </>
+        ) : (
+          <>
+            <span className="font-semibold">Core Financials</span> — what happened (statements)
+            <span className="mx-2 text-navy/40">|</span>
+            <span className="font-semibold">Financial Planning &amp; Analysis</span> — why and
+            how it happened (analysis)
+            <span className="mx-2 text-navy/40">|</span>
+            <span className="font-semibold">Vertical Performance</span> — where it happened (by
+            vertical)
+          </>
+        )}
       </div>
     </div>
     </>
