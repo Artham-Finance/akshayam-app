@@ -58,7 +58,7 @@ export async function POST(request: Request) {
     await query(
       `insert into vertical_headcount (vertical_id, fy_start_year, month, heads)
        select $1, $2, m::date, $4 from unnest($3::date[]) as m
-       on conflict on constraint vertical_headcount_vertical_fy_month_key
+       on conflict (vertical_id, fy_start_year, month) where month is not null
          do update set heads = excluded.heads`,
       [body.verticalId, body.fyStartYear, months, body.heads],
     );
