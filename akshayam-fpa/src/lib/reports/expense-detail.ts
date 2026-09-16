@@ -1,6 +1,6 @@
 import { query } from "@/lib/db";
 import type { Entity } from "@/lib/entity";
-import type { FyMonth } from "@/lib/period";
+import { fyBounds, type FyMonth } from "@/lib/period";
 
 /**
  * The breakdown behind "Other expenses", budget against actual.
@@ -9,6 +9,13 @@ import type { FyMonth } from "@/lib/period";
  * the line the founder reads first, and the one where a variance is usually a
  * story rather than a rounding - so it gets its own table, and a place to
  * write the story down.
+ *
+ * Every line carries two windows side by side: the period the page's own
+ * picker is showing, and the year to date, which is shown regardless of that
+ * picker so a reader is never without the full-year story. Variance and its
+ * percentage are struck on the year-to-date pair only - the period columns are
+ * for comparing against the period a reader picked, not for re-litigating the
+ * whole year one slice at a time.
  *
  * The actual is entered, not read from the ledger. The ledger's account names
  * do not line up with the budget's heads closely enough to be trusted, and a
@@ -44,25 +51,49 @@ export interface ExpenseDetailLine {
   /** small caption under the label, e.g. what an abbreviation stands for */
   hint?: string;
   sortOrder: number;
-  budget: number;
-  /** the bills recorded against this line, newest first */
+  /** the budget for the page's own period - whatever the global picker shows */
+  periodBudget: number;
+  /** the sum of entries recorded in that period */
+  periodActual: number;
+  /** the budget from the start of the year to the ledger's latest month, always */
+  ytdBudget: number;
+  /** the sum of entries recorded year to date */
+  ytdActual: number;
+  /** ytdBudget less ytdActual, sign-adjusted for a deduction line */
+  ytdVariance: number;
+  /** ytdVariance as a percentage of ytdBudget, null when there is no YTD budget */
+  ytdVariancePct: number | null;
+  /**
+   * The bills recorded in the picker's own period, newest first - an entry
+   * belongs to the month it was spent in, so only the period's own bills are
+   * ever opened or added to here, regardless of how the year-to-date columns
+   * read.
+   */
   entries: ExpenseEntry[];
-  /** the sum of them */
-  actual: number;
-  variance: number;
 }
 
 export interface ExpenseDetailResult {
   /** true once a breakdown has been loaded for this entity and year */
   hasDetail: boolean;
   lines: ExpenseDetailLine[];
-  totals: { budget: number; actual: number; variance: number };
+  totals: {
+    periodBudget: number;
+    periodActual: number;
+    ytdBudget: number;
+    ytdActual: number;
+    ytdVariance: number;
+    ytdVariancePct: number | null;
+  };
   /**
    * The same "Other expenses" the statement above shows, so the entered total
    * can be seen to agree with the ledger - or seen not to, which is the more
-   * useful case.
+   * useful case. Kept for both windows; the page's reconciliation notice reads
+   * the period pair, since that is the window an entry is actually keyed against.
    */
-  statement: { budget: number; ledger: number };
+  statement: {
+    period: { budget: number; ledger: number };
+    ytd: { budget: number; ledger: number };
+  };
   /** vendors already used on this entity's entries, plus the ledger's own */
   vendors: string[];
 }
@@ -75,53 +106,60 @@ export async function buildExpenseDetail(opts: {
   fyStartYear: number;
   /** the months being compared on, from the page's period picker */
   periodMonths: FyMonth[];
+  /** the months from the start of the year to the ledger's latest month */
+  ytdMonths: FyMonth[];
 }): Promise<ExpenseDetailResult> {
-  const { entity, fyStartYear, periodMonths } = opts;
-  const monthKeys = periodMonths.map((m) => `${m.key}-01`);
-  const start = periodMonths[0].start;
-  const end = periodMonths[periodMonths.length - 1].end;
+  const { entity, fyStartYear, periodMonths, ytdMonths } = opts;
+  const periodKeys = new Set(periodMonths.map((m) => m.key));
+  const ytdKeys = new Set(ytdMonths.map((m) => m.key));
+  // Every query below reads the whole financial year, once, and is bucketed
+  // into the two windows in JS - cheaper than asking the database for the
+  // same figures twice, and it keeps the two windows reading the same rows.
+  const { start: fyStart, end: fyEnd } = fyBounds(fyStartYear, entity.fy_start_month);
 
   const [budgetRows, entryRows, ledgerRows, statementRows, vendorRows, reimbRows] = await Promise.all([
-    query<{ head: string; label: string; sort_order: number; amount: number }>(
-      `select head, label, min(sort_order) as sort_order, sum(amount) as amount
+    query<{ head: string; label: string; month_key: string; sort_order: number; amount: number }>(
+      `select head, label, to_char(month, 'YYYY-MM') as month_key, sort_order, amount
          from expense_budget_lines
-        where entity_id = $1 and fy_start_year = $2 and month = any($3::date[])
-        group by head, label
-        order by min(sort_order)`,
-      [entity.id, fyStartYear, monthKeys],
+        where entity_id = $1 and fy_start_year = $2`,
+      [entity.id, fyStartYear],
     ),
     query<{
       id: number;
       head: string;
       label: string;
+      month_key: string;
       spent_on: string;
       vendor: string | null;
       amount: number;
       remark: string | null;
     }>(
-      `select id, head, label, spent_on::text, vendor, amount, remark
+      `select id, head, label, to_char(month, 'YYYY-MM') as month_key,
+              spent_on::text, vendor, amount, remark
          from expense_entries
-        where entity_id = $1 and fy_start_year = $2 and month = any($3::date[])
+        where entity_id = $1 and fy_start_year = $2
         order by spent_on desc, id desc`,
-      [entity.id, fyStartYear, monthKeys],
+      [entity.id, fyStartYear],
     ),
     // Debit less credit, so a cost is positive - the direction the breakdown
-    // is read in. Shown only as the control total at the foot.
-    query<{ amount: number }>(
-      `select coalesce(sum(g.debit - g.credit), 0)::numeric as amount
+    // is read in. Shown only as the control total at the foot, both windows.
+    query<{ month_key: string; amount: number }>(
+      `select to_char(g.txn_date, 'YYYY-MM') as month_key,
+              coalesce(sum(g.debit - g.credit), 0)::numeric as amount
          from gl_entries g
          join accounts a on a.id = g.account_id
         where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
           and a.statement = 'pnl' and a.group_code = any($4::text[])
-          and not ($5::boolean and a.is_intercompany)`,
-      [entity.memberIds, start, end, POOL_GROUPS, entity.consolidates],
+          and not ($5::boolean and a.is_intercompany)
+        group by 1`,
+      [entity.memberIds, fyStart, fyEnd, POOL_GROUPS, entity.consolidates],
     ),
-    query<{ amount: number }>(
-      `select coalesce(sum(amount), 0)::numeric as amount
+    query<{ month_key: string; amount: number }>(
+      `select to_char(month, 'YYYY-MM') as month_key, sum(amount) as amount
          from budget_pnl
-        where entity_id = $1 and fy_start_year = $2 and month = any($3::date[])
-          and group_code = 'overheads'`,
-      [entity.id, fyStartYear, monthKeys],
+        where entity_id = $1 and fy_start_year = $2 and group_code = 'overheads'
+        group by 1`,
+      [entity.id, fyStartYear],
     ),
     /**
      * Names to offer on the entry form.
@@ -161,52 +199,85 @@ export async function buildExpenseDetail(opts: {
      * apart. Debit-positive for the expense, credit-positive for the income -
      * each read in its own natural direction.
      */
-    query<{ expense: number; income: number }>(
-      `select
-         coalesce(sum(g.debit - g.credit) filter (where a.name not ilike '%income%'), 0)::numeric as expense,
-         coalesce(sum(g.credit - g.debit) filter (where a.name ilike '%income%'), 0)::numeric as income
+    query<{ month_key: string; expense: number; income: number }>(
+      `select to_char(g.txn_date, 'YYYY-MM') as month_key,
+              coalesce(sum(g.debit - g.credit) filter (where a.name not ilike '%income%'), 0)::numeric as expense,
+              coalesce(sum(g.credit - g.debit) filter (where a.name ilike '%income%'), 0)::numeric as income
          from gl_entries g
          join accounts a on a.id = g.account_id
         where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
           and a.statement = 'pnl' and a.group_code = 'reimbursements'
-          and not ($4::boolean and a.is_intercompany)`,
-      [entity.memberIds, start, end, entity.consolidates],
+          and not ($4::boolean and a.is_intercompany)
+        group by 1`,
+      [entity.memberIds, fyStart, fyEnd, entity.consolidates],
     ),
   ]);
 
-  const entriesByLine = new Map<string, ExpenseEntry[]>();
+  const bucketSum = (rows: { month_key: string; amount: number }[], keys: Set<string>) =>
+    rows.filter((r) => keys.has(r.month_key)).reduce((s, r) => s + Number(r.amount), 0);
+
+  type RawEntry = ExpenseEntry & { monthKey: string };
+  const allEntriesByLine = new Map<string, RawEntry[]>();
   for (const row of entryRows) {
     const key = `${row.head}|${row.label}`;
-    const list = entriesByLine.get(key) ?? [];
+    const list = allEntriesByLine.get(key) ?? [];
     list.push({
       id: row.id,
       spentOn: row.spent_on,
       vendor: row.vendor,
       amount: Number(row.amount),
       remark: row.remark,
+      monthKey: row.month_key,
     });
-    entriesByLine.set(key, list);
+    allEntriesByLine.set(key, list);
   }
+  const sumEntries = (raw: RawEntry[], keys: Set<string>) =>
+    raw.filter((e) => keys.has(e.monthKey)).reduce((s, e) => s + e.amount, 0);
+  const entriesFor = (raw: RawEntry[]): ExpenseEntry[] =>
+    raw
+      .filter((e) => periodKeys.has(e.monthKey))
+      .map(({ id, spentOn, vendor, amount, remark }) => ({ id, spentOn, vendor, amount, remark }));
+
+  // One row per (head, label), the budget summed into the two windows -
+  // reproducing the "group by head, label" the single-window query used to do.
+  const budgetByLine = new Map<
+    string,
+    { head: string; label: string; sortOrder: number; periodBudget: number; ytdBudget: number }
+  >();
+  for (const row of budgetRows) {
+    const key = `${row.head}|${row.label}`;
+    const cur =
+      budgetByLine.get(key) ??
+      { head: row.head, label: row.label, sortOrder: Number(row.sort_order), periodBudget: 0, ytdBudget: 0 };
+    cur.sortOrder = Math.min(cur.sortOrder, Number(row.sort_order));
+    if (periodKeys.has(row.month_key)) cur.periodBudget += Number(row.amount);
+    if (ytdKeys.has(row.month_key)) cur.ytdBudget += Number(row.amount);
+    budgetByLine.set(key, cur);
+  }
+  const lineDefs = [...budgetByLine.values()].sort((a, b) => a.sortOrder - b.sortOrder);
 
   const headCounts = new Map<string, number>();
-  for (const row of budgetRows) {
-    headCounts.set(row.head, (headCounts.get(row.head) ?? 0) + 1);
+  for (const def of lineDefs) {
+    headCounts.set(def.head, (headCounts.get(def.head) ?? 0) + 1);
   }
 
-  const lines: ExpenseDetailLine[] = budgetRows.map((row) => {
-    const budget = Number(row.amount);
-    const entries = entriesByLine.get(`${row.head}|${row.label}`) ?? [];
-    const actual = entries.reduce((s, e) => s + e.amount, 0);
+  const lines: ExpenseDetailLine[] = lineDefs.map((def) => {
+    const raw = allEntriesByLine.get(`${def.head}|${def.label}`) ?? [];
+    const periodActual = sumEntries(raw, periodKeys);
+    const ytdActual = sumEntries(raw, ytdKeys);
+    const ytdVariance = def.ytdBudget - ytdActual;
     return {
-      head: row.head,
-      label: row.label,
-      isHeadOnly: headCounts.get(row.head) === 1 && row.head === row.label,
-      sortOrder: Number(row.sort_order),
-      budget,
-      entries,
-      actual,
-      // A cost under budget is a favourable variance, so budget less actual.
-      variance: budget - actual,
+      head: def.head,
+      label: def.label,
+      isHeadOnly: headCounts.get(def.head) === 1 && def.head === def.label,
+      sortOrder: def.sortOrder,
+      periodBudget: def.periodBudget,
+      periodActual,
+      ytdBudget: def.ytdBudget,
+      ytdActual,
+      ytdVariance,
+      ytdVariancePct: def.ytdBudget ? (ytdVariance / def.ytdBudget) * 100 : null,
+      entries: entriesFor(raw),
     };
   });
 
@@ -227,9 +298,10 @@ export async function buildExpenseDetail(opts: {
     label: string,
     opts: { isHeadOnly?: boolean; hint?: string; isDeduction?: boolean; sortOrder: number },
   ): ExpenseDetailLine => {
-    const entries = entriesByLine.get(`${head}|${label}`) ?? [];
-    const actual = entries.reduce((s, e) => s + e.amount, 0);
-    const signed = opts.isDeduction ? -actual : actual;
+    const raw = allEntriesByLine.get(`${head}|${label}`) ?? [];
+    const periodActual = sumEntries(raw, periodKeys);
+    const ytdActual = sumEntries(raw, ytdKeys);
+    const signedYtd = opts.isDeduction ? -ytdActual : ytdActual;
     return {
       head,
       label,
@@ -238,11 +310,14 @@ export async function buildExpenseDetail(opts: {
       isDeduction: opts.isDeduction,
       hint: opts.hint,
       sortOrder: opts.sortOrder,
-      budget: 0,
-      entries,
-      actual,
+      periodBudget: 0,
+      periodActual,
+      ytdBudget: 0,
+      ytdActual,
       // No budget to vary from; the sign only matters where it feeds the total.
-      variance: -signed,
+      ytdVariance: -signedYtd,
+      ytdVariancePct: null,
+      entries: entriesFor(raw),
     };
   };
 
@@ -279,48 +354,88 @@ export async function buildExpenseDetail(opts: {
     );
   }
 
-  const reimb = reimbRows[0] ?? { expense: 0, income: 0 };
   const fromLedger = (
     label: string,
-    actual: number,
+    periodActual: number,
+    ytdActual: number,
     opts: { isDeduction?: boolean; sortOrder: number },
-  ): ExpenseDetailLine => ({
-    head: "RE less RI",
-    label,
-    isHeadOnly: false,
-    isActualOnly: true,
-    isLedger: true,
-    isDeduction: opts.isDeduction,
-    sortOrder: opts.sortOrder,
-    budget: 0,
-    entries: [],
-    actual,
-    variance: -(opts.isDeduction ? -actual : actual),
-  });
+  ): ExpenseDetailLine => {
+    const signedYtd = opts.isDeduction ? -ytdActual : ytdActual;
+    return {
+      head: "RE less RI",
+      label,
+      isHeadOnly: false,
+      isActualOnly: true,
+      isLedger: true,
+      isDeduction: opts.isDeduction,
+      sortOrder: opts.sortOrder,
+      periodBudget: 0,
+      periodActual,
+      ytdBudget: 0,
+      ytdActual,
+      ytdVariance: -signedYtd,
+      ytdVariancePct: null,
+      entries: [],
+    };
+  };
 
   lines.push(
-    fromLedger("Reimbursement expenses", Number(reimb.expense), { sortOrder: 9_998 }),
-    fromLedger("Less - Reimbursement income", Number(reimb.income), {
-      isDeduction: true,
-      sortOrder: 9_999,
-    }),
+    fromLedger(
+      "Reimbursement expenses",
+      bucketSum(
+        reimbRows.map((r) => ({ month_key: r.month_key, amount: Number(r.expense) })),
+        periodKeys,
+      ),
+      bucketSum(
+        reimbRows.map((r) => ({ month_key: r.month_key, amount: Number(r.expense) })),
+        ytdKeys,
+      ),
+      { sortOrder: 9_998 },
+    ),
+    fromLedger(
+      "Less - Reimbursement income",
+      bucketSum(
+        reimbRows.map((r) => ({ month_key: r.month_key, amount: Number(r.income) })),
+        periodKeys,
+      ),
+      bucketSum(
+        reimbRows.map((r) => ({ month_key: r.month_key, amount: Number(r.income) })),
+        ytdKeys,
+      ),
+      { isDeduction: true, sortOrder: 9_999 },
+    ),
   );
 
-  const sum = (pick: (l: ExpenseDetailLine) => number) =>
-    lines.reduce((s, l) => s + pick(l), 0);
-  const signedActual = (l: ExpenseDetailLine) => (l.isDeduction ? -l.actual : l.actual);
+  const signedPeriodActual = (l: ExpenseDetailLine) => (l.isDeduction ? -l.periodActual : l.periodActual);
+  const signedYtdActual = (l: ExpenseDetailLine) => (l.isDeduction ? -l.ytdActual : l.ytdActual);
+  const sum = (pick: (l: ExpenseDetailLine) => number) => lines.reduce((s, l) => s + pick(l), 0);
+
+  const periodBudgetTot = sum((l) => l.periodBudget);
+  const periodActualTot = sum(signedPeriodActual);
+  const ytdBudgetTot = sum((l) => l.ytdBudget);
+  const ytdActualTot = sum(signedYtdActual);
+  const ytdVarianceTot = ytdBudgetTot - ytdActualTot;
 
   return {
     hasDetail: lines.length > 0,
     lines,
     totals: {
-      budget: sum((l) => l.budget),
-      actual: sum(signedActual),
-      variance: sum((l) => l.budget - signedActual(l)),
+      periodBudget: periodBudgetTot,
+      periodActual: periodActualTot,
+      ytdBudget: ytdBudgetTot,
+      ytdActual: ytdActualTot,
+      ytdVariance: ytdVarianceTot,
+      ytdVariancePct: ytdBudgetTot ? (ytdVarianceTot / ytdBudgetTot) * 100 : null,
     },
     statement: {
-      budget: Number(statementRows[0]?.amount ?? 0),
-      ledger: Number(ledgerRows[0]?.amount ?? 0),
+      period: {
+        budget: bucketSum(statementRows, periodKeys),
+        ledger: bucketSum(ledgerRows, periodKeys),
+      },
+      ytd: {
+        budget: bucketSum(statementRows, ytdKeys),
+        ledger: bucketSum(ledgerRows, ytdKeys),
+      },
     },
     vendors: vendorRows.map((v) => v.vendor),
   };
