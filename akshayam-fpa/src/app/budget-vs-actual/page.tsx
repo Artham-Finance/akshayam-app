@@ -19,6 +19,7 @@ import {
   getVerticals,
 } from "@/lib/entity";
 import { withParams } from "@/lib/href";
+import { dateLabel } from "@/lib/format";
 import { fyMonths } from "@/lib/period";
 import {
   getReportingPeriod,
@@ -88,6 +89,10 @@ export default async function BudgetVsActualPage({
     const months = fyMonths(fy);
     const periodMonths = period.periodMonths;
     const periodLabel = period.label;
+    // Year to date, always - shown beside whatever the picker's own period is,
+    // so the Other-expenses breakdown never loses the full-year story.
+    const ytdMonths = months.filter((m) => m.start <= (writtenTo ?? period.end));
+    const ytdLabel = writtenTo ? `to ${dateLabel(writtenTo)}` : "1 Apr onward";
 
     const [verticals, statement] = await Promise.all([
       getVerticals(entity),
@@ -111,7 +116,7 @@ export default async function BudgetVsActualPage({
       ms.reduce((s, m) => s + (teamCostLine?.budget[m.key] ?? 0), 0);
 
     const [expenseDetail, teamCost, establishment] = await Promise.all([
-      isSlice ? null : buildExpenseDetail({ entity, fyStartYear: fy, periodMonths }),
+      isSlice ? null : buildExpenseDetail({ entity, fyStartYear: fy, periodMonths, ytdMonths }),
       buildTeamCost({
         entity,
         periodMonths,
@@ -248,17 +253,21 @@ export default async function BudgetVsActualPage({
                 month={editableMonth}
                 vendors={expenseDetail.vendors}
                 monthLabel={editableMonth ? periodMonths[0].label : null}
+                periodLabel={period.shortLabel}
+                ytdLabel={ytdLabel}
               />
-              {Math.abs(expenseDetail.statement.ledger - expenseDetail.totals.actual) > 0.5 && (
+              {Math.abs(
+                expenseDetail.statement.period.ledger - expenseDetail.totals.periodActual,
+              ) > 0.5 && (
                 <div className="px-4 pb-4 sm:px-5">
                   <Notice tone="caution" title="Entries do not agree with the ledger">
                     The ledger posted{" "}
                     <span className="num font-medium">
-                      {Math.round(expenseDetail.statement.ledger).toLocaleString("en-IN")}
+                      {Math.round(expenseDetail.statement.period.ledger).toLocaleString("en-IN")}
                     </span>{" "}
                     of other expenses for this period; the entries above come to{" "}
                     <span className="num font-medium">
-                      {Math.round(expenseDetail.totals.actual).toLocaleString("en-IN")}
+                      {Math.round(expenseDetail.totals.periodActual).toLocaleString("en-IN")}
                     </span>
                     . The statement above stays the ledger&rsquo;s — entries here are the
                     breakdown, and this is the check that the two have not drifted apart.

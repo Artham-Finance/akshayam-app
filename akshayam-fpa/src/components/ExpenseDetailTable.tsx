@@ -3,11 +3,18 @@
 import { useRouter } from "next/navigation";
 import { useId, useState, useTransition } from "react";
 import clsx from "clsx";
-import { money, moneySigned } from "@/lib/format";
+import { money, moneySigned, percent } from "@/lib/format";
 import type { ExpenseDetailLine, ExpenseEntry } from "@/lib/reports/expense-detail";
 
 /**
  * The breakdown behind Other expenses, and the bills that make it up.
+ *
+ * Every line carries two windows: the period the page's own picker is
+ * showing, and the year to date, always - so a reader comparing "This month"
+ * is never cut off from the full-year story. Variance and its percentage are
+ * struck on the year-to-date pair; the period columns are for reading
+ * against whatever the picker shows, not for re-scoring the year one slice
+ * at a time.
  *
  * A line's actual is the sum of what has been recorded under it, so opening a
  * line shows the bills rather than an explanation of a figure struck
@@ -15,15 +22,18 @@ import type { ExpenseDetailLine, ExpenseEntry } from "@/lib/reports/expense-deta
  * with the budget's heads closely enough to be trusted, and a figure matched
  * by name would be wrong in a way nobody could see.
  *
- * Entries belong to a month, so only a single month can be edited. A quarter
- * or a year to date is shown read-only rather than inviting an entry that
- * would have nowhere to be filed.
+ * Entries belong to a month, so only a single month can be edited, and only
+ * the period's own bills are ever opened. A quarter or a year to date is
+ * shown read-only rather than inviting an entry that would have nowhere to be
+ * filed.
  */
 export function ExpenseDetailTable({
   lines,
   fy,
   month,
   monthLabel,
+  periodLabel,
+  ytdLabel,
   vendors,
 }: {
   lines: ExpenseDetailLine[];
@@ -31,25 +41,34 @@ export function ExpenseDetailTable({
   /** 'YYYY-MM-01', or null when the period spans more than one month */
   month: string | null;
   monthLabel: string | null;
+  /** short label for the period columns, e.g. "This month" or "Year to date" */
+  periodLabel: string;
+  /** short label for the YTD columns, e.g. "to 27 Aug 26" */
+  ytdLabel: string;
   /** names offered on the entry form */
   vendors: string[];
 }) {
   const head =
     "border-y border-line px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-faint";
+  const subhead = "mt-0.5 block text-[10px] font-normal normal-case tracking-normal text-ink-faint";
   const vendorListId = useId();
 
   const totals = lines.reduce(
     (acc, l) => {
       // A deduction line (reimbursement income) subtracts from the total.
-      const actual = l.isDeduction ? -l.actual : l.actual;
+      const periodActual = l.isDeduction ? -l.periodActual : l.periodActual;
+      const ytdActual = l.isDeduction ? -l.ytdActual : l.ytdActual;
       return {
-        budget: acc.budget + l.budget,
-        actual: acc.actual + actual,
-        variance: acc.variance + (l.budget - actual),
+        periodBudget: acc.periodBudget + l.periodBudget,
+        periodActual: acc.periodActual + periodActual,
+        ytdBudget: acc.ytdBudget + l.ytdBudget,
+        ytdActual: acc.ytdActual + ytdActual,
+        ytdVariance: acc.ytdVariance + (l.ytdBudget - ytdActual),
       };
     },
-    { budget: 0, actual: 0, variance: 0 },
+    { periodBudget: 0, periodActual: 0, ytdBudget: 0, ytdActual: 0, ytdVariance: 0 },
   );
+  const ytdVariancePct = totals.ytdBudget ? (totals.ytdVariance / totals.ytdBudget) * 100 : null;
 
   let lastHead: string | null = null;
 
@@ -74,13 +93,26 @@ export function ExpenseDetailTable({
               Particulars
             </th>
             <th scope="col" className={clsx(head, "text-right")}>
-              Budget
+              Period budget
+              <span className={subhead}>{periodLabel}</span>
             </th>
             <th scope="col" className={clsx(head, "text-right")}>
-              Actual
+              Period actuals
+              <span className={subhead}>{periodLabel}</span>
             </th>
             <th scope="col" className={clsx(head, "text-right")}>
-              Variance
+              YTD budget
+              <span className={subhead}>{ytdLabel}</span>
+            </th>
+            <th scope="col" className={clsx(head, "text-right")}>
+              YTD actuals
+              <span className={subhead}>{ytdLabel}</span>
+            </th>
+            <th scope="col" className={clsx(head, "text-right")}>
+              Variance (YTD)
+            </th>
+            <th scope="col" className={clsx(head, "text-right")}>
+              % (YTD)
             </th>
             <th scope="col" className={clsx(head, "text-right")}>
               Entries
@@ -109,23 +141,42 @@ export function ExpenseDetailTable({
               Other expenses{monthLabel ? ` — ${monthLabel}` : ""}
             </th>
             <td className="num border-y border-line-strong px-3 py-2 text-right">
-              {money(totals.budget)}
+              {money(totals.periodBudget)}
             </td>
             <td
               className={clsx(
                 "num border-y border-line-strong px-3 py-2 text-right",
-                totals.actual < 0 && "text-negative",
+                totals.periodActual < 0 && "text-negative",
               )}
             >
-              {moneySigned(totals.actual)}
+              {moneySigned(totals.periodActual)}
+            </td>
+            <td className="num border-y border-line-strong px-3 py-2 text-right">
+              {money(totals.ytdBudget)}
             </td>
             <td
               className={clsx(
                 "num border-y border-line-strong px-3 py-2 text-right",
-                totals.variance < 0 ? "text-negative" : "text-positive",
+                totals.ytdActual < 0 && "text-negative",
               )}
             >
-              {moneySigned(totals.variance)}
+              {moneySigned(totals.ytdActual)}
+            </td>
+            <td
+              className={clsx(
+                "num border-y border-line-strong px-3 py-2 text-right",
+                totals.ytdVariance < 0 ? "text-negative" : "text-positive",
+              )}
+            >
+              {moneySigned(totals.ytdVariance)}
+            </td>
+            <td
+              className={clsx(
+                "num border-y border-line-strong px-3 py-2 text-right",
+                ytdVariancePct !== null && ytdVariancePct < 0 ? "text-negative" : "text-positive",
+              )}
+            >
+              {ytdVariancePct === null ? "—" : percent(ytdVariancePct)}
             </td>
             <td className="border-y border-line-strong px-3 py-2" />
           </tr>
@@ -157,7 +208,7 @@ function ExpenseRow({
         <tr className="bg-surface-sunk/60">
           <th
             scope="row"
-            colSpan={5}
+            colSpan={8}
             className="border-b border-line px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted"
           >
             {line.head}
@@ -177,10 +228,16 @@ function ExpenseRow({
           )}
         </th>
         <td className={clsx(cell, "num text-right", line.isActualOnly && "text-ink-faint")}>
-          {line.isActualOnly ? "—" : money(line.budget)}
+          {line.isActualOnly ? "—" : money(line.periodBudget)}
         </td>
         <td className={clsx(cell, "num text-right text-ink")}>
-          {line.isLedger ? moneySigned(line.actual) : money(line.actual)}
+          {line.isLedger ? moneySigned(line.periodActual) : money(line.periodActual)}
+        </td>
+        <td className={clsx(cell, "num text-right", line.isActualOnly && "text-ink-faint")}>
+          {line.isActualOnly ? "—" : money(line.ytdBudget)}
+        </td>
+        <td className={clsx(cell, "num text-right text-ink")}>
+          {line.isLedger ? moneySigned(line.ytdActual) : money(line.ytdActual)}
         </td>
         <td
           className={clsx(
@@ -188,12 +245,25 @@ function ExpenseRow({
             "num text-right",
             line.isActualOnly
               ? "text-ink-faint"
-              : line.variance < 0
+              : line.ytdVariance < 0
                 ? "text-negative"
                 : "text-ink-muted",
           )}
         >
-          {line.isActualOnly ? "—" : money(line.variance)}
+          {line.isActualOnly ? "—" : money(line.ytdVariance)}
+        </td>
+        <td
+          className={clsx(
+            cell,
+            "num text-right",
+            line.isActualOnly
+              ? "text-ink-faint"
+              : line.ytdVariancePct !== null && line.ytdVariancePct < 0
+                ? "text-negative"
+                : "text-ink-muted",
+          )}
+        >
+          {line.isActualOnly || line.ytdVariancePct === null ? "—" : percent(line.ytdVariancePct)}
         </td>
         <td className={clsx(cell, "text-right")}>
           {line.isLedger ? (
@@ -212,7 +282,7 @@ function ExpenseRow({
       </tr>
       {open && !line.isLedger && (
         <tr>
-          <td colSpan={5} className="border-b border-line bg-surface-sunk/30 px-3 py-3 sm:px-6">
+          <td colSpan={8} className="border-b border-line bg-surface-sunk/30 px-3 py-3 sm:px-6">
             <EntryPanel
               line={line}
               fy={fy}
