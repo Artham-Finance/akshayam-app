@@ -1,6 +1,10 @@
 import { query } from "@/lib/db";
 import { verticalScope, type Entity } from "@/lib/entity";
 import { fyBounds, fyMonths, type FyMonth } from "@/lib/period";
+import {
+  PRESENTATIONAL_TAX_RATE,
+  taxedMembers,
+} from "@/lib/reports/presentational-tax";
 
 /**
  * Budget versus actual, down the P&L.
@@ -115,7 +119,7 @@ export async function buildBudgetVsActualPnl(opts: {
   const start = window?.start ?? fyRange.start;
   const end = window?.end ?? fyRange.end;
 
-  const [glRows, osbRows, budgetRows] = await Promise.all([
+  const [glRows, osbRows, revenueTransferRows, budgetRows] = await Promise.all([
     query<{ month_key: string; group_code: string | null; amount: number }>(
       // credit - debit, so income is positive and a cost negative: the same
       // convention the P&L page uses, which is what lets the two agree.
@@ -153,6 +157,26 @@ export async function buildBudgetVsActualPnl(opts: {
       [entity.memberIds, start, end, verticalId, entity.verticalIds],
     ),
     /**
+     * Revenue transferred to RBJV - the mirror image of OSB revenue above.
+     * These invoices have real gl_entries behind them, but a portion of the
+     * value is not really Akshayam's own, so it is deducted from the same
+     * 'revenue' bucket OSB revenue adds to. Excluded when consolidating: see
+     * buildProfitAndLoss for the same exclusion and its reasoning.
+     */
+    query<{ month_key: string; group_code: string; amount: number }>(
+      `select to_char(i.invoice_date, 'YYYY-MM') as month_key,
+              'revenue' as group_code,
+              -sum(i.amount_base) as amount
+         from invoice_lines i
+        where i.entity_id = any($1::int[]) and i.is_revenue_transfer
+          and not $6::boolean
+          and i.invoice_date between $2 and $3
+          and ($4::int is null or i.vertical_id = $4)
+          ${verticalScope("$5", "i.vertical_id")}
+        group by 1`,
+      [entity.memberIds, start, end, verticalId, entity.verticalIds, entity.consolidates],
+    ),
+    /**
      * The budget is held for the entity itself, not summed from members: the
      * consolidated sheet is its own schedule and already excludes the common
      * cost Akshayam is charged by RBJV, which adding the two companies would
@@ -178,7 +202,7 @@ export async function buildBudgetVsActualPnl(opts: {
   const byCode = new Map(lines.map((l) => [l.code, l]));
   const valid = new Set(months.map((m) => m.key));
 
-  for (const row of [...glRows, ...osbRows]) {
+  for (const row of [...glRows, ...osbRows, ...revenueTransferRows]) {
     if (!valid.has(row.month_key)) continue;
     const code = row.group_code ? GROUP_TO_LINE[row.group_code] : undefined;
     // An account with no reporting line has nowhere to sit on a statement this
@@ -208,9 +232,13 @@ export async function buildBudgetVsActualPnl(opts: {
   const drawings = byCode.get("partner_drawings")!;
   for (const m of months) drawings.actual[m.key] = drawings.budget[m.key];
 
-  for (const spec of LAYOUT) {
-    if (!spec.subtotalOf) continue;
-    const target = byCode.get(spec.code)!;
+  // Recomputes one subtotal from the lines under it. Pulled out so the tax
+  // line below can be filled in after the fact and PAT/retained struck again
+  // from it, without repeating this loop by hand.
+  const recompute = (code: BvaCode) => {
+    const spec = LAYOUT.find((l) => l.code === code)!;
+    if (!spec.subtotalOf) return;
+    const target = byCode.get(code)!;
     for (const m of months) {
       let actual = 0;
       let budget = 0;
@@ -224,6 +252,43 @@ export async function buildBudgetVsActualPnl(opts: {
       target.actual[m.key] = actual;
       target.budget[m.key] = budget;
     }
+  };
+
+  for (const spec of LAYOUT) {
+    if (spec.subtotalOf) recompute(spec.code);
+  }
+
+  /**
+   * Presentational tax on the actual column only - the budget already carries
+   * whatever tax the firm entered for it. Neither company passes a tax entry
+   * through the ledger, so without this the actual column understates its
+   * own cost against a budget that plans for one. Same rates, and the same
+   * "sum of members" reasoning for the group, as the P&L and Balance Sheet.
+   */
+  if (verticalId === null) {
+    const tax = byCode.get("tax")!;
+    const rate = PRESENTATIONAL_TAX_RATE[entity.slug];
+    if (rate) {
+      const pbt = byCode.get("pbt")!;
+      let cumulativePbt = 0;
+      let cumulativeTax = 0;
+      for (const m of months) {
+        cumulativePbt += pbt.actual[m.key];
+        const taxToDate = cumulativePbt > 0 ? cumulativePbt * (rate / 100) : 0;
+        tax.actual[m.key] = taxToDate - cumulativeTax;
+        cumulativeTax = taxToDate;
+      }
+    } else if (entity.isGroup) {
+      const members = await taxedMembers(entity);
+      for (const member of members) {
+        const memberResult = await buildBudgetVsActualPnl({ entity: member, fyStartYear, window });
+        const memberTax = memberResult.lines.find((l) => l.code === "tax");
+        if (!memberTax) continue;
+        for (const m of months) tax.actual[m.key] += memberTax.actual[m.key];
+      }
+    }
+    recompute("pat");
+    recompute("retained");
   }
 
   return { months, lines, hasBudget: budgetRows.length > 0 };

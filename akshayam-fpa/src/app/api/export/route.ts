@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAvailableFinancialYears, getEntity, getVerticals } from "@/lib/entity";
 import { apiGuard } from "@/lib/auth/dal";
+import { fyMonths } from "@/lib/period";
 import {
   getReportingPeriod,
   ledgerWrittenTo,
@@ -67,6 +68,12 @@ export async function GET(request: Request) {
         ? ((await getVerticals(entity)).find((v) => v.id === verticalId)?.name ?? null)
         : null;
 
+      // Year to date, always - the same window the Other-expenses breakdown
+      // shows beside whatever the picker's own period is.
+      const ytdMonths = fyMonths(fy, entity.fy_start_month).filter(
+        (m) => m.start <= (writtenTo ?? end),
+      );
+
       const workbook = await buildStatementWorkbook({
         kind,
         entity,
@@ -77,6 +84,7 @@ export async function GET(request: Request) {
         asOf: period.asOf,
         periodMonths: period.periodMonths,
         periodLabel: period.label,
+        ytdMonths,
       });
       const buffer = await workbook.xlsx.writeBuffer();
       return spreadsheet(buffer, exportFilename(entity.name, statementTitle(kind)));

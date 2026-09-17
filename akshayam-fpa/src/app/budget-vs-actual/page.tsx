@@ -20,7 +20,7 @@ import {
 } from "@/lib/entity";
 import { withParams } from "@/lib/href";
 import { dateLabel } from "@/lib/format";
-import { fyMonths } from "@/lib/period";
+import { fyBounds, fyMonths } from "@/lib/period";
 import {
   getReportingPeriod,
   ledgerAsOfLabel,
@@ -87,12 +87,44 @@ export default async function BudgetVsActualPage({
     const period = await getReportingPeriod(entity, availableYears, writtenTo);
     const fy = period.fyStartYear;
     const months = fyMonths(fy);
-    const periodMonths = period.periodMonths;
-    const periodLabel = period.label;
-    // Year to date, always - shown beside whatever the picker's own period is,
-    // so the Other-expenses breakdown never loses the full-year story.
-    const ytdMonths = months.filter((m) => m.start <= (writtenTo ?? period.end));
-    const ytdLabel = writtenTo ? `to ${dateLabel(writtenTo)}` : "1 Apr onward";
+
+    /**
+     * A custom range spanning several months (say 1 Apr - 31 Jul) is not a
+     * period this page can hold a budget against the way a quarter or a year
+     * can - there is no "four months of budget" the firm plans to. On this
+     * tab only, a custom range therefore collapses to its own last month:
+     * every "period" figure below - budget and actual alike - reads just
+     * that month, while the year-to-date columns beside them still carry
+     * the whole year's story.
+     */
+    const isCustomRange = period.preset === "custom";
+    const lastTouchedMonth = period.periodMonths[period.periodMonths.length - 1] ?? null;
+    const periodMonths =
+      isCustomRange && lastTouchedMonth ? [lastTouchedMonth] : period.periodMonths;
+    const periodLabel = isCustomRange && lastTouchedMonth ? lastTouchedMonth.label : period.label;
+    const periodColumnLabel =
+      isCustomRange && lastTouchedMonth ? lastTouchedMonth.label : period.shortLabel;
+
+    /**
+     * Year to date, always - shown beside whatever the picker's own period is,
+     * so every breakdown on this tab never loses the full-year story. Stops
+     * at the last *completed* month rather than however far the ledger
+     * happens to reach mid-month: a GL posted through 15 September has not
+     * finished September, so August is still the year to date.
+     */
+    const ytdCutoff = writtenTo ?? period.end;
+    const ytdMonths = months.filter((m) => m.end <= ytdCutoff);
+    const ytdThrough = ytdMonths[ytdMonths.length - 1]?.end ?? null;
+    const ytdLabel = ytdThrough ? `to ${dateLabel(ytdThrough)}` : "1 Apr onward";
+
+    // What the main statement's actual side needs read from the ledger: from
+    // the start of the year through whichever is further out, the picked
+    // period or the YTD cutoff - wide enough that summing either periodMonths
+    // or ytdMonths afterwards finds real data, not a month never fetched.
+    const fetchWindow = {
+      start: fyBounds(fy, entity.fy_start_month).start,
+      end: period.end > ytdCutoff ? period.end : ytdCutoff,
+    };
 
     const [verticals, statement] = await Promise.all([
       getVerticals(entity),
@@ -101,15 +133,16 @@ export default async function BudgetVsActualPage({
         : buildBudgetVsActualPnl({
             entity,
             fyStartYear: fy,
-            window: { start: period.start, end: period.end },
+            window: fetchWindow,
           }),
     ]);
 
     /**
-     * The statement's own Team cost budget, for the period on screen and for
-     * the whole year. The breakdown card prorates its hard-coded annual budget
-     * on the same curve, so the card total ties to the "Team cost" line above.
-     * A slice has no statement, so the card falls back to an even spread.
+     * The statement's own Team cost budget, for the period on screen, the
+     * year to date, and the whole year. The breakdown card prorates its
+     * hard-coded annual budget on the same curve, so the card's totals tie to
+     * the "Team cost" line above. A slice has no statement, so the card falls
+     * back to an even spread.
      */
     const teamCostLine = statement?.lines.find((l) => l.code === "direct_cost");
     const budgetOver = (ms: typeof months) =>
@@ -119,15 +152,22 @@ export default async function BudgetVsActualPage({
       isSlice ? null : buildExpenseDetail({ entity, fyStartYear: fy, periodMonths, ytdMonths }),
       buildTeamCost({
         entity,
+        fyStartYear: fy,
         periodMonths,
-        statementBudget: { period: budgetOver(periodMonths), annual: budgetOver(months) },
+        ytdMonths,
+        statementBudget: {
+          period: budgetOver(periodMonths),
+          ytd: budgetOver(ytdMonths),
+          annual: budgetOver(months),
+        },
       }),
       isSlice
         ? null
         : buildEstablishmentDetail({
             entity,
+            fyStartYear: fy,
             periodMonths,
-            window: { start: period.start, end: period.end },
+            ytdMonths,
           }),
     ]);
     const editableMonth = periodMonths.length === 1 ? `${periodMonths[0].key}-01` : null;
@@ -152,15 +192,13 @@ export default async function BudgetVsActualPage({
             ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""
           }`}
           actions={
-            !isSlice && (
-              <DownloadExcel
-                href={withParams("/api/export", params, {
-                  kind: "budget-vs-actual",
-                  vertical: null,
-                  drill: null,
-                })}
-              />
-            )
+            <DownloadExcel
+              href={withParams("/api/export", params, {
+                kind: "budget-vs-actual",
+                vertical: null,
+                drill: null,
+              })}
+            />
           }
         />
 
@@ -210,8 +248,10 @@ export default async function BudgetVsActualPage({
               </div>
               <BvaStatement
                 lines={statement.lines}
-                months={months}
                 periodMonths={periodMonths}
+                ytdMonths={ytdMonths}
+                periodLabel={periodColumnLabel}
+                ytdLabel={ytdLabel}
               />
             </Card>
           )}
@@ -221,7 +261,11 @@ export default async function BudgetVsActualPage({
               <div className="px-4 pt-4 sm:px-5">
                 <CardTitle hint={periodLabel}>Team cost — budget vs actual</CardTitle>
               </div>
-              <TeamCostTable result={teamCost} periodLabel={periodLabel} />
+              <TeamCostTable
+                result={teamCost}
+                periodLabel={periodColumnLabel}
+                ytdLabel={ytdLabel}
+              />
             </Card>
           )}
 
@@ -230,7 +274,11 @@ export default async function BudgetVsActualPage({
               <div className="px-4 pt-4 sm:px-5">
                 <CardTitle hint={periodLabel}>Establishment cost — budget vs actual</CardTitle>
               </div>
-              <EstablishmentCostTable result={establishment} periodLabel={periodLabel} />
+              <EstablishmentCostTable
+                result={establishment}
+                periodLabel={periodColumnLabel}
+                ytdLabel={ytdLabel}
+              />
             </Card>
           )}
 
@@ -253,7 +301,7 @@ export default async function BudgetVsActualPage({
                 month={editableMonth}
                 vendors={expenseDetail.vendors}
                 monthLabel={editableMonth ? periodMonths[0].label : null}
-                periodLabel={period.shortLabel}
+                periodLabel={periodColumnLabel}
                 ytdLabel={ytdLabel}
               />
               {Math.abs(

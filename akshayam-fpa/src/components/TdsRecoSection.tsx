@@ -5,6 +5,7 @@ import { Card, CardTitle, DrillPanel, KpiTile, Notice } from "@/components/ui";
 import { compactINR, dateLabel, money, moneySigned } from "@/lib/format";
 import { withParams, type Params } from "@/lib/href";
 import type { Entity } from "@/lib/entity";
+import type { QuarterNo } from "@/lib/period";
 import { buildTdsReco, tdsDrill, type TdsDrillSide, type TdsSegment } from "@/lib/reports/tds";
 
 /**
@@ -16,9 +17,23 @@ import { buildTdsReco, tdsDrill, type TdsDrillSide, type TdsSegment } from "@/li
  * away - but the part of it caused merely by a deductor name that could not be
  * matched is separated out, because that is a mapping job rather than a tax
  * one and confusing the two wastes the reader's time.
+ *
+ * Struck one quarter at a time - Form 26AS is downloaded from the income tax
+ * portal once a quarter, so a range spanning two would compare a whole filing
+ * against a partial one. A quarter whose 26AS has not been uploaded yet still
+ * shows its books side; every customer just falls into "in books, not in Form
+ * 26AS" until the statement arrives, which is the fact worth showing rather
+ * than an empty card.
  */
 
 const DRILL_LIMIT = 250;
+
+const QUARTER_TAB_LABEL: Record<QuarterNo, string> = {
+  1: "Q1 · Apr-Jun",
+  2: "Q2 · Jul-Sep",
+  3: "Q3 · Oct-Dec",
+  4: "Q4 · Jan-Mar",
+};
 
 /** Short forms for the segment table; the long ones read as sentences. */
 const SEGMENT_TITLE: Record<TdsSegment, string> = {
@@ -38,31 +53,67 @@ function DiffCell({ value }: { value: number }) {
   );
 }
 
+function QuarterTabs({ quarter, params }: { quarter: QuarterNo; params: Params }) {
+  const chip = "rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors whitespace-nowrap";
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {([1, 2, 3, 4] as const).map((q) => (
+        <Link
+          key={q}
+          href={withParams("/receivables", params, {
+            tdsQ: q,
+            tds: null,
+            tdsSide: null,
+            tdsSeg: null,
+            tdsVert: null,
+          })}
+          scroll={false}
+          className={clsx(
+            chip,
+            q === quarter
+              ? "bg-navy text-ink-invert"
+              : "border border-line text-ink-muted hover:bg-surface-sunk",
+          )}
+        >
+          {QUARTER_TAB_LABEL[q]}
+        </Link>
+      ))}
+    </div>
+  );
+}
+
 export async function TdsRecoSection({
   entity,
+  fyStartYear,
+  quarter,
   verticalId,
   customer,
   params,
 }: {
   entity: Entity;
+  fyStartYear: number;
+  quarter: QuarterNo;
   verticalId: number | null;
   customer: string | null;
   params: Params;
 }) {
-  const reco = await buildTdsReco({ entity, verticalId, customer });
+  const reco = await buildTdsReco({ entity, fyStartYear, quarter, verticalId, customer });
 
   if (!reco.hasData) {
     return (
       <Card>
-        <CardTitle>TDS receivable reconciliation</CardTitle>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <CardTitle>TDS receivable reconciliation</CardTitle>
+          <QuarterTabs quarter={quarter} params={params} />
+        </div>
         <p className="text-[13px] leading-relaxed text-ink-muted">
-          No Form 26AS has been uploaded yet. Download the annual tax statement for the year
-          from the income tax portal and drop it on the{" "}
+          Nothing booked in the books and nothing uploaded from Form 26AS for{" "}
+          {reco.quarterLabel} yet. Once either side has something - an invoice with TDS
+          withheld, or the quarter&rsquo;s tax statement from the{" "}
           <Link href="/upload" className="text-navy hover:underline">
             Upload
           </Link>{" "}
-          tab, and the tax credits the department has recorded will be reconciled here against
-          the TDS receivable raised in the books.
+          tab - it will show here.
         </p>
       </Card>
     );
@@ -83,7 +134,9 @@ export async function TdsRecoSection({
   const sideParam = typeof params.tdsSide === "string" ? params.tdsSide : "books";
   const side: TdsDrillSide =
     sideParam === "26as" ? "26as" : sideParam === "invoice" ? "invoice" : "books";
-  const drill = drillCustomer ? await tdsDrill(entity, side, drillCustomer, DRILL_LIMIT) : null;
+  const drill = drillCustomer
+    ? await tdsDrill(entity, fyStartYear, quarter, side, drillCustomer, DRILL_LIMIT)
+    : null;
 
   const unmatchedValue = reco.unmatchedDeductors.reduce((s, d) => s + d.taxDeducted, 0);
 
@@ -106,18 +159,36 @@ export async function TdsRecoSection({
   return (
     <Card padded={false}>
       <div className="p-4 sm:p-5">
-        <CardTitle
-          hint={
-            reco.updatedTill ? `26AS updated till ${dateLabel(reco.updatedTill)}` : undefined
-          }
-        >
-          TDS receivable reconciliation
-        </CardTitle>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <CardTitle
+            hint={
+              reco.updatedTill ? `26AS updated till ${dateLabel(reco.updatedTill)}` : undefined
+            }
+          >
+            TDS receivable reconciliation
+          </CardTitle>
+          <QuarterTabs quarter={quarter} params={params} />
+        </div>
         <p className="-mt-1 mb-4 text-[12.5px] text-ink-muted">
-          Books against Form 26AS for {dateLabel(reco.period!.start)} to{" "}
-          {dateLabel(reco.period!.end)}. The books raise a TDS receivable when an invoice is
+          Books against Form 26AS for {reco.quarterLabel} — {dateLabel(reco.period.start)} to{" "}
+          {dateLabel(reco.period.end)}. The books raise a TDS receivable when an invoice is
           approved; Form 26AS is what the customer told the department it deducted.
         </p>
+
+        {!reco.has26as && (
+          <div className="mb-4">
+            <Notice tone="caution" title={`Form 26AS not uploaded for ${reco.quarterLabel}`}>
+              The statement for this quarter has not come from the income tax portal yet, so
+              everything below is the books side only — every customer falls into &ldquo;in
+              books, not in Form 26AS&rdquo; until it does. Download the quarter&rsquo;s
+              statement and drop it on the{" "}
+              <Link href="/upload" className="underline">
+                Upload
+              </Link>{" "}
+              tab to fill in the other side.
+            </Notice>
+          </div>
+        )}
 
         {reco.ledgers.length > 0 && (
           <p className="-mt-2 mb-4 text-[12px] leading-relaxed text-ink-faint">
@@ -256,6 +327,43 @@ export async function TdsRecoSection({
           </p>
         )}
       </div>
+
+      {segment === "books_only" && reco.booksOnlyInvoices.length > 0 && (
+        <div className="border-t border-line">
+          <div className="p-4 sm:p-5">
+            <CardTitle hint={`${reco.booksOnlyInvoices.length} invoices · every vertical`}>
+              Invoices in books, not in Form 26AS
+            </CardTitle>
+            <p className="-mt-1 text-[12.5px] leading-relaxed text-ink-muted">
+              The invoice and date behind every customer above — a customer with more than
+              one unmatched invoice in {reco.quarterLabel} gets a row each.
+            </p>
+          </div>
+          <DataTable
+            columns={[
+              { header: "Customer" },
+              { header: "Vertical" },
+              { header: "Invoice" },
+              { header: "Date" },
+              { header: "TDS booked", numeric: true, strong: true },
+            ]}
+            rows={reco.booksOnlyInvoices.map((r) => [
+              r.customer,
+              r.verticalCode ?? "—",
+              r.invoiceNumber ?? "—",
+              r.invoiceDate ? dateLabel(r.invoiceDate) : "—",
+              money(r.amount),
+            ])}
+            footer={[
+              `Total — ${reco.booksOnlyInvoices.length} invoice${reco.booksOnlyInvoices.length === 1 ? "" : "s"}`,
+              "",
+              "",
+              "",
+              money(reco.booksOnlyInvoices.reduce((s, r) => s + r.amount, 0)),
+            ]}
+          />
+        </div>
+      )}
 
       {drill && (
         <div className="px-4 pb-4 sm:px-5">

@@ -26,6 +26,12 @@ import type { ExpenseDetailLine, ExpenseEntry } from "@/lib/reports/expense-deta
  * the period's own bills are ever opened. A quarter or a year to date is
  * shown read-only rather than inviting an entry that would have nowhere to be
  * filed.
+ *
+ * Lines are grouped under their head - Staff Welfare, Computer - subscription,
+ * and so on - and every group with more than one line collapses to a single
+ * summary row, its Period and YTD figures the group's own totals, expandable
+ * to the lines beneath it. A head with only one line (Accounting support,
+ * Donation, ...) is already as short as it gets, so it is left flat.
  */
 export function ExpenseDetailTable({
   lines,
@@ -70,7 +76,27 @@ export function ExpenseDetailTable({
   );
   const ytdVariancePct = totals.ytdBudget ? (totals.ytdVariance / totals.ytdBudget) * 100 : null;
 
-  let lastHead: string | null = null;
+  // One group per head, in the order the lines already carry. A group of one
+  // line whose label repeats the head (isHeadOnly) has nothing to collapse.
+  const groups: { head: string; lines: ExpenseDetailLine[] }[] = [];
+  const groupIndex = new Map<string, number>();
+  for (const line of lines) {
+    if (!groupIndex.has(line.head)) {
+      groupIndex.set(line.head, groups.length);
+      groups.push({ head: line.head, lines: [] });
+    }
+    groups[groupIndex.get(line.head)!].lines.push(line);
+  }
+  const collapsible = groups.filter((g) => !(g.lines.length === 1 && g.lines[0].isHeadOnly));
+
+  const [openHeads, setOpenHeads] = useState<Set<string>>(new Set());
+  const toggleHead = (h: string) =>
+    setOpenHeads((cur) => {
+      const next = new Set(cur);
+      if (next.has(h)) next.delete(h);
+      else next.add(h);
+      return next;
+    });
 
   return (
     <div className="overflow-x-auto">
@@ -81,12 +107,34 @@ export function ExpenseDetailTable({
         ))}
       </datalist>
 
-      <table className="w-full min-w-max border-collapse text-[13px]">
-        <caption className="px-4 pb-3 text-left text-[11.5px] text-ink-muted">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-1 pt-4 sm:px-5">
+        <p className="text-[11.5px] text-ink-muted">
           {month
             ? "Open a line to see the bills behind it and record another. Each line's actual is the sum of its entries."
             : "Read-only across more than one month — an entry belongs to the month the cost is reported in. Pick a single month to record one."}
-        </caption>
+        </p>
+        {collapsible.length > 0 && (
+          <div className="flex shrink-0 gap-2 text-[11.5px]">
+            <button
+              type="button"
+              onClick={() => setOpenHeads(new Set(collapsible.map((g) => g.head)))}
+              className="text-ink-muted hover:text-navy"
+            >
+              Expand all
+            </button>
+            <span className="text-ink-faint">·</span>
+            <button
+              type="button"
+              onClick={() => setOpenHeads(new Set())}
+              className="text-ink-muted hover:text-navy"
+            >
+              Collapse all
+            </button>
+          </div>
+        )}
+      </div>
+
+      <table className="w-full min-w-max border-collapse text-[13px]">
         <thead>
           <tr>
             <th scope="col" className={clsx(head, "text-left")}>
@@ -120,16 +168,29 @@ export function ExpenseDetailTable({
           </tr>
         </thead>
         <tbody>
-          {lines.map((line) => {
-            const newHead = line.head !== lastHead && !line.isHeadOnly;
-            lastHead = line.head;
+          {groups.map((g) => {
+            const single = g.lines.length === 1 && g.lines[0].isHeadOnly;
+            if (single) {
+              return (
+                <ExpenseRow
+                  key={g.head}
+                  line={g.lines[0]}
+                  fy={fy}
+                  month={month}
+                  vendorListId={vendorListId}
+                />
+              );
+            }
+            const open = openHeads.has(g.head);
             return (
-              <ExpenseRow
-                key={`${line.head}|${line.label}`}
-                line={line}
+              <GroupSection
+                key={g.head}
+                head={g.head}
+                lines={g.lines}
+                open={open}
+                onToggle={() => toggleHead(g.head)}
                 fy={fy}
                 month={month}
-                showHead={newHead}
                 vendorListId={vendorListId}
               />
             );
@@ -186,17 +247,133 @@ export function ExpenseDetailTable({
   );
 }
 
+/**
+ * A collapsible head: a bold summary row carrying the group's own Period and
+ * YTD totals, expanding to the lines beneath it. Collapsed by default, so the
+ * card reads as fourteen heads rather than every vendor line in the year.
+ */
+function GroupSection({
+  head,
+  lines,
+  open,
+  onToggle,
+  fy,
+  month,
+  vendorListId,
+}: {
+  head: string;
+  lines: ExpenseDetailLine[];
+  open: boolean;
+  onToggle: () => void;
+  fy: number;
+  month: string | null;
+  vendorListId: string;
+}) {
+  const cell = "border-b border-line px-3 py-2";
+
+  const sums = lines.reduce(
+    (acc, l) => {
+      const periodActual = l.isDeduction ? -l.periodActual : l.periodActual;
+      const ytdActual = l.isDeduction ? -l.ytdActual : l.ytdActual;
+      return {
+        periodBudget: acc.periodBudget + l.periodBudget,
+        periodActual: acc.periodActual + periodActual,
+        ytdBudget: acc.ytdBudget + l.ytdBudget,
+        ytdActual: acc.ytdActual + ytdActual,
+        ytdVariance: acc.ytdVariance + (l.ytdBudget - ytdActual),
+      };
+    },
+    { periodBudget: 0, periodActual: 0, ytdBudget: 0, ytdActual: 0, ytdVariance: 0 },
+  );
+  const ytdVariancePct = sums.ytdBudget ? (sums.ytdVariance / sums.ytdBudget) * 100 : null;
+  const entryCount = lines.reduce((s, l) => s + l.entries.length, 0);
+
+  return (
+    <>
+      <tr className="bg-surface-sunk/60 hover:bg-surface-sunk">
+        <th scope="row" className={clsx(cell, "text-left")}>
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={open}
+            className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted hover:text-ink"
+          >
+            <span className={clsx("text-[9px] transition-transform", open && "rotate-90")}>▶</span>
+            {head}
+            <span className="font-normal normal-case tracking-normal text-ink-faint">
+              {lines.length} lines
+            </span>
+          </button>
+        </th>
+        <td className={clsx(cell, "num text-right font-semibold text-ink")}>
+          {money(sums.periodBudget)}
+        </td>
+        <td
+          className={clsx(
+            cell,
+            "num text-right font-semibold",
+            sums.periodActual < 0 ? "text-negative" : "text-ink",
+          )}
+        >
+          {moneySigned(sums.periodActual)}
+        </td>
+        <td className={clsx(cell, "num text-right font-semibold text-ink")}>
+          {money(sums.ytdBudget)}
+        </td>
+        <td
+          className={clsx(
+            cell,
+            "num text-right font-semibold",
+            sums.ytdActual < 0 ? "text-negative" : "text-ink",
+          )}
+        >
+          {moneySigned(sums.ytdActual)}
+        </td>
+        <td
+          className={clsx(
+            cell,
+            "num text-right font-semibold",
+            sums.ytdVariance < 0 ? "text-negative" : "text-positive",
+          )}
+        >
+          {moneySigned(sums.ytdVariance)}
+        </td>
+        <td
+          className={clsx(
+            cell,
+            "num text-right font-semibold",
+            ytdVariancePct !== null && ytdVariancePct < 0 ? "text-negative" : "text-positive",
+          )}
+        >
+          {ytdVariancePct === null ? "—" : percent(ytdVariancePct)}
+        </td>
+        <td className={clsx(cell, "text-right text-[11px] text-ink-faint")}>
+          {entryCount > 0 ? `${entryCount} entries` : ""}
+        </td>
+      </tr>
+      {open &&
+        lines.map((line) => (
+          <ExpenseRow
+            key={`${line.head}|${line.label}`}
+            line={line}
+            fy={fy}
+            month={month}
+            vendorListId={vendorListId}
+          />
+        ))}
+    </>
+  );
+}
+
 function ExpenseRow({
   line,
   fy,
   month,
-  showHead,
   vendorListId,
 }: {
   line: ExpenseDetailLine;
   fy: number;
   month: string | null;
-  showHead: boolean;
   vendorListId: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -204,17 +381,6 @@ function ExpenseRow({
 
   return (
     <>
-      {showHead && (
-        <tr className="bg-surface-sunk/60">
-          <th
-            scope="row"
-            colSpan={8}
-            className="border-b border-line px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted"
-          >
-            {line.head}
-          </th>
-        </tr>
-      )}
       <tr className="hover:bg-surface-sunk/40">
         <th
           scope="row"

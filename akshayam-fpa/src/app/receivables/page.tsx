@@ -37,7 +37,7 @@ import {
 } from "@/lib/reports/drilldowns";
 import { buildCustomerStatement, listCustomers } from "@/lib/reports/customer-statement";
 import { buildDscToken } from "@/lib/reports/dsc-token";
-import { fyBounds, fyLabel, fyStartYearOf } from "@/lib/period";
+import { fyBounds, fyLabel, fyMonths, fyStartYearOf, type QuarterNo } from "@/lib/period";
 import { requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
@@ -206,6 +206,21 @@ export default async function ReceivablesPage({
      * containing the snapshot is the only one a statement could mean.
      */
     const statementFy = fyStartYearOf(new Date(`${asOf}T00:00:00`));
+
+    /**
+     * The TDS reconciliation's own quarter - Form 26AS is downloaded once a
+     * quarter, so the reconciliation is struck one at a time rather than
+     * blended. Defaults to the quarter the AR snapshot itself falls in;
+     * picking another is what the reconciliation card's own tabs are for.
+     */
+    const tdsDefaultQuarter =
+      (fyMonths(statementFy, entity.fy_start_month).find(
+        (m) => m.start <= asOf && asOf <= m.end,
+      )?.quarter as QuarterNo | undefined) ?? 1;
+    const requestedTdsQuarter = Number(params.tdsQ);
+    const tdsQuarter: QuarterNo = (
+      [1, 2, 3, 4].includes(requestedTdsQuarter) ? requestedTdsQuarter : tdsDefaultQuarter
+    ) as QuarterNo;
 
     // DSC and support buys and sells digital-signature tokens; when it is the
     // picked vertical, the token stock-take sits above the TDS reconciliation.
@@ -699,6 +714,8 @@ export default async function ReceivablesPage({
               deducted, against what the books raised when the invoice went out. */}
           <TdsRecoSection
             entity={entity}
+            fyStartYear={statementFy}
+            quarter={tdsQuarter}
             verticalId={verticalId}
             customer={customer}
             params={params}

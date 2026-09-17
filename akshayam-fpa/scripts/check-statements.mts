@@ -13,7 +13,12 @@
  * change makes any case here fail, the statement it produces is out by that
  * much on screen.
  */
-import { composeBalanceSheet, type StatementResult } from "../src/lib/reports/compose";
+import {
+  applyPresentationalTax,
+  assemble,
+  composeBalanceSheet,
+  type StatementResult,
+} from "../src/lib/reports/compose";
 import { buildDuPont } from "../src/lib/reports/dupont";
 import {
   rateAgeingDays,
@@ -205,6 +210,120 @@ console.log("\n== Consolidation with an intercompany difference ==");
     "and reported for the notice above the statement",
     Math.abs((result.eliminations?.difference ?? 0) - 100) < 0.005,
     `difference ${result.eliminations?.difference}`,
+  );
+}
+
+/* ---------- presentational tax, split out of reserves into a provision ---------- */
+console.log("\n== Presentational tax (no GL entry) ==");
+{
+  // Rs 10,00,000 profit, no tax booked. At 35% the statement should show
+  // 3,50,000 of it as a Provision for Tax instead of retained in reserves -
+  // same total, so the balance sheet still ties.
+  const result = composeBalanceSheet({
+    ...base,
+    opening: [],
+    movements: [move(2, "HDFC Current Account", "cash", first, 1_000_000)],
+    pnlMovements: [{ month_key: first, amount: 1_000_000 }],
+    taxRatePercent: 35,
+    taxLineName: "Provision for Tax — FY 2025-26",
+  });
+
+  check("statement still ties", ties(result), `gap ${gapAt(result).toFixed(2)}`);
+  check("the provision is carried on its own line", has(result, "provision_for_tax"));
+  const provision = result.lines.find((l) => l.key === "provision_for_tax");
+  check(
+    "provision is 35% of profit",
+    Math.abs((provision?.values[first] ?? 0) - -350_000) < 0.005,
+    `${provision?.values[first]}`,
+  );
+  const profitForPeriod = result.lines.find((l) => l.key === "profit_for_period");
+  check(
+    "reserves carry the after-tax figure",
+    Math.abs((profitForPeriod?.values[first] ?? 0) - -650_000) < 0.005,
+    `${profitForPeriod?.values[first]}`,
+  );
+}
+
+/* ---------- presentational tax on the group: a precomputed override, not a rate ---------- */
+console.log("\n== Presentational tax override (group, two rates summed) ==");
+{
+  // The group has no single rate of its own - RBJV's own provision (3,50,000)
+  // and Akshayam's own (there is none here) are summed by the caller and
+  // handed in as taxOverride, exactly as buildBalanceSheet does for the
+  // group. Same invariant: the statement still ties.
+  const result = composeBalanceSheet({
+    ...base,
+    opening: [],
+    movements: [move(2, "HDFC Current Account", "cash", first, 1_000_000)],
+    pnlMovements: [{ month_key: first, amount: 1_000_000 }],
+    taxOverride: {
+      values: { [first]: -350_000 },
+      label: "Provision for Tax (RBJV @ 35% + Akshayam @ 25%) — FY 2025-26",
+    },
+  });
+
+  check("statement still ties", ties(result), `gap ${gapAt(result).toFixed(2)}`);
+  const provision = result.lines.find((l) => l.key === "provision_for_tax");
+  check(
+    "the override value is carried through unchanged",
+    Math.abs((provision?.values[first] ?? 0) - -350_000) < 0.005,
+    `${provision?.values[first]}`,
+  );
+  check(
+    "the override's label is used",
+    provision?.name === "Provision for Tax (RBJV @ 35% + Akshayam @ 25%) — FY 2025-26",
+    `${provision?.name}`,
+  );
+  const profitForPeriod = result.lines.find((l) => l.key === "profit_for_period");
+  check(
+    "reserves carry the after-tax figure",
+    Math.abs((profitForPeriod?.values[first] ?? 0) - -650_000) < 0.005,
+    `${profitForPeriod?.values[first]}`,
+  );
+}
+
+/* ---------- presentational tax on the P&L, cascading into PAT and retained ---------- */
+console.log("\n== Presentational tax on the P&L ==");
+{
+  const pnlGroups = [
+    { code: "ebit", name: "EBIT", sort_order: 100, is_subtotal: false, subtotal_of: null, sign: 1 },
+    { code: "pbt", name: "Profit Before Tax", sort_order: 120, is_subtotal: true, subtotal_of: ["ebit"], sign: 1 },
+    { code: "tax", name: "Tax Expense", sort_order: 130, is_subtotal: false, subtotal_of: null, sign: -1 },
+    { code: "pat", name: "Profit After Tax", sort_order: 140, is_subtotal: true, subtotal_of: ["pbt", "tax"], sign: 1 },
+    { code: "retained_profit", name: "Retained Profit", sort_order: 160, is_subtotal: true, subtotal_of: ["pat"], sign: 1 },
+  ];
+  // 1,00,000 in month one, 1,00,000 in month two - the "ebit" account itself
+  // carries both months so pbt/pat/retained are pure subtotals of it.
+  const rows = [
+    { month_key: first, group_code: "ebit", account_id: 1, account_name: "Trading result", account_sort: 1, amount: 100_000 },
+    { month_key: months[1].key, group_code: "ebit", account_id: 1, account_name: "Trading result", account_sort: 1, amount: 100_000 },
+  ];
+  const result = assemble(months, pnlGroups, rows, false);
+  applyPresentationalTax(result, pnlGroups, months, 35, "Income tax @ 35%");
+
+  const tax = result.lines.find((l) => l.groupCode === "tax");
+  const pat = result.lines.find((l) => l.groupCode === "pat");
+  const retained = result.lines.find((l) => l.groupCode === "retained_profit");
+
+  check("tax line is inserted between PBT and PAT", !!tax);
+  check(
+    "two months of tax sum to 35% of cumulative PBT",
+    Math.abs(
+      (tax?.values[first] ?? 0) + (tax?.values[months[1].key] ?? 0) - -70_000,
+    ) < 0.005,
+    `${(tax?.values[first] ?? 0) + (tax?.values[months[1].key] ?? 0)}`,
+  );
+  const sumOf = (line?: StatementResult["lines"][number]) =>
+    (line?.values[first] ?? 0) + (line?.values[months[1].key] ?? 0);
+  check(
+    "PAT over both months is PBT less tax",
+    Math.abs(sumOf(pat) - 130_000) < 0.005,
+    `${sumOf(pat)}`,
+  );
+  check(
+    "retained profit cascades from PAT",
+    Math.abs(sumOf(retained) - 130_000) < 0.005,
+    `${sumOf(retained)}`,
   );
 }
 
