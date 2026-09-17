@@ -153,6 +153,28 @@ export interface ParsedOsbRow {
   status: string | null;
 }
 
+/**
+ * A real Akshayam invoice (booked through GIFT) where a portion of the value
+ * is passed on to RBJV for work its own team served the client on. The
+ * client relationship and the ledger posting stay Akshayam's, so it is not
+ * outside-books - the invoice already has gl_entries behind it - but the
+ * whole amount is not really Akshayam's own revenue either. Kept on its own
+ * sheet for the same reason OSB is: a hand-maintained exception, not a Zoho
+ * report shape.
+ */
+export interface ParsedRevenueTransferRow {
+  invoiceNumber: string;
+  /** The sheet's own due_date column - there is no separate invoice date. */
+  invoiceDate: string;
+  customerName: string;
+  salesperson: string | null;
+  amountBase: number;
+  /** "paid" -> collected; anything else -> still outstanding. Informational
+   *  only - the invoice's real receivable is already tracked through the
+   *  normal Invoice Details / AR Aging / Payments uploads. */
+  status: string | null;
+}
+
 export interface InvoiceParseResult {
   rows: ParsedInvoiceRow[];
   verticals: Set<string>;
@@ -168,9 +190,24 @@ export interface InvoiceParseResult {
    * An empty array means the sheet exists but is (now) empty on purpose.
    */
   osbRows: ParsedOsbRow[] | null;
+  /**
+   * Rows from a "Revenue trf to RBJV" sheet in the same workbook - null when
+   * there isn't one, same reasoning as osbRows above.
+   */
+  revenueTransferRows: ParsedRevenueTransferRow[] | null;
 }
 
 const OSB_SHEET_NAME = /^osb$/i;
+
+/**
+ * A fixed convention rather than a report shape, so matched loosely on the
+ * two words that matter instead of one exact spelling - "Revenue trf to
+ * RBJV", "Revenue transfer to RBJV" and "Rev Transfer - RBJV" all match.
+ */
+function isRevenueTransferSheetName(name: string): boolean {
+  const n = name.toLowerCase();
+  return n.includes("rbjv") && (n.includes("trf") || n.includes("transfer"));
+}
 
 /**
  * The workbook's "OSB" sheet, if it has one.
@@ -259,6 +296,75 @@ async function parseOsbSheet(workbook: ExcelJS.Workbook): Promise<{
   return { rows, verticals, warnings };
 }
 
+/**
+ * The workbook's "Revenue trf to RBJV" sheet, if it has one.
+ *
+ * Found by name rather than by shape, the same way parseOsbSheet is: it has
+ * no invoice_date column of its own (due_date doubles for both), so it would
+ * never satisfy the main table's required columns. No vertical is read from
+ * it - the sheet's own vertical column names the RBJV practice area doing
+ * the work, not an Akshayam vertical, and resolving it against Akshayam's
+ * own vertical list would either fail to match or invent a vertical that
+ * means nothing there. The deduction lands on the whole company instead.
+ */
+async function parseRevenueTransferSheet(workbook: ExcelJS.Workbook): Promise<{
+  rows: ParsedRevenueTransferRow[];
+  warnings: string[];
+} | null> {
+  let sheet: ExcelJS.Worksheet | undefined;
+  workbook.eachSheet((s) => {
+    if (!sheet && isRevenueTransferSheetName(s.name)) sheet = s;
+  });
+  if (!sheet) return null;
+
+  const table = findTable(sheet, [["due_date"], CUSTOMER_KEYS, INVOICE_NO_KEYS, ["status"]]);
+  if (!table) {
+    return {
+      rows: [],
+      warnings: [
+        `A "${sheet.name}" sheet was found but its columns didn't match what a revenue-transfer ` +
+          "row needs (due date, customer, invoice number, status) - the revenue transferred to " +
+          "RBJV was left as it was.",
+      ],
+    };
+  }
+
+  const rows: ParsedRevenueTransferRow[] = [];
+  const warnings: string[] = [];
+  let skipped = 0;
+
+  for (const row of table.rows) {
+    if (isRepeatedRow(row)) continue;
+    const invoiceDate = toDateISO(pick(row, "due_date"));
+    const customerName = toText(pick(row, ...CUSTOMER_KEYS));
+    const invoiceNumber = toText(pick(row, ...INVOICE_NO_KEYS));
+    const amountBase = toNumber(pick(row, "amount_without_tax", "sub_total", "amount"));
+
+    if (!invoiceDate || !customerName || !invoiceNumber || !amountBase) {
+      skipped++;
+      continue;
+    }
+
+    rows.push({
+      invoiceNumber,
+      invoiceDate,
+      customerName,
+      salesperson: toText(pick(row, ...SALESPERSON_KEYS)),
+      amountBase,
+      status: toText(pick(row, "status")),
+    });
+  }
+
+  if (skipped > 0) {
+    warnings.push(
+      `${skipped} row(s) on the "${sheet.name}" sheet were missing a due date, customer, ` +
+        "invoice number or amount and were skipped.",
+    );
+  }
+
+  return { rows, warnings };
+}
+
 export async function parseInvoices(input: Buffer | ArrayBuffer): Promise<InvoiceParseResult> {
   const table = await locate(
     input,
@@ -317,15 +423,20 @@ export async function parseInvoices(input: Buffer | ArrayBuffer): Promise<Invoic
     warnings.push("No reporting tag column found, so revenue cannot be split by vertical from this file.");
   }
 
-  // The same workbook's "OSB" sheet, when it has one - a second read rather
-  // than threading the first one through `locate`, which only ever hands
-  // back the table it found, not the workbook it read it from.
+  // The same workbook's "OSB" and "Revenue trf to RBJV" sheets, when it has
+  // them - a second (and third) read rather than threading the first one
+  // through `locate`, which only ever hands back the table it found, not the
+  // workbook it read it from.
   const osb = await parseOsbSheet(await readWorkbook(input));
   const osbRows = osb ? osb.rows : null;
   if (osb) {
     for (const v of osb.verticals) verticals.add(v);
     warnings.push(...osb.warnings);
   }
+
+  const revenueTransfer = await parseRevenueTransferSheet(await readWorkbook(input));
+  const revenueTransferRows = revenueTransfer ? revenueTransfer.rows : null;
+  if (revenueTransfer) warnings.push(...revenueTransfer.warnings);
 
   const dates = rows.map((r) => r.invoiceDate).sort();
   return {
@@ -336,6 +447,7 @@ export async function parseInvoices(input: Buffer | ArrayBuffer): Promise<Invoic
     warnings,
     detected: { sheetName: table.sheetName, headerRow: table.headerRow, columns: table.rawHeaders.filter(Boolean) },
     osbRows,
+    revenueTransferRows,
   };
 }
 

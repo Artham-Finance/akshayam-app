@@ -1,16 +1,23 @@
 import { query, queryOne } from "@/lib/db";
 import { verticalScope, type Entity } from "@/lib/entity";
-import { fyBounds, fyMonths } from "@/lib/period";
+import { fyBounds, fyLabel, fyMonths } from "@/lib/period";
 import {
+  applyPresentationalTax,
   assemble,
   composeBalanceSheet,
   emptyValues,
+  spliceTaxLine,
   type BsMovementRow,
   type BsOpeningRow,
   type GroupRow,
   type StatementLine,
   type StatementResult,
 } from "@/lib/reports/compose";
+import {
+  PRESENTATIONAL_TAX_LABEL,
+  PRESENTATIONAL_TAX_RATE,
+  taxedMembers,
+} from "@/lib/reports/presentational-tax";
 
 // The composition half lives in ./compose, which knows nothing about the
 // database; these are re-exported so callers keep one import.
@@ -83,7 +90,7 @@ export async function buildProfitAndLoss(opts: {
     amount: number;
   };
 
-  const [groups, rows, osbRows] = await Promise.all([
+  const [groups, rows, osbRows, revenueTransferRows] = await Promise.all([
     loadGroups(entity.id, "pnl"),
     query<FlatRow>(
       `select to_char(g.txn_date, 'YYYY-MM') as month_key,
@@ -134,9 +141,79 @@ export async function buildProfitAndLoss(opts: {
         group by 1, 2, 3, 4, 5`,
       [entity.memberIds, start, end, verticalId, entity.verticalIds],
     ),
+    /**
+     * Revenue transferred to RBJV, deducted from the ledger's own figure
+     * rather than posted into it.
+     *
+     * The mirror image of OSB revenue above: these invoices have real
+     * gl_entries behind them (they are genuine Akshayam invoices), but a
+     * portion of the value is not really Akshayam's own, so it comes off
+     * Revenue from Operations here rather than being left in it. Negated so
+     * it lands as a deduction, and joined to the same 'revenue' group_code
+     * Akshayam's own ledger revenue uses, so it sits under Revenue from
+     * Operations rather than beside it.
+     *
+     * Excluded entirely when consolidating: the client's payment is genuine
+     * third-party revenue for the group regardless of which company's team
+     * did the work, and there is nothing on RBJV's own books to offset a
+     * deduction here.
+     */
+    query<FlatRow>(
+      `select to_char(i.invoice_date, 'YYYY-MM') as month_key,
+              a.group_code,
+              a.id         as account_id,
+              a.name       as account_name,
+              a.sort_order as account_sort,
+              -sum(i.amount_base) as amount
+         from invoice_lines i
+         join accounts a on a.entity_id = i.entity_id and a.name = 'Revenue transferred to RBJV'
+        where i.entity_id = any($1::int[]) and i.is_revenue_transfer
+          and not $6::boolean
+          and i.invoice_date between $2 and $3
+          and ($4::int is null or i.vertical_id = $4)
+          ${verticalScope("$5", "i.vertical_id")}
+        group by 1, 2, 3, 4, 5`,
+      [entity.memberIds, start, end, verticalId, entity.verticalIds, entity.consolidates],
+    ),
   ]);
 
-  return assemble(months, groups, [...rows, ...osbRows], detail);
+  const result = assemble(months, groups, [...rows, ...osbRows, ...revenueTransferRows], detail);
+
+  // Presentational only, and only for the whole company - a single vertical's
+  // slice of Profit Before Tax is not a taxable base of its own.
+  if (verticalId === null) {
+    const rate = PRESENTATIONAL_TAX_RATE[entity.slug];
+    if (rate) {
+      applyPresentationalTax(result, groups, months, rate, `Income tax @ ${rate}%`);
+    } else if (entity.isGroup) {
+      // The group files no return of its own - each member does, at its own
+      // rate - so its tax line is the sum of its members' own, not one rate
+      // applied to the consolidated PBT.
+      const members = await taxedMembers(entity);
+      if (members.length > 0) {
+        const values = emptyValues(months);
+        const parts: string[] = [];
+        for (const member of members) {
+          const memberStatement = await buildProfitAndLoss({
+            entity: member,
+            fyStartYear,
+            window,
+            detail: false,
+          });
+          const memberTax = memberStatement.lines.find(
+            (l) => l.groupCode === "tax" && l.level === 0,
+          );
+          if (memberTax) {
+            for (const m of months) values[m.key] += memberTax.values[m.key] ?? 0;
+          }
+          parts.push(`${PRESENTATIONAL_TAX_LABEL[member.slug]} @ ${PRESENTATIONAL_TAX_RATE[member.slug]}%`);
+        }
+        spliceTaxLine(result, groups, months, values, `Income tax (${parts.join(" + ")})`);
+      }
+    }
+  }
+
+  return result;
 }
 
 /* ============================================================
@@ -263,17 +340,49 @@ export async function buildBalanceSheet(opts: {
     ),
   ]);
 
-  return composeBalanceSheet({
-    months,
-    groups,
-    opening,
-    movements,
-    pnlMovements,
-    interco,
-    openingNonBs,
-    consolidating,
-    detail,
-  });
+  const taxRate = PRESENTATIONAL_TAX_RATE[entity.slug];
+  const base = { months, groups, opening, movements, pnlMovements, interco, openingNonBs, consolidating, detail };
+
+  if (taxRate) {
+    return composeBalanceSheet({
+      ...base,
+      taxRatePercent: taxRate,
+      taxLineName: `Provision for Tax — ${fyLabel(fyStartYear)}`,
+    });
+  }
+
+  if (entity.isGroup) {
+    // Same reasoning as the P&L: no single rate applies to the consolidated
+    // position, so the provision is the sum of each member's own, read off
+    // their own standalone balance sheet at the same date.
+    const members = await taxedMembers(entity);
+    if (members.length > 0) {
+      const values = emptyValues(months);
+      const parts: string[] = [];
+      for (const member of members) {
+        const memberStatement = await buildBalanceSheet({
+          entity: member,
+          fyStartYear,
+          asOf: end,
+          detail: false,
+        });
+        const memberProvision = memberStatement.lines.find((l) => l.key === "provision_for_tax");
+        if (memberProvision) {
+          for (const m of months) values[m.key] += memberProvision.values[m.key] ?? 0;
+        }
+        parts.push(`${PRESENTATIONAL_TAX_LABEL[member.slug]} @ ${PRESENTATIONAL_TAX_RATE[member.slug]}%`);
+      }
+      return composeBalanceSheet({
+        ...base,
+        taxOverride: {
+          values,
+          label: `Provision for Tax (${parts.join(" + ")}) — ${fyLabel(fyStartYear)}`,
+        },
+      });
+    }
+  }
+
+  return composeBalanceSheet(base);
 }
 
 /* ============================================================

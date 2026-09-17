@@ -9,6 +9,11 @@ const sum = (values: Record<string, number>, months: FyMonth[]) =>
 /**
  * Budget against actual, down the statement.
  *
+ * Same Period / YTD shape as the Other-expenses and cost breakdown cards
+ * below it: the period columns read whatever the page's own picker is
+ * showing, the YTD columns read the year to date always, and variance and
+ * its percentage are struck on the YTD pair only.
+ *
  * A cost line holds a positive magnitude, so "variance" has to mean the same
  * thing on every row: **better or worse than budget**. Spending less than
  * budget is favourable and earning less is not, and a table that showed both
@@ -16,15 +21,22 @@ const sum = (values: Record<string, number>, months: FyMonth[]) =>
  */
 export function BvaStatement({
   lines,
-  months,
   periodMonths,
+  ytdMonths,
+  periodLabel,
+  ytdLabel,
 }: {
   lines: BvaLine[];
-  months: FyMonth[];
   periodMonths: FyMonth[];
+  ytdMonths: FyMonth[];
+  /** short label for the period columns, e.g. "This month" or "Jul 26" */
+  periodLabel: string;
+  /** short label for the YTD columns, e.g. "to 27 Aug 26" */
+  ytdLabel: string;
 }) {
   const head =
     "border-y border-line px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-faint";
+  const subhead = "mt-0.5 block text-[10px] font-normal normal-case tracking-normal text-ink-faint";
 
   return (
     <div className="overflow-x-auto">
@@ -37,22 +49,40 @@ export function BvaStatement({
             <th scope="col" className={clsx(head, "text-left")}>
               Particulars
             </th>
-            {["Annual Budget", "Period Budget", "Actual", "Variance", "% Achievement"].map((h) => (
-              <th key={h} scope="col" className={clsx(head, "text-right")}>
-                {h}
-              </th>
-            ))}
+            <th scope="col" className={clsx(head, "text-right")}>
+              Period budget
+              <span className={subhead}>{periodLabel}</span>
+            </th>
+            <th scope="col" className={clsx(head, "text-right")}>
+              Period actuals
+              <span className={subhead}>{periodLabel}</span>
+            </th>
+            <th scope="col" className={clsx(head, "text-right")}>
+              YTD budget
+              <span className={subhead}>{ytdLabel}</span>
+            </th>
+            <th scope="col" className={clsx(head, "text-right")}>
+              YTD actuals
+              <span className={subhead}>{ytdLabel}</span>
+            </th>
+            <th scope="col" className={clsx(head, "text-right")}>
+              Variance (YTD)
+            </th>
+            <th scope="col" className={clsx(head, "text-right")}>
+              % (YTD)
+            </th>
           </tr>
         </thead>
         <tbody>
           {lines.map((line) => {
-            const annual = sum(line.budget, months);
-            const budget = sum(line.budget, periodMonths);
-            const actual = sum(line.actual, periodMonths);
+            const periodBudget = sum(line.budget, periodMonths);
+            const periodActual = sum(line.actual, periodMonths);
+            const ytdBudget = sum(line.budget, ytdMonths);
+            const ytdActual = sum(line.actual, ytdMonths);
             // Costs are held positive, so under-spending is the favourable case.
-            const variance = line.sign === -1 ? budget - actual : actual - budget;
-            const achievement = budget === 0 ? null : (actual / budget) * 100;
-            const favourable = variance >= -0.5;
+            const ytdVariance = line.sign === -1 ? ytdBudget - ytdActual : ytdActual - ytdBudget;
+            const ytdPct = ytdBudget === 0 ? null : (ytdVariance / ytdBudget) * 100;
+            const favourable = ytdVariance >= -0.5;
 
             return (
               <tr
@@ -72,18 +102,26 @@ export function BvaStatement({
                   {line.sign === -1 && !line.isSubtotal ? `Less: ${line.name}` : line.name}
                 </th>
                 <td className="num border-b border-line px-4 py-2 text-right text-ink-muted">
-                  {money(annual)}
-                </td>
-                <td className="num border-b border-line px-4 py-2 text-right text-ink-muted">
-                  {money(budget)}
+                  {money(periodBudget)}
                 </td>
                 <td
                   className={clsx(
                     "num border-b border-line px-4 py-2 text-right font-medium",
-                    actual < -0.5 ? "num-negative text-negative" : "text-ink",
+                    periodActual < -0.5 ? "num-negative text-negative" : "text-ink",
                   )}
                 >
-                  {money(actual)}
+                  {money(periodActual)}
+                </td>
+                <td className="num border-b border-line px-4 py-2 text-right text-ink-muted">
+                  {money(ytdBudget)}
+                </td>
+                <td
+                  className={clsx(
+                    "num border-b border-line px-4 py-2 text-right font-medium",
+                    ytdActual < -0.5 ? "num-negative text-negative" : "text-ink",
+                  )}
+                >
+                  {money(ytdActual)}
                 </td>
                 <td
                   className={clsx(
@@ -91,19 +129,15 @@ export function BvaStatement({
                     favourable ? "text-positive" : "num-negative text-negative",
                   )}
                 >
-                  {money(variance)}
+                  {money(ytdVariance)}
                 </td>
                 <td
                   className={clsx(
                     "num border-b border-line px-4 py-2 text-right",
-                    achievement === null
-                      ? "text-ink-faint"
-                      : favourable
-                        ? "text-positive"
-                        : "text-caution",
+                    ytdPct === null ? "text-ink-faint" : favourable ? "text-positive" : "text-caution",
                   )}
                 >
-                  {achievement === null ? "—" : percent(achievement, 1)}
+                  {ytdPct === null ? "—" : percent(ytdPct, 1)}
                 </td>
               </tr>
             );

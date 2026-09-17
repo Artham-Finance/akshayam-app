@@ -96,6 +96,24 @@ export function composeBalanceSheet(input: {
   openingNonBs: { statement: string; amount: number }[];
   consolidating: boolean;
   detail: boolean;
+  /**
+   * A tax rate to apply where no tax entry exists in the ledger at all - the
+   * statement otherwise shows profit for the period gross, because there is
+   * nothing booked to net it against. Splits the provision out of reserves
+   * into a matching liability so the statement still ties: nothing moves in
+   * real cash, only how the same profit figure is presented.
+   */
+  taxRatePercent?: number;
+  taxLineName?: string;
+  /**
+   * A precomputed provision to use instead of taxRatePercent - for the
+   * consolidated group, whose two companies file at different rates, so
+   * there is no single rate to apply to the combined PBT. The caller sums
+   * each member's own provision_for_tax line (already point-in-time, month
+   * by month) and passes the total here. Takes priority over taxRatePercent
+   * when both are given, though no caller passes both.
+   */
+  taxOverride?: { values: Record<string, number>; label: string };
 }): StatementResult {
   const {
     months,
@@ -107,6 +125,9 @@ export function composeBalanceSheet(input: {
     openingNonBs,
     consolidating,
     detail,
+    taxRatePercent,
+    taxLineName,
+    taxOverride,
   } = input;
 
   const broughtForward = openingNonBs.reduce((sum, r) => sum + Number(r.amount), 0);
@@ -154,13 +175,24 @@ export function composeBalanceSheet(input: {
   }
 
   // Retained profit for the year to date, expressed the balance-sheet way
-  // (credit balance -> negative under debit-credit).
+  // (credit balance -> negative under debit-credit). Where a presentational
+  // rate or an override is given, profitLine carries the after-tax figure and
+  // taxProvision carries what was taken out of it - the two always move
+  // together, so equity plus liabilities is unchanged and the statement
+  // still ties regardless of how the tax figure itself was arrived at.
   const profitLine: Record<string, number> = emptyValues(months);
+  const taxProvision: Record<string, number> = emptyValues(months);
   let cumulativeProfit = 0;
   const profitByMonth = new Map(pnlMovements.map((r) => [r.month_key, r.amount]));
   for (const m of months) {
     cumulativeProfit += profitByMonth.get(m.key) ?? 0;
-    profitLine[m.key] = -cumulativeProfit;
+    const provision = taxOverride
+      ? (taxOverride.values[m.key] ?? 0)
+      : taxRatePercent && cumulativeProfit > 0
+        ? -(cumulativeProfit * (taxRatePercent / 100))
+        : 0;
+    taxProvision[m.key] = provision;
+    profitLine[m.key] = -cumulativeProfit - provision;
   }
 
   const rows = [...accounts.entries()].flatMap(([id, entry]) =>
@@ -305,6 +337,42 @@ export function composeBalanceSheet(input: {
     });
 
     result.lines.splice(reservesIndex + 1, 0, ...extra);
+    recomputeSubtotals(result.lines, groups, months);
+  }
+
+  if ((taxRatePercent || taxOverride) && months.some((m) => Math.abs(taxProvision[m.key]) > 0.005)) {
+    const target = result.lines.findIndex((l) => l.groupCode === "other_liab" && l.level === 0);
+    const host =
+      target >= 0
+        ? result.lines[target]
+        : ({
+            key: "other_liab",
+            name: "Other Liabilities & Provisions",
+            level: 0,
+            isSubtotal: false,
+            sign: -1,
+            groupCode: "other_liab",
+            accountId: null,
+            values: emptyValues(months),
+          } satisfies StatementLine);
+
+    if (target < 0) {
+      const total = result.lines.findIndex((l) => l.groupCode === "total_eq_liab");
+      result.lines.splice(total >= 0 ? total : result.lines.length, 0, host);
+    }
+    for (const m of months) host.values[m.key] += taxProvision[m.key];
+
+    const at = result.lines.indexOf(host);
+    result.lines.splice(at + 1, 0, {
+      key: "provision_for_tax",
+      name: taxOverride?.label ?? taxLineName ?? "Provision for Tax",
+      level: 1,
+      isSubtotal: false,
+      sign: -1,
+      groupCode: "other_liab",
+      accountId: null,
+      values: taxProvision,
+    });
     recomputeSubtotals(result.lines, groups, months);
   }
 
@@ -500,4 +568,65 @@ export function recomputeSubtotals(lines: StatementLine[], groups: GroupRow[], m
       for (const m of months) target.values[m.key] += source.values[m.key];
     }
   }
+}
+
+/**
+ * Splice an already-computed tax line onto a P&L between Profit Before Tax
+ * and Profit After Tax, cascading into PAT and Retained Profit via
+ * recomputeSubtotals() exactly as a real entry would.
+ */
+export function spliceTaxLine(
+  result: StatementResult,
+  groups: GroupRow[],
+  months: FyMonth[],
+  values: Record<string, number>,
+  lineName: string,
+): void {
+  const patIndex = result.lines.findIndex((l) => l.groupCode === "pat" && l.level === 0);
+  if (patIndex < 0) return;
+
+  result.lines.splice(patIndex, 0, {
+    key: "tax",
+    name: lineName,
+    level: 0,
+    isSubtotal: false,
+    sign: -1,
+    groupCode: "tax",
+    accountId: null,
+    values,
+  });
+
+  recomputeSubtotals(result.lines, groups, months);
+}
+
+/**
+ * A tax line with nothing behind it in the ledger.
+ *
+ * Neither company passes a tax entry through the books, so Profit Before Tax
+ * and Profit After Tax are otherwise identical. This layers "@ rate%" onto
+ * Profit Before Tax between the two - months first, so a quarter or year
+ * column (summed from months in the browser) comes out the same as applying
+ * the rate to the period's total PBT directly.
+ */
+export function applyPresentationalTax(
+  result: StatementResult,
+  groups: GroupRow[],
+  months: FyMonth[],
+  ratePercent: number,
+  lineName: string,
+): void {
+  const pbt = result.lines.find((l) => l.groupCode === "pbt" && l.level === 0);
+  if (!pbt) return;
+
+  const values = emptyValues(months);
+  let cumulativePbt = 0;
+  let cumulativeTax = 0;
+  for (const m of months) {
+    cumulativePbt += pbt.values[m.key] ?? 0;
+    const taxToDate = cumulativePbt > 0 ? cumulativePbt * (ratePercent / 100) : 0;
+    values[m.key] = -(taxToDate - cumulativeTax);
+    cumulativeTax = taxToDate;
+  }
+
+  spliceTaxLine(result, groups, months, values, lineName);
 }

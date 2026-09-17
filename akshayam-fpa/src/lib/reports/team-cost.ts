@@ -1,6 +1,6 @@
 import { query } from "@/lib/db";
 import { getVerticalsInScope, type Entity } from "@/lib/entity";
-import type { FyMonth } from "@/lib/period";
+import { fyBounds, type FyMonth } from "@/lib/period";
 
 /**
  * Team cost, broken out by role, with a vertical picker.
@@ -157,15 +157,19 @@ export interface TeamCostRoleLine {
   hint?: string;
   /** the whole-year figure, hard-coded */
   annualBudget: number;
-  /** annualBudget pro-rated to the months being compared on */
+  /** annualBudget pro-rated to the page's own period */
   periodBudget: number;
-  /** direct-cost postings for this vertical x role over the period, from the GL */
-  actual: number;
-  /** periodBudget less actual - a cost under budget is favourable */
-  variance: number;
-  /** variance as a percentage of the period budget, null when there is none */
-  variancePct: number | null;
-  /** the ledger postings that make up `actual`, newest first */
+  /** direct-cost postings for this vertical x role in that period, from the GL */
+  periodActual: number;
+  /** annualBudget pro-rated to the year to date */
+  ytdBudget: number;
+  /** direct-cost postings for this vertical x role, year to date */
+  ytdActual: number;
+  /** ytdBudget less ytdActual - a cost under budget is favourable */
+  ytdVariance: number;
+  /** ytdVariance as a percentage of ytdBudget, null when there is none */
+  ytdVariancePct: number | null;
+  /** the ledger postings behind periodActual, newest first */
   entries: TeamCostEntry[];
 }
 
@@ -177,9 +181,11 @@ export interface TeamCostScope {
   roles: TeamCostRoleLine[];
   annualBudget: number;
   periodBudget: number;
-  actual: number;
-  variance: number;
-  variancePct: number | null;
+  periodActual: number;
+  ytdBudget: number;
+  ytdActual: number;
+  ytdVariance: number;
+  ytdVariancePct: number | null;
 }
 
 export interface TeamCostResult {
@@ -210,16 +216,20 @@ const emptyScope = (
     hint,
     annualBudget: 0,
     periodBudget: 0,
-    actual: 0,
-    variance: 0,
-    variancePct: null,
+    periodActual: 0,
+    ytdBudget: 0,
+    ytdActual: 0,
+    ytdVariance: 0,
+    ytdVariancePct: null,
     entries: [],
   })),
   annualBudget: 0,
   periodBudget: 0,
-  actual: 0,
-  variance: 0,
-  variancePct: null,
+  periodActual: 0,
+  ytdBudget: 0,
+  ytdActual: 0,
+  ytdVariance: 0,
+  ytdVariancePct: null,
 });
 
 function rollUp(
@@ -230,8 +240,10 @@ function rollUp(
 ): TeamCostScope {
   const annualBudget = roles.reduce((s, r) => s + r.annualBudget, 0);
   const periodBudget = roles.reduce((s, r) => s + r.periodBudget, 0);
-  const actual = roles.reduce((s, r) => s + r.actual, 0);
-  const variance = periodBudget - actual;
+  const periodActual = roles.reduce((s, r) => s + r.periodActual, 0);
+  const ytdBudget = roles.reduce((s, r) => s + r.ytdBudget, 0);
+  const ytdActual = roles.reduce((s, r) => s + r.ytdActual, 0);
+  const ytdVariance = ytdBudget - ytdActual;
   return {
     verticalId,
     code,
@@ -239,36 +251,44 @@ function rollUp(
     roles,
     annualBudget,
     periodBudget,
-    actual,
-    variance,
-    variancePct: pct(variance, periodBudget),
+    periodActual,
+    ytdBudget,
+    ytdActual,
+    ytdVariance,
+    ytdVariancePct: pct(ytdVariance, ytdBudget),
   };
 }
 
 export async function buildTeamCost(opts: {
   entity: Entity;
+  fyStartYear: number;
   /** the months being compared on, from the page's period picker */
   periodMonths: FyMonth[];
+  /** the months from the start of the year to the ledger's latest complete month */
+  ytdMonths: FyMonth[];
   /**
-   * The statement's own Team cost budget - for the period, and for the whole
-   * year. The period column here is pro-rated on the same curve the statement
-   * uses, so the card's total ties to the "Team cost" line above it rather
-   * than assuming an even twelfth a month.
+   * The statement's own Team cost budget - for the period, the year to date,
+   * and the whole year. Both windows here are pro-rated on the same curve the
+   * statement uses, so the card's totals tie to the "Team cost" line above it
+   * rather than assuming an even twelfth a month.
    */
-  statementBudget: { period: number; annual: number };
+  statementBudget: { period: number; ytd: number; annual: number };
 }): Promise<TeamCostResult> {
-  const { entity, periodMonths, statementBudget } = opts;
-  const start = periodMonths[0].start;
-  const end = periodMonths[periodMonths.length - 1].end;
+  const { entity, fyStartYear, periodMonths, ytdMonths, statementBudget } = opts;
   const monthsInPeriod = periodMonths.length;
-  // The fraction of the year's budget that falls in this period, taken from the
-  // statement so the two agree. Falls back to an even spread if the statement
-  // carries no team-cost budget.
-  const fraction =
+  // The fraction of the year's budget that falls in each window, taken from
+  // the statement so the two agree. Falls back to an even spread if the
+  // statement carries no team-cost budget.
+  const periodFraction =
     statementBudget.annual > 0
       ? statementBudget.period / statementBudget.annual
       : monthsInPeriod / 12;
-  const prorate = (annual: number) => annual * fraction;
+  const ytdFraction =
+    statementBudget.annual > 0
+      ? statementBudget.ytd / statementBudget.annual
+      : ytdMonths.length / 12;
+  const prorateP = (annual: number) => annual * periodFraction;
+  const prorateY = (annual: number) => annual * ytdFraction;
 
   // In scope, not just the picker list - so the group sees both companies'
   // verticals and a slice (RAJA) sees the two it is cut from.
@@ -282,14 +302,19 @@ export async function buildTeamCost(opts: {
     };
   }
 
-  // Actuals from the ledger: every direct_cost posting for the period, kept as
-  // its own row so a line can be drilled into. credit - debit puts a cost
-  // negative, so it is flipped to a positive magnitude - the same convention
-  // the P&L statement uses.
+  const { start: fyStart, end: fyEnd } = fyBounds(fyStartYear, entity.fy_start_month);
+  const periodKeys = new Set(periodMonths.map((m) => m.key));
+  const ytdKeys = new Set(ytdMonths.map((m) => m.key));
+
+  // Actuals from the ledger: every direct_cost posting for the whole year,
+  // kept as its own row so a line can be drilled into and bucketed by month
+  // for the two windows. credit - debit puts a cost negative, so it is
+  // flipped to a positive magnitude - the same convention the P&L uses.
   const entryRows = await query<{
     vertical_id: number | null;
     vertical_code: string | null;
     account_name: string;
+    month_key: string;
     txn_date: string;
     description: string | null;
     reference: string | null;
@@ -299,6 +324,7 @@ export async function buildTeamCost(opts: {
     `select g.vertical_id,
             v.code as vertical_code,
             a.name as account_name,
+            to_char(g.txn_date, 'YYYY-MM') as month_key,
             to_char(g.txn_date, 'YYYY-MM-DD') as txn_date,
             nullif(btrim(g.description), '') as description,
             nullif(btrim(g.reference), '')  as reference,
@@ -313,18 +339,24 @@ export async function buildTeamCost(opts: {
         and not ($4::boolean and a.is_intercompany)
         and ($5::int[] is null or g.vertical_id = any($5::int[]))
       order by g.txn_date desc, g.id desc`,
-    [entity.memberIds, start, end, entity.consolidates, entity.verticalIds],
+    [entity.memberIds, fyStart, fyEnd, entity.consolidates, entity.verticalIds],
   );
 
   const usualAccounts = new Map(TEAM_ROLES.map((r) => [r.key, r.glAccounts]));
-  const actualBy = new Map<string, number>();
+  const periodActualBy = new Map<string, number>();
+  const ytdActualBy = new Map<string, number>();
   const entriesBy = new Map<string, TeamCostEntry[]>();
   for (const r of entryRows) {
     if (r.vertical_id == null) continue;
     const role = ACCOUNT_ROLE[r.account_name] ?? FALLBACK_ROLE;
     const key = `${r.vertical_id}|${role}`;
     const amount = Number(r.amount);
-    actualBy.set(key, (actualBy.get(key) ?? 0) + amount);
+    const inPeriod = periodKeys.has(r.month_key);
+    if (inPeriod) periodActualBy.set(key, (periodActualBy.get(key) ?? 0) + amount);
+    if (ytdKeys.has(r.month_key)) ytdActualBy.set(key, (ytdActualBy.get(key) ?? 0) + amount);
+    // Only the period's own postings are ever shown behind a drill-down,
+    // regardless of how the YTD columns read.
+    if (!inPeriod) continue;
     const list = entriesBy.get(key) ?? [];
     list.push({
       date: r.txn_date,
@@ -338,29 +370,35 @@ export async function buildTeamCost(opts: {
   }
 
   // A vertical earns a block if it carries a budget or has a ledger actual in
-  // the period - so the whole-company total always ties to the statement.
+  // either window - so the whole-company total always ties to the statement.
   const shown = verticals.filter(
     (v) =>
       TEAM_COST_ANNUAL_BUDGET[v.code] ||
-      TEAM_ROLES.some(({ key }) => actualBy.has(`${v.id}|${key}`)),
+      TEAM_ROLES.some(
+        ({ key }) => periodActualBy.has(`${v.id}|${key}`) || ytdActualBy.has(`${v.id}|${key}`),
+      ),
   );
 
   const verticalScopes: TeamCostScope[] = shown.map((v) => {
     const table = TEAM_COST_ANNUAL_BUDGET[v.code] ?? {};
     const roles: TeamCostRoleLine[] = TEAM_ROLES.map(({ key, label, hint, budgetKeys }) => {
       const annualBudget = budgetKeys.reduce((s, bk) => s + (table[bk] ?? 0), 0);
-      const periodBudget = prorate(annualBudget);
-      const actual = actualBy.get(`${v.id}|${key}`) ?? 0;
-      const variance = periodBudget - actual;
+      const periodBudget = prorateP(annualBudget);
+      const ytdBudget = prorateY(annualBudget);
+      const periodActual = periodActualBy.get(`${v.id}|${key}`) ?? 0;
+      const ytdActual = ytdActualBy.get(`${v.id}|${key}`) ?? 0;
+      const ytdVariance = ytdBudget - ytdActual;
       return {
         role: key,
         label,
         hint,
         annualBudget,
         periodBudget,
-        actual,
-        variance,
-        variancePct: pct(variance, periodBudget),
+        periodActual,
+        ytdBudget,
+        ytdActual,
+        ytdVariance,
+        ytdVariancePct: pct(ytdVariance, ytdBudget),
         entries: entriesBy.get(`${v.id}|${key}`) ?? [],
       };
     });
@@ -372,8 +410,10 @@ export async function buildTeamCost(opts: {
   const companyRoles: TeamCostRoleLine[] = TEAM_ROLES.map(({ key, label, hint }, i) => {
     const annualBudget = verticalScopes.reduce((s, sc) => s + sc.roles[i].annualBudget, 0);
     const periodBudget = verticalScopes.reduce((s, sc) => s + sc.roles[i].periodBudget, 0);
-    const actual = verticalScopes.reduce((s, sc) => s + sc.roles[i].actual, 0);
-    const variance = periodBudget - actual;
+    const periodActual = verticalScopes.reduce((s, sc) => s + sc.roles[i].periodActual, 0);
+    const ytdBudget = verticalScopes.reduce((s, sc) => s + sc.roles[i].ytdBudget, 0);
+    const ytdActual = verticalScopes.reduce((s, sc) => s + sc.roles[i].ytdActual, 0);
+    const ytdVariance = ytdBudget - ytdActual;
     const entries = verticalScopes
       .flatMap((sc) => sc.roles[i].entries)
       .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
@@ -383,9 +423,11 @@ export async function buildTeamCost(opts: {
       hint,
       annualBudget,
       periodBudget,
-      actual,
-      variance,
-      variancePct: pct(variance, periodBudget),
+      periodActual,
+      ytdBudget,
+      ytdActual,
+      ytdVariance,
+      ytdVariancePct: pct(ytdVariance, ytdBudget),
       entries,
     };
   });

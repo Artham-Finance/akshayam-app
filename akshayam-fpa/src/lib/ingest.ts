@@ -10,6 +10,7 @@ import type {
   CreditNoteParseResult,
   InvoiceParseResult,
   ParsedOsbRow,
+  ParsedRevenueTransferRow,
   PaymentParseResult,
 } from "@/lib/parse/sales";
 import type { BudgetParseResult } from "@/lib/parse/budget";
@@ -462,6 +463,10 @@ export async function commitInvoices(
       await commitOsb(client, entityId, uploadId, parsed.osbRows, verticalIds);
     }
 
+    if (parsed.revenueTransferRows) {
+      await commitRevenueTransfer(client, entityId, uploadId, parsed.revenueTransferRows);
+    }
+
     await projectRevenueFromLedger(client, entityId);
     return { uploadId, rowsInserted, newAccounts: [], newVerticals, needsReview: [] };
   });
@@ -553,6 +558,48 @@ export async function commitOsb(
       ]),
     );
   }
+}
+
+/**
+ * Revenue Akshayam has passed on to RBJV, from the "Revenue trf to RBJV"
+ * sheet of an Invoice Details upload.
+ *
+ * Replaced wholesale on every upload that carries the sheet, entity-wide -
+ * same reasoning as commitOsb above: this is a hand-maintained exception,
+ * not a period export, so the sheet itself says which invoices carry a
+ * transfer right now.
+ *
+ * Unlike commitOsb, nothing is written to payments or ar_open_items: these
+ * are real Akshayam invoices, already carried by the normal Invoice Details
+ * / AR Aging / Payments uploads, so a second receivable or collection record
+ * here would double it. The status column is kept on the row for reference
+ * only.
+ */
+export async function commitRevenueTransfer(
+  client: PoolClient,
+  entityId: number,
+  uploadId: number,
+  rows: ParsedRevenueTransferRow[],
+): Promise<void> {
+  await client.query(
+    "delete from invoice_lines where entity_id = $1 and is_revenue_transfer",
+    [entityId],
+  );
+
+  await bulkInsert(
+    client,
+    "invoice_lines",
+    [
+      "entity_id", "upload_id", "invoice_number", "invoice_date", "customer_name",
+      "salesperson", "item_name", "currency", "exchange_rate", "amount_base",
+      "total_base", "status", "is_revenue_transfer",
+    ],
+    rows.map((row) => [
+      entityId, uploadId, row.invoiceNumber, row.invoiceDate, row.customerName,
+      row.salesperson, "Revenue transferred to RBJV", "INR", 1, row.amountBase,
+      row.amountBase, row.status, true,
+    ]),
+  );
 }
 
 export async function commitPayments(

@@ -24,9 +24,13 @@ import type {
 export function TeamCostTable({
   result,
   periodLabel,
+  ytdLabel,
 }: {
   result: TeamCostResult;
+  /** short label for the period columns, e.g. "This month" or "Jul 26" */
   periodLabel: string;
+  /** short label for the YTD columns, e.g. "to 27 Aug 26" */
+  ytdLabel: string;
 }) {
   const [scopeCode, setScopeCode] = useState("ALL");
   const [open, setOpen] = useState<string | null>(null);
@@ -39,6 +43,7 @@ export function TeamCostTable({
   const isCompany = scope.verticalId === null;
   const head =
     "border-y border-line px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-faint";
+  const subhead = "mt-0.5 block text-[10px] font-normal normal-case tracking-normal text-ink-faint";
 
   return (
     <div className="overflow-x-auto">
@@ -75,19 +80,26 @@ export function TeamCostTable({
               Particulars
             </th>
             <th scope="col" className={clsx(head, "text-right")}>
-              Annual budget
-            </th>
-            <th scope="col" className={clsx(head, "text-right")}>
               Period budget
+              <span className={subhead}>{periodLabel}</span>
             </th>
             <th scope="col" className={clsx(head, "text-right")}>
-              Actuals
+              Period actuals
+              <span className={subhead}>{periodLabel}</span>
             </th>
             <th scope="col" className={clsx(head, "text-right")}>
-              Variance
+              YTD budget
+              <span className={subhead}>{ytdLabel}</span>
             </th>
             <th scope="col" className={clsx(head, "text-right")}>
-              % variance
+              YTD actuals
+              <span className={subhead}>{ytdLabel}</span>
+            </th>
+            <th scope="col" className={clsx(head, "text-right")}>
+              Variance (YTD)
+            </th>
+            <th scope="col" className={clsx(head, "text-right")}>
+              % (YTD)
             </th>
           </tr>
         </thead>
@@ -107,34 +119,37 @@ export function TeamCostTable({
         <tfoot>
           <tr className="bg-surface-sunk font-semibold">
             <th scope="row" className="border-y border-line-strong px-3 py-2 text-left">
-              Team cost — {scope.name} · {periodLabel}
+              Team cost — {scope.name}
             </th>
-            <td className="num border-y border-line-strong px-3 py-2 text-right">
-              {money(scope.annualBudget)}
-            </td>
             <td className="num border-y border-line-strong px-3 py-2 text-right">
               {money(scope.periodBudget)}
             </td>
             <td className="num border-y border-line-strong px-3 py-2 text-right">
-              {money(scope.actual)}
+              {money(scope.periodActual)}
+            </td>
+            <td className="num border-y border-line-strong px-3 py-2 text-right">
+              {money(scope.ytdBudget)}
+            </td>
+            <td className="num border-y border-line-strong px-3 py-2 text-right">
+              {money(scope.ytdActual)}
             </td>
             <td
               className={clsx(
                 "num border-y border-line-strong px-3 py-2 text-right",
-                scope.variance < 0 ? "text-negative" : "text-positive",
+                scope.ytdVariance < 0 ? "text-negative" : "text-positive",
               )}
             >
-              {moneySigned(scope.variance)}
+              {moneySigned(scope.ytdVariance)}
             </td>
             <td
               className={clsx(
                 "num border-y border-line-strong px-3 py-2 text-right",
-                scope.variancePct !== null && scope.variancePct < 0
+                scope.ytdVariancePct !== null && scope.ytdVariancePct < 0
                   ? "text-negative"
                   : "text-positive",
               )}
             >
-              {scope.variancePct === null ? "—" : percent(scope.variancePct)}
+              {scope.ytdVariancePct === null ? "—" : percent(scope.ytdVariancePct)}
             </td>
           </tr>
         </tfoot>
@@ -195,38 +210,41 @@ function RoleRow({
             </span>
           </button>
         </th>
-        <td className={clsx(cell, "num text-right text-ink")}>{money(line.annualBudget)}</td>
         <td className={clsx(cell, "num text-right text-ink-muted")}>
           {money(line.periodBudget)}
         </td>
         <td className={clsx(cell, "num text-right text-ink")}>
-          {line.actual ? money(line.actual) : "—"}
+          {line.periodActual ? money(line.periodActual) : "—"}
+        </td>
+        <td className={clsx(cell, "num text-right text-ink-muted")}>{money(line.ytdBudget)}</td>
+        <td className={clsx(cell, "num text-right text-ink")}>
+          {line.ytdActual ? money(line.ytdActual) : "—"}
         </td>
         <td
           className={clsx(
             cell,
             "num text-right",
-            line.variance < 0 ? "text-negative" : "text-ink-muted",
+            line.ytdVariance < 0 ? "text-negative" : "text-ink-muted",
           )}
         >
-          {moneySigned(line.variance)}
+          {moneySigned(line.ytdVariance)}
         </td>
         <td
           className={clsx(
             cell,
             "num text-right",
-            line.variancePct !== null && line.variancePct < 0
+            line.ytdVariancePct !== null && line.ytdVariancePct < 0
               ? "text-negative"
               : "text-ink-muted",
           )}
         >
-          {line.variancePct === null ? "—" : percent(line.variancePct)}
+          {line.ytdVariancePct === null ? "—" : percent(line.ytdVariancePct)}
         </td>
       </tr>
 
       {open && canOpen && (
         <tr>
-          <td colSpan={6} className="border-b border-line bg-surface-sunk/30 px-3 py-3 sm:px-6">
+          <td colSpan={7} className="border-b border-line bg-surface-sunk/30 px-3 py-3 sm:px-6">
             <DrillTable line={line} showVertical={showVertical} />
           </td>
         </tr>
@@ -283,7 +301,7 @@ function DrillTable({
             {line.entries.length} posting{line.entries.length === 1 ? "" : "s"}
           </td>
           <td className={clsx(cell, "num border-t-line-strong text-right")}>
-            {money(line.actual)}
+            {money(line.periodActual)}
           </td>
         </tr>
       </tfoot>

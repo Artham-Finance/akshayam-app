@@ -1,5 +1,6 @@
 import { query, queryOne } from "@/lib/db";
 import { verticalScope, type Entity } from "@/lib/entity";
+import { fyMonths, quarterLabel as quarterLabelOf, type QuarterNo } from "@/lib/period";
 
 /**
  * TDS receivable reconciliation: the books against Form 26AS.
@@ -20,6 +21,16 @@ import { verticalScope, type Entity } from "@/lib/entity";
  * TDS lines carry the invoice number in txn_number, which joins to the invoice
  * register and brings the customer and the vertical with it. The ledger's own
  * description is the fallback for the few that do not join.
+ *
+ * Struck one financial-year quarter at a time, never blended. Form 26AS is
+ * downloaded from the income tax portal once a quarter, so the two sides only
+ * ever mean the same window when the window is a quarter - a range spanning
+ * two would compare a whole 26AS filing against a partial one. The books side
+ * is read for the quarter regardless of whether that quarter's 26AS has been
+ * uploaded yet: a quarter with nothing in tds_entries still shows its books
+ * TDS, every customer falling into "in books, not in Form 26AS" until the
+ * statement arrives - which is the fact worth showing, not something to hide
+ * behind an empty card.
  */
 
 /**
@@ -142,7 +153,11 @@ export interface TdsUnmatchedDeductor {
 }
 
 export interface TdsReco {
-  period: { start: string; end: string } | null;
+  quarter: QuarterNo;
+  quarterLabel: string;
+  period: { start: string; end: string };
+  /** whether Form 26AS has been uploaded to cover this quarter at all */
+  has26as: boolean;
   updatedTill: string | null;
   totals: { books: number; form26as: number; difference: number };
   byCustomer: TdsRecoRow[];
@@ -160,44 +175,63 @@ export interface TdsReco {
   unallocated: TdsRecoRow[];
   /** books-side TDS that could not be tied to a customer name at all */
   booksUnattributed: number;
+  /**
+   * The invoice and date behind every "in books, not in Form 26AS" customer,
+   * one row per invoice rather than per customer - a customer can carry more
+   * than one. Across every vertical; narrowed only by the vertical filter the
+   * rest of the card is narrowed by.
+   */
+  booksOnlyInvoices: TdsBooksOnlyInvoiceRow[];
+  /** true once there is anything at all to show for the quarter - books or 26AS */
   hasData: boolean;
+}
+
+export interface TdsBooksOnlyInvoiceRow {
+  customer: string;
+  verticalId: number | null;
+  verticalCode: string | null;
+  invoiceNumber: string | null;
+  invoiceDate: string | null;
+  amount: number;
 }
 
 interface Scope {
   entity: Entity;
+  fyStartYear: number;
+  quarter: QuarterNo;
   verticalId: number | null;
   customer: string | null;
 }
 
-/** The span the loaded statements cover; the reconciliation is only meaningful over it. */
-export async function tdsPeriod(entity: Entity) {
-  return queryOne<{ start: string; end: string; updated_till: string | null }>(
-    `select min(transaction_date)::text as start,
-            max(transaction_date)::text as end,
-            max(updated_till)::text     as updated_till
-       from tds_entries
-      where entity_id = any($1::int[]) and transaction_date is not null`,
-    [entity.memberIds],
-  );
+/** The calendar dates one financial-year quarter covers, for this entity's FY start month. */
+export function tdsQuarterWindow(
+  entity: Pick<Entity, "fy_start_month">,
+  fyStartYear: number,
+  quarter: QuarterNo,
+): { start: string; end: string } {
+  const months = fyMonths(fyStartYear, entity.fy_start_month).filter((m) => m.quarter === quarter);
+  return { start: months[0].start, end: months[months.length - 1].end };
 }
 
-export async function buildTdsReco({ entity, verticalId, customer }: Scope): Promise<TdsReco> {
-  const period = await tdsPeriod(entity);
-  if (!period?.start) {
-    return {
-      period: null,
-      updatedTill: null,
-      totals: { books: 0, form26as: 0, difference: 0 },
-      byCustomer: [],
-      byVertical: [],
-      segments: [],
-      unallocated: [],
-      ledgers: [],
-      unmatchedDeductors: [],
-      booksUnattributed: 0,
-      hasData: false,
-    };
-  }
+export async function buildTdsReco({
+  entity,
+  fyStartYear,
+  quarter,
+  verticalId,
+  customer,
+}: Scope): Promise<TdsReco> {
+  const period = tdsQuarterWindow(entity, fyStartYear, quarter);
+  const label = quarterLabelOf(quarter, fyMonths(fyStartYear, entity.fy_start_month));
+
+  // Whether Form 26AS has been uploaded to cover this quarter at all - the
+  // fact the rest of the card, and the page above it, reads off.
+  const coverage = await queryOne<{ rows: number; updated_till: string | null }>(
+    `select count(*)::int as rows, max(updated_till)::text as updated_till
+       from tds_entries
+      where entity_id = any($1::int[]) and transaction_date between $2 and $3`,
+    [entity.memberIds, period.start, period.end],
+  );
+  const has26as = (coverage?.rows ?? 0) > 0;
 
   const args = [entity.memberIds, period.start, period.end, verticalId, entity.verticalIds, customer];
 
@@ -371,6 +405,72 @@ export async function buildTdsReco({ entity, verticalId, customer }: Scope): Pro
   });
 
   /*
+    Invoice and date behind "In books, not in Form 26AS" - the segment with
+    the most names to chase, and the one a reader always ends up asking "which
+    invoice was this" about. One row per invoice rather than per customer,
+    since a customer can carry more than one; fetched only for that segment's
+    own customers, across every vertical, narrowed only by the picker's own
+    vertical filter.
+  */
+  const booksOnlyCustomers = byCustomer
+    .filter((r) => r.segment === "books_only")
+    .map((r) => r.label);
+
+  const booksOnlyRows =
+    booksOnlyCustomers.length === 0
+      ? []
+      : await query<{
+          customer: string | null;
+          vertical_id: number | null;
+          vertical_code: string | null;
+          invoice_number: string | null;
+          invoice_date: string | null;
+          amount: number;
+        }>(
+          `select ${BOOKS_CUSTOMER} as customer,
+                  coalesce(inv.vertical_id, g.vertical_id) as vertical_id,
+                  v.code as vertical_code,
+                  g.txn_number as invoice_number,
+                  inv.invoice_date::text as invoice_date,
+                  sum(g.debit - g.credit)::numeric as amount
+             from gl_entries g
+             join accounts a on a.id = g.account_id
+             left join lateral (
+               select i.customer_name, i.vertical_id, i.invoice_date
+                 from invoice_lines i
+                where i.entity_id = g.entity_id and i.invoice_number = g.txn_number
+                limit 1
+             ) inv on true
+             left join verticals v on v.id = coalesce(inv.vertical_id, g.vertical_id)
+            where g.entity_id = any($1::int[])
+              and g.txn_date between $2 and $3
+              and ${TDS_ACCOUNTS}
+              and ${BOOKS_CUSTOMER} = any($4::text[])
+              and ($5::int is null or coalesce(inv.vertical_id, g.vertical_id) = $5)
+              ${verticalScope("$6", "coalesce(inv.vertical_id, g.vertical_id)")}
+            group by 1, 2, 3, g.txn_number, inv.invoice_date
+           having abs(sum(g.debit - g.credit)) > 0.005
+           order by 1, inv.invoice_date`,
+          [
+            entity.memberIds,
+            period.start,
+            period.end,
+            booksOnlyCustomers,
+            verticalId,
+            entity.verticalIds,
+          ],
+        );
+
+  const booksOnlyInvoices: TdsBooksOnlyInvoiceRow[] = booksOnlyRows.map((r) => ({
+    customer: r.customer ?? "Not attributed to a customer",
+    verticalId: r.vertical_id,
+    verticalCode: r.vertical_code,
+    invoiceNumber: r.invoice_number,
+    invoiceDate: r.invoice_date,
+    amount: Number(r.amount),
+  }));
+
+  /*
     Which ledgers the books figure is drawn from. Stated on the card because
     "TDS per books" is a number assembled from several accounts, and a reader
     checking it against Zoho needs to know which ones were swept in.
@@ -423,8 +523,11 @@ export async function buildTdsReco({ entity, verticalId, customer }: Scope): Pro
   );
 
   return {
+    quarter,
+    quarterLabel: label,
     period: { start: period.start, end: period.end },
-    updatedTill: period.updated_till,
+    has26as,
+    updatedTill: coverage?.updated_till ?? null,
     totals,
     byCustomer,
     segments,
@@ -448,7 +551,8 @@ export async function buildTdsReco({ entity, verticalId, customer }: Scope): Pro
     booksUnattributed: byCustomer
       .filter((r) => r.label === "Not attributed to a customer")
       .reduce((s, r) => s + r.books, 0),
-    hasData: true,
+    booksOnlyInvoices,
+    hasData: byCustomer.length > 0,
   };
 }
 
@@ -464,15 +568,16 @@ export interface TdsDrillResult {
   total: number;
 }
 
-/** The individual lines behind one customer's books or 26AS figure. */
+/** The individual lines behind one customer's books or 26AS figure, for one quarter. */
 export async function tdsDrill(
   entity: Entity,
+  fyStartYear: number,
+  quarter: QuarterNo,
   side: TdsDrillSide,
   customer: string,
   limit = 250,
 ): Promise<TdsDrillResult | null> {
-  const period = await tdsPeriod(entity);
-  if (!period?.start) return null;
+  const period = tdsQuarterWindow(entity, fyStartYear, quarter);
 
   /*
     Invoice by invoice, which is how a partner reads a customer's TDS: what was

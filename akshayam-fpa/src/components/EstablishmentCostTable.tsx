@@ -17,16 +17,20 @@ import type { EstablishmentLine, EstablishmentResult } from "@/lib/reports/estab
 export function EstablishmentCostTable({
   result,
   periodLabel,
+  ytdLabel,
 }: {
   result: EstablishmentResult;
+  /** short label for the period columns, e.g. "This month" or "Jul 26" */
   periodLabel: string;
+  /** short label for the YTD columns, e.g. "to 27 Aug 26" */
+  ytdLabel: string;
 }) {
   const [open, setOpen] = useState<string | null>(null);
 
   const head =
     "border-y border-line px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-faint";
+  const subhead = "mt-0.5 block text-[10px] font-normal normal-case tracking-normal text-ink-faint";
   const { totals } = result;
-  const totalPct = totals.budget ? (totals.variance / totals.budget) * 100 : null;
 
   return (
     <div className="overflow-x-auto">
@@ -43,19 +47,26 @@ export function EstablishmentCostTable({
               Particulars
             </th>
             <th scope="col" className={clsx(head, "text-right")}>
-              Annual budget
-            </th>
-            <th scope="col" className={clsx(head, "text-right")}>
               Period budget
+              <span className={subhead}>{periodLabel}</span>
             </th>
             <th scope="col" className={clsx(head, "text-right")}>
-              Actual
+              Period actuals
+              <span className={subhead}>{periodLabel}</span>
             </th>
             <th scope="col" className={clsx(head, "text-right")}>
-              Variance
+              YTD budget
+              <span className={subhead}>{ytdLabel}</span>
             </th>
             <th scope="col" className={clsx(head, "text-right")}>
-              % variance
+              YTD actuals
+              <span className={subhead}>{ytdLabel}</span>
+            </th>
+            <th scope="col" className={clsx(head, "text-right")}>
+              Variance (YTD)
+            </th>
+            <th scope="col" className={clsx(head, "text-right")}>
+              % (YTD)
             </th>
           </tr>
         </thead>
@@ -74,30 +85,37 @@ export function EstablishmentCostTable({
         <tfoot>
           <tr className="bg-surface-sunk font-semibold">
             <th scope="row" className="border-y border-line-strong px-3 py-2 text-left">
-              Establishment cost — {periodLabel}
+              Establishment cost
             </th>
-            <td className="num border-y border-line-strong px-3 py-2 text-right" />
             <td className="num border-y border-line-strong px-3 py-2 text-right">
-              {money(totals.budget)}
+              {money(totals.periodBudget)}
             </td>
             <td className="num border-y border-line-strong px-3 py-2 text-right">
-              {money(totals.actual)}
+              {money(totals.periodActual)}
+            </td>
+            <td className="num border-y border-line-strong px-3 py-2 text-right">
+              {money(totals.ytdBudget)}
+            </td>
+            <td className="num border-y border-line-strong px-3 py-2 text-right">
+              {money(totals.ytdActual)}
             </td>
             <td
               className={clsx(
                 "num border-y border-line-strong px-3 py-2 text-right",
-                totals.variance < 0 ? "text-negative" : "text-positive",
+                totals.ytdVariance < 0 ? "text-negative" : "text-positive",
               )}
             >
-              {moneySigned(totals.variance)}
+              {moneySigned(totals.ytdVariance)}
             </td>
             <td
               className={clsx(
                 "num border-y border-line-strong px-3 py-2 text-right",
-                totalPct !== null && totalPct < 0 ? "text-negative" : "text-positive",
+                totals.ytdVariancePct !== null && totals.ytdVariancePct < 0
+                  ? "text-negative"
+                  : "text-positive",
               )}
             >
-              {totalPct === null ? "—" : percent(totalPct)}
+              {totals.ytdVariancePct === null ? "—" : percent(totals.ytdVariancePct)}
             </td>
           </tr>
         </tfoot>
@@ -152,17 +170,20 @@ function EstablishmentRow({
           </button>
         </th>
         <td
-          className={clsx(cell, "num text-right", line.isActualOnly ? "text-ink-faint" : "text-ink")}
+          className={clsx(cell, "num text-right", line.isActualOnly ? "text-ink-faint" : "text-ink-muted")}
         >
-          {line.isActualOnly ? "—" : money(line.annualBudget)}
+          {line.isActualOnly ? "—" : money(line.periodBudget)}
+        </td>
+        <td className={clsx(cell, "num text-right text-ink")}>
+          {line.periodActual ? money(line.periodActual) : "—"}
         </td>
         <td
           className={clsx(cell, "num text-right", line.isActualOnly ? "text-ink-faint" : "text-ink-muted")}
         >
-          {line.isActualOnly ? "—" : money(line.budget)}
+          {line.isActualOnly ? "—" : money(line.ytdBudget)}
         </td>
         <td className={clsx(cell, "num text-right text-ink")}>
-          {line.actual ? money(line.actual) : "—"}
+          {line.ytdActual ? money(line.ytdActual) : "—"}
         </td>
         <td
           className={clsx(
@@ -170,29 +191,29 @@ function EstablishmentRow({
             "num text-right",
             line.isActualOnly
               ? "text-ink-faint"
-              : line.variance < 0
+              : line.ytdVariance < 0
                 ? "text-negative"
                 : "text-ink-muted",
           )}
         >
-          {line.isActualOnly ? "—" : moneySigned(line.variance)}
+          {line.isActualOnly ? "—" : moneySigned(line.ytdVariance)}
         </td>
         <td
           className={clsx(
             cell,
             "num text-right",
-            line.variancePct !== null && line.variancePct < 0
+            line.ytdVariancePct !== null && line.ytdVariancePct < 0
               ? "text-negative"
               : "text-ink-muted",
           )}
         >
-          {line.variancePct === null ? "—" : percent(line.variancePct)}
+          {line.ytdVariancePct === null ? "—" : percent(line.ytdVariancePct)}
         </td>
       </tr>
 
       {open && canOpen && (
         <tr>
-          <td colSpan={6} className="border-b border-line bg-surface-sunk/30 px-3 py-3 sm:px-6">
+          <td colSpan={7} className="border-b border-line bg-surface-sunk/30 px-3 py-3 sm:px-6">
             <DrillTable line={line} />
           </td>
         </tr>
@@ -232,7 +253,7 @@ function DrillTable({ line }: { line: EstablishmentLine }) {
             {line.entries.length} posting{line.entries.length === 1 ? "" : "s"}
           </td>
           <td className={clsx(cell, "num border-t-line-strong text-right")}>
-            {money(line.actual)}
+            {money(line.periodActual)}
           </td>
         </tr>
       </tfoot>
