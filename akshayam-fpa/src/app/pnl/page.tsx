@@ -1,5 +1,6 @@
 import { ApportionmentTable } from "@/components/ApportionmentTable";
 import { CommonSize } from "@/components/BvaTable";
+import { DataTable, type Column } from "@/components/DataTable";
 import { PeriodControls } from "@/components/PeriodControls";
 import { QuarterTabs } from "@/components/QuarterTabs";
 import { SetupRequired } from "@/components/SetupRequired";
@@ -20,7 +21,7 @@ import {
   getVerticals,
 } from "@/lib/entity";
 import { withParams } from "@/lib/href";
-import { compactINR } from "@/lib/format";
+import { compactINR, dateLabel, money } from "@/lib/format";
 import { fyBounds, fyMonths, type QuarterNo } from "@/lib/period";
 import {
   getReportingPeriod,
@@ -29,6 +30,7 @@ import {
 } from "@/lib/reporting-period";
 import { buildApportionment, receiverKeyFor } from "@/lib/reports/apportionment";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
+import { buildRevenueTransferCard } from "@/lib/reports/revenue-transfer-card";
 import {
   buildScorecard,
   resolveScorecardScope,
@@ -38,6 +40,15 @@ import { buildProfitAndLoss } from "@/lib/reports/statements";
 import { can, requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
+
+const REVENUE_TRANSFER_COLUMNS: Column[] = [
+  { header: "Status" },
+  { header: "Due date" },
+  { header: "Invoice number" },
+  { header: "Customer" },
+  { header: "Salesperson" },
+  { header: "Amount", numeric: true },
+];
 
 export default async function ProfitAndLossPage({
   searchParams,
@@ -97,6 +108,14 @@ export default async function ProfitAndLossPage({
       verticalId,
       window,
     });
+
+    // Revenue passed on to RBJV: Akshayam's own card only, informational -
+    // it carries no ledger entry of its own to fold into the statement
+    // above.
+    const revenueTransfer =
+      entity.slug === "akshayam"
+        ? await buildRevenueTransferCard({ entityId: entity.id, start: window.start, end: window.end })
+        : null;
 
     /**
      * The two vertical-wise sections that used to live on Budget vs Actual.
@@ -295,6 +314,33 @@ export default async function ProfitAndLossPage({
                 rows={contribution.rows}
                 firmTotals={contribution.firmTotals}
                 apportionedByHead={contribution.apportionedByHead}
+              />
+            </Card>
+          )}
+
+          {revenueTransfer && revenueTransfer.rows.length > 0 && (
+            <Card padded={false}>
+              <div className="px-4 pt-4 sm:px-5">
+                <CardTitle hint={`${revenueTransfer.rows.length} invoice(s) · ${money(revenueTransfer.total)}`}>
+                  Revenue transferred to RBJV
+                </CardTitle>
+                <p className="-mt-1 mb-3 text-[11.5px] text-ink-muted">
+                  Akshayam invoices, raised through GIFT, where a portion of the value is really
+                  RBJV&apos;s own team&apos;s work. No ledger entry of its own, so it carries no
+                  effect on the statement above — deducted instead from GIFT&apos;s revenue and
+                  collection actuals on the Revenue and Collections tabs.
+                </p>
+              </div>
+              <DataTable
+                columns={REVENUE_TRANSFER_COLUMNS}
+                rows={revenueTransfer.rows.map((r) => [
+                  r.status ?? "—",
+                  dateLabel(r.invoiceDate),
+                  r.invoiceNumber,
+                  r.customerName,
+                  r.salesperson ?? "—",
+                  money(r.amount),
+                ])}
               />
             </Card>
           )}
