@@ -250,6 +250,157 @@ function promote(lines: ExpenseLine[]): void {
   lines.sort((a, b) => a.sortOrder - b.sortOrder);
 }
 
+/**
+ * A third telling of two Other-expenses heads, deeper than the detail block
+ * itself: on the RBJV-shaped sheets, "Computer & Software" and "Dues and
+ * subscription" are each broken out again, further down, into what the money
+ * actually went on. Titles are matched by exact name, the same way the rest
+ * of this module reads a hand-built sheet - a schedule that has moved or been
+ * renamed is left unread rather than guessed at.
+ *
+ * This is the same split the partners have been keeping by hand in
+ * db/migrations/052_rbjv_computer_expense_split.sql and
+ * 053_rbjv_dues_and_subscription_group.sql, re-applied after every budget
+ * re-upload because a re-upload wipes it. Reading it here means it survives
+ * one.
+ */
+const VENDOR_BLOCK_TITLES = ["Software subscription", "Computer maintenance", "Dues and subscription"];
+
+/** The head a block's own vendor lines land under, absent an override below. */
+const VENDOR_BLOCK_HEAD: Record<string, string> = {
+  "Software subscription": "Computer - subscription",
+  "Computer maintenance": "Computer maintenance charges",
+  "Dues and subscription": "Dues and subscription",
+};
+
+/**
+ * Vendor lines the partners read differently than the block they print
+ * under: Domain Renewal is technology spend, read with the rest of the
+ * subscriptions rather than beside the one-off maintenance bills it happens
+ * to sit next to on the sheet; "Dues & Subscriptions" is the one line the
+ * whole ICSI membership budget sits on, and is named for what it is.
+ */
+const VENDOR_OVERRIDE: Record<string, { head?: string; label?: string }> = {
+  "Domain Renewal": { head: "Computer - subscription" },
+  "Dues & Subscriptions": { label: "ICSI membership" },
+};
+
+/**
+ * Read the vendor-level rows beneath a detail block's own break.
+ *
+ * Each block opens with a bold title (one of VENDOR_BLOCK_TITLES) and is
+ * followed by its vendor lines, unindented, until a blank row, a sub-total, or
+ * the next block title closes it. A row before any title, or once a block has
+ * closed, belongs to neither and is skipped.
+ */
+function vendorRowsOf(
+  rows: unknown[][],
+  fromIndex: number,
+  columns: { index: number; month: string }[],
+): { block: string; label: string; byMonth: Map<string, number> }[] {
+  const out: { block: string; label: string; byMonth: Map<string, number> }[] = [];
+  let block: string | null = null;
+
+  for (const row of rows.slice(fromIndex)) {
+    if (!row) {
+      block = null;
+      continue;
+    }
+    const raw = String(row[0] ?? "");
+    const label = raw.trim().replace(/^[—–-]\s*/, "").trim();
+    if (!label) {
+      block = null;
+      continue;
+    }
+    if (/^(sub-?total|total)/i.test(label)) {
+      block = null;
+      continue;
+    }
+
+    const title = VENDOR_BLOCK_TITLES.find((t) => t.toLowerCase() === label.toLowerCase());
+    if (title) {
+      block = title;
+      continue;
+    }
+
+    if (!block) continue;
+    out.push({ block, label, byMonth: amountsOf(row, columns) });
+  }
+
+  return out;
+}
+
+/**
+ * Replace "Computer & Software" and the "Dues and subscription" label with
+ * the vendor lines the sheet's own third schedule gives them, keeping the
+ * heads' own totals as a "not broken out" remainder wherever the vendor
+ * lines fall short of it.
+ */
+function applyVendorSplit(
+  lines: ExpenseLine[],
+  vendorRows: { block: string; label: string; byMonth: Map<string, number> }[],
+  columns: { index: number; month: string }[],
+): void {
+  const expand = (
+    original: ExpenseLine,
+    rows: { block: string; label: string; byMonth: Map<string, number> }[],
+    baseSort: number,
+  ): ExpenseLine[] => {
+    const out = rows.map((r, i) => {
+      const override = VENDOR_OVERRIDE[r.label];
+      return {
+        head: override?.head ?? VENDOR_BLOCK_HEAD[r.block],
+        label: override?.label ?? r.label,
+        sortOrder: baseSort + i,
+        byMonth: r.byMonth,
+      };
+    });
+    const remainder = new Map<string, number>();
+    let anyRemainder = false;
+    for (const col of columns) {
+      const total = original.byMonth.get(col.month) ?? 0;
+      const summed = out.reduce((s, r) => s + (r.byMonth.get(col.month) ?? 0), 0);
+      const diff = Math.round((total - summed) * 100) / 100;
+      remainder.set(col.month, diff);
+      if (Math.abs(diff) > 0.5) anyRemainder = true;
+    }
+    if (anyRemainder) {
+      out.push({
+        head: original.head,
+        label: `${original.label} — not broken out`,
+        sortOrder: baseSort + out.length,
+        byMonth: remainder,
+      });
+    }
+    return out;
+  };
+
+  const computerIdx = lines.findIndex((l) => l.head === "Computer & Software");
+  let cursor = computerIdx >= 0 ? lines[computerIdx].sortOrder : 0;
+
+  if (computerIdx >= 0) {
+    const forComputer = vendorRows.filter(
+      (r) => r.block === "Software subscription" || r.block === "Computer maintenance",
+    );
+    if (forComputer.length > 0) {
+      const replacement = expand(lines[computerIdx], forComputer, cursor);
+      lines.splice(computerIdx, 1, ...replacement);
+      cursor += replacement.length;
+    }
+  }
+
+  const duesIdx = lines.findIndex((l) => l.head === "Other Expenses" && l.label === "Dues and subscription");
+  if (duesIdx >= 0) {
+    const forDues = vendorRows.filter((r) => r.block === "Dues and subscription");
+    if (forDues.length > 0) {
+      const replacement = expand(lines[duesIdx], forDues, cursor + 1);
+      lines.splice(duesIdx, 1, ...replacement);
+    }
+  }
+
+  lines.sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
 
 /* ============================================================
    The parse
@@ -523,6 +674,14 @@ function expenseLinesOf(
   });
 
   promote(lines);
+
+  // The third schedule, where the sheet carries one, lives after the second
+  // block's own break - found the same way that break is found inside it.
+  const secondBreak = rows.findIndex(
+    (r, i) => i > detailStart && /^(sub-?total|total)/i.test(String(r?.[0] ?? "").trim()),
+  );
+  const vendorRows = vendorRowsOf(rows, secondBreak < 0 ? rows.length : secondBreak + 1, columns);
+  if (vendorRows.length > 0) applyVendorSplit(lines, vendorRows, columns);
 
   const out: BudgetExpenseRow[] = [];
   for (const line of lines) {
