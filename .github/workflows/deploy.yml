@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
         with:
           host: ${{ secrets.PROD_SERVER_HOST }}
           username: ubuntu
@@ -31,13 +33,30 @@ jobs:
           # npm ci and next build paging through swap. 20 minutes leaves room
           # for a bad day without hanging the runner all afternoon.
           command_timeout: 20m
+          envs: DEPLOY_SHA
           script: |
             set -euo pipefail
 
             cd /app
-            echo "→ Pulling ${{ github.sha }} ..."
-            git fetch origin main
-            git reset --hard origin/main
+            echo "→ Deploying $DEPLOY_SHA ..."
+
+            # --force because a rewritten main should still deploy rather than
+            # leave the box on a ref git quietly refused to move.
+            git fetch --force origin main
+
+            # Reset to the exact commit that triggered this run, not to
+            # whatever origin/main points at by the time the SSH session gets
+            # here. Those differ whenever a second merge lands mid-deploy, and
+            # the run would then report one commit while building another.
+            git reset --hard "$DEPLOY_SHA"
+
+            # git reset is not required to fail loudly on every way it can miss,
+            # so ask the tree directly rather than trusting the exit code.
+            HEAD_SHA=$(git rev-parse HEAD)
+            if [ "$HEAD_SHA" != "$DEPLOY_SHA" ]; then
+              echo "::error::checkout is $HEAD_SHA, expected $DEPLOY_SHA"
+              exit 1
+            fi
             git log --oneline -1
 
             cd /app/akshayam-fpa
@@ -51,6 +70,15 @@ jobs:
             echo "→ Seeding first admin (create-only) ..."
             npm run seed:admin
 
+            # Written before the build, so the file describes the build that is
+            # about to land in .next. /api/version reads it back at runtime and
+            # the smoke test below compares it with $DEPLOY_SHA - that
+            # comparison is the only thing in this job that can tell a fresh
+            # deploy from a box still serving the previous one.
+            echo "→ Stamping the build ..."
+            printf '{"commit":"%s","builtAt":"%s"}\n' \
+              "$DEPLOY_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .version.json
+
             echo "→ Building ..."
             NODE_OPTIONS=--max-old-space-size=1024 npm run build
 
@@ -58,13 +86,29 @@ jobs:
             pm2 restart akshayam --update-env
             pm2 save
 
-            echo "✅ Deployed ${{ github.sha }} at $(date -u)"
+            # pm2 restart returns 0 once it has handed the process off, not once
+            # the process has survived starting. On a 512 MB box a build that
+            # pushes the app over max_memory_restart shows up as a restart loop,
+            # which is worth catching here rather than as a puzzling smoke test.
+            sleep 10
+            if ! pm2 describe akshayam | grep -qE "status.*online"; then
+              pm2 describe akshayam || true
+              pm2 logs akshayam --lines 50 --nostream || true
+              echo "::error::akshayam is not online after the restart"
+              exit 1
+            fi
+
+            echo "→ Deploy step finished for $DEPLOY_SHA at $(date -u)"
 
       - name: Smoke test
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
         # A green deploy step only means the commands exited 0. This asks the
-        # public URL whether the app is actually answering, and whether it is
-        # still refusing anonymous visitors - a deploy that accidentally
-        # removed the auth gate would otherwise pass quietly.
+        # public URL whether the app is actually answering, whether it is still
+        # refusing anonymous visitors - a deploy that accidentally removed the
+        # auth gate would otherwise pass quietly - and, above all, which commit
+        # it is serving. Without that last check a box running week-old code
+        # passes this job exactly like a box that just rebuilt.
         run: |
           set -euo pipefail
           URL="https://akshayam.artham.app"
@@ -88,4 +132,24 @@ jobs:
           [ "$root" = "307" ]  || { echo "::error::signed-out visitors are not being redirected"; exit 1; }
           [ "$api" = "401" ]   || { echo "::error::the API is not refusing anonymous callers"; exit 1; }
 
-          echo "✅ smoke test passed"
+          echo "→ checking which commit is actually serving ..."
+          body=$(curl -s -m 15 "$URL/api/version" || echo '{}')
+          echo "GET /api/version  -> $body"
+
+          served=$(printf '%s' "$body" | python3 -c \
+            'import json,sys;print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || echo "")
+
+          if [ -z "$served" ]; then
+            echo "::error::/api/version did not answer with a commit, so the running"
+            echo "::error::process predates this endpoint - which means the build from"
+            echo "::error::this run is not what is serving."
+            exit 1
+          fi
+
+          if [ "$served" != "$DEPLOY_SHA" ]; then
+            echo "::error::the app is serving $served but this run deployed $DEPLOY_SHA."
+            echo "::error::The build did not reach the running process."
+            exit 1
+          fi
+
+          echo "✅ smoke test passed - $URL is serving $served"

@@ -287,21 +287,37 @@ Resources:
           # ── Redeploy script ─────────────────────────────────────────────────
           cat > $APP_DIR/deploy.sh << 'DEPLOYEOF'
           #!/bin/bash
-          set -e
+          set -euo pipefail
           cd /app
           echo "→ Pulling latest code..."
-          git pull origin main
+          git fetch --force origin main
+          # reset rather than pull: a merge that cannot fast-forward should not
+          # leave the box sitting on a conflict, and nothing here is ever meant
+          # to carry local commits.
+          git reset --hard origin/main
+          SHA=$(git rev-parse HEAD)
+          git log --oneline -1
           cd /app/akshayam-fpa
           echo "→ Installing dependencies..."
           NODE_OPTIONS=--max-old-space-size=1024 npm ci
           echo "→ Applying migrations..."
           npm run db:migrate
+          # Stamped before the build so it describes what lands in .next, and
+          # read back by /api/version - the only way to tell from outside the
+          # box which commit is actually serving.
+          printf '{"commit":"%s","builtAt":"%s"}\n' \
+            "$SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .version.json
           echo "→ Building..."
           NODE_OPTIONS=--max-old-space-size=1024 npm run build
           echo "→ Restarting PM2..."
           pm2 restart akshayam --update-env
           pm2 save
-          echo "✅ Deployed at $(date)"
+          sleep 10
+          pm2 describe akshayam | grep -qE "status.*online" || {
+            echo "❌ akshayam is not online after the restart"; pm2 logs akshayam --lines 50 --nostream; exit 1;
+          }
+          echo "✅ Deployed $SHA at $(date -u)"
+          echo "   verify: curl -s http://localhost:3000/api/version"
           DEPLOYEOF
           chmod +x $APP_DIR/deploy.sh
           chown ubuntu:ubuntu $APP_DIR/deploy.sh

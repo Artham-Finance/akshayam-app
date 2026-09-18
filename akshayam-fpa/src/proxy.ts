@@ -19,8 +19,14 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const SESSION_COOKIE = "fpa_session";
 
-/** Reachable without a session. Everything else needs one. */
-const PUBLIC_PATHS = ["/login"];
+/**
+ * Reachable without a session. Everything else needs one.
+ *
+ * `/api/version` is here so the deploy's smoke test can ask the running app
+ * which commit it was built from before it has any way to sign in. It answers
+ * with a commit SHA of a public repository and nothing else.
+ */
+const PUBLIC_PATHS = ["/login", "/api/version"];
 
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
