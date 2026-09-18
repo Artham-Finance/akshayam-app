@@ -25,3 +25,7 @@ Thumbs.db
 
 # infrastructure secrets
 infrastructure/params/prod.json
+
+# build stamp - written by the deploy immediately before `next build` and read
+# back by /api/version, so the smoke test can prove which commit is serving.
+.version.json

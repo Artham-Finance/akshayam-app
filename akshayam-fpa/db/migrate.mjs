@@ -101,8 +101,27 @@ for (const file of files) {
 
   if (prior) {
     if (prior !== checksum) {
-      console.warn(`  ~ ${file} already applied but its contents changed since.`);
-      console.warn("    Use --reset to rebuild, or add a new migration instead.");
+      // This used to warn and carry on, which meant the deploy went green
+      // while the database kept whatever the old version of this file had
+      // built. The schema and the code that expects it then disagree, and the
+      // only symptom is the app behaving like the previous release - which is
+      // indistinguishable, from the outside, from the deploy not having
+      // happened. Refuse instead, and say what to do about it.
+      console.error(`\n  ${file} was already applied, but its contents have changed since.`);
+      console.error("  The database still has what the old version of this file built, so the");
+      console.error("  schema no longer matches the migration history.\n");
+      console.error("  Add a new migration for the change instead of editing this one.");
+      console.error("  In development, `npm run db:reset` rebuilds from scratch.");
+      console.error("  To record the new contents without re-running them (only when you have");
+      console.error("  checked the database already matches), set MIGRATE_ALLOW_DRIFT=1.\n");
+
+      if (process.env.MIGRATE_ALLOW_DRIFT !== "1") {
+        await client.end();
+        process.exit(1);
+      }
+
+      console.warn(`  ~ ${file} drift accepted (MIGRATE_ALLOW_DRIFT=1); recording new checksum.`);
+      await client.query("update _migrations set checksum = $1 where name = $2", [checksum, file]);
     }
     continue;
   }
