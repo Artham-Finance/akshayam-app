@@ -302,13 +302,13 @@ Resources:
           NODE_OPTIONS=--max-old-space-size=1024 npm ci
           echo "→ Applying migrations..."
           npm run db:migrate
-          # Stamped before the build so it describes what lands in .next, and
-          # read back by /api/version - the only way to tell from outside the
-          # box which commit is actually serving.
-          printf '{"commit":"%s","builtAt":"%s"}\n' \
-            "$SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .version.json
           echo "→ Building..."
           NODE_OPTIONS=--max-old-space-size=1024 npm run build
+          # Stamped only once the build has succeeded, so /api/version can only
+          # ever name a commit that finished building. A stamp written earlier
+          # outlives a failed build and claims a commit that is not serving.
+          printf '{"commit":"%s","builtAt":"%s"}\n' \
+            "$SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .version.json
           echo "→ Restarting PM2..."
           pm2 restart akshayam --update-env
           pm2 save
