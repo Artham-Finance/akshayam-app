@@ -29,10 +29,14 @@ jobs:
           host: ${{ secrets.PROD_SERVER_HOST }}
           username: ubuntu
           key: ${{ secrets.PROD_SSH_KEY }}
-          # The build is the slow part: ~6 minutes on a 512 MB box, most of it
-          # npm ci and next build paging through swap. 20 minutes leaves room
-          # for a bad day without hanging the runner all afternoon.
-          command_timeout: 20m
+          # The build is the slow part: ~6-11 minutes on a 512 MB box, most of
+          # it npm ci and next build paging through swap. 20 minutes looked
+          # like ample headroom until a mis-detected Turbopack workspace root
+          # widened the tree the build walks and ran straight past it. That
+          # cause is fixed in next.config.ts, but the margin was thinner than
+          # it read, so 30 minutes - still short enough that a genuinely hung
+          # deploy does not hold the runner all afternoon.
+          command_timeout: 30m
           envs: DEPLOY_SHA
           script: |
             set -euo pipefail
@@ -70,17 +74,22 @@ jobs:
             echo "→ Seeding first admin (create-only) ..."
             npm run seed:admin
 
-            # Written before the build, so the file describes the build that is
-            # about to land in .next. /api/version reads it back at runtime and
-            # the smoke test below compares it with $DEPLOY_SHA - that
-            # comparison is the only thing in this job that can tell a fresh
-            # deploy from a box still serving the previous one.
+            echo "→ Building ..."
+            NODE_OPTIONS=--max-old-space-size=1024 npm run build
+
+            # Stamped *after* the build, not before.
+            #
+            # Writing it first was wrong: when the build failed - as it did on
+            # 18 Sep, on the 20-minute timeout - the file was left claiming a
+            # commit that had never finished building, while .next and the
+            # running process were still the previous one. /api/version would
+            # then report a commit that was not serving, which is precisely the
+            # lie this endpoint exists to prevent. Written here it can only
+            # describe a build that completed, and the restart immediately
+            # below is what puts that build in front of traffic.
             echo "→ Stamping the build ..."
             printf '{"commit":"%s","builtAt":"%s"}\n' \
               "$DEPLOY_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .version.json
-
-            echo "→ Building ..."
-            NODE_OPTIONS=--max-old-space-size=1024 npm run build
 
             echo "→ Restarting ..."
             pm2 restart akshayam --update-env
