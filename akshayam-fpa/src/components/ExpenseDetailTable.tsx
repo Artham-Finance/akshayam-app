@@ -89,7 +89,11 @@ export function ExpenseDetailTable({
   }
   const collapsible = groups.filter((g) => !(g.lines.length === 1 && g.lines[0].isHeadOnly));
 
-  const [openHeads, setOpenHeads] = useState<Set<string>>(new Set());
+  // Open by default - every entity's card should read as the full YTD
+  // breakdown at a glance, not something that has to be expanded first.
+  const [openHeads, setOpenHeads] = useState<Set<string>>(
+    () => new Set(collapsible.map((g) => g.head)),
+  );
   const toggleHead = (h: string) =>
     setOpenHeads((cur) => {
       const next = new Set(cur);

@@ -164,12 +164,24 @@ export async function buildScorecard(opts: {
   fyStartYear: number;
   quarter: QuarterNo;
   cumulative: boolean;
+  /**
+   * One month inside the quarter, to narrow the window to it - the
+   * scorecard's own version of "expand to months".
+   *
+   * Overrides cumulative rather than combining with it: a month picked while
+   * "cumulative to quarter" was selected still means "just this month", not
+   * a mix of whole earlier quarters and one month of the current one, which
+   * would read like a figure nobody actually asked for.
+   */
+  month?: string | null;
 }): Promise<ScorecardResult> {
-  const { entity, fyStartYear, quarter, cumulative } = opts;
+  const { entity, fyStartYear, quarter, cumulative, month = null } = opts;
 
-  const months = fyMonths(fyStartYear).filter((m) =>
-    cumulative ? m.quarter <= quarter : m.quarter === quarter,
-  );
+  const allMonths = fyMonths(fyStartYear);
+  const pickedMonth = month ? (allMonths.find((m) => m.key === month) ?? null) : null;
+  const months = pickedMonth
+    ? [pickedMonth]
+    : allMonths.filter((m) => (cumulative ? m.quarter <= quarter : m.quarter === quarter));
   const start = months[0].start;
   const end = months[months.length - 1].end;
   const fraction = months.length / 12;
@@ -178,12 +190,15 @@ export async function buildScorecard(opts: {
     end,
     months: months.length,
     label:
-      cumulative && quarter > 1
+      pickedMonth?.label ??
+      (cumulative && quarter > 1
         ? `Apr–${QUARTER_END_MONTH[quarter - 1]}`
-        : QUARTER_LABELS[quarter - 1],
+        : QUARTER_LABELS[quarter - 1]),
   };
 
-  const quartersInRange = (cumulative ? [1, 2, 3, 4].filter((q) => q <= quarter) : [quarter]) as QuarterNo[];
+  const quartersInRange = (
+    pickedMonth ? [pickedMonth.quarter] : cumulative ? [1, 2, 3, 4].filter((q) => q <= quarter) : [quarter]
+  ) as QuarterNo[];
 
   const [revenueBva, collectionBva, apportionments, ageingRows] = await Promise.all([
     buildBudgetVsActual({
@@ -199,7 +214,9 @@ export async function buildScorecard(opts: {
       period: { start, end, fraction, monthAligned: true },
     }),
     Promise.all(
-      quartersInRange.map((q) => buildApportionment({ entity, fyStartYear, quarter: q })),
+      quartersInRange.map((q) =>
+        buildApportionment({ entity, fyStartYear, quarter: q, month: pickedMonth?.key ?? null }),
+      ),
     ),
     query<{
       code: string | null;

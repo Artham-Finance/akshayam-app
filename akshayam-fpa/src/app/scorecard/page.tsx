@@ -10,8 +10,10 @@ import { ledgerAsOfLabel, ledgerWrittenTo } from "@/lib/reporting-period";
 import {
   buildScorecard,
   resolveScorecardScope,
+  ROWS,
   WEIGHTS,
   MGMT_APPRAISAL_DEFAULT,
+  type ScorecardRow,
 } from "@/lib/reports/scorecard";
 import { requireEntityAccess } from "@/lib/auth/dal";
 import { ScorecardControls } from "./ScorecardControls";
@@ -62,23 +64,130 @@ export default async function ScorecardPage({
 
     const writtenTo = await ledgerWrittenTo(benchmark.memberIds, fy);
     const { end: fyEnd } = fyBounds(fy, benchmark.fy_start_month);
-    const latestQuarter =
-      (fyMonths(fy, benchmark.fy_start_month).filter((m) => m.start <= (writtenTo ?? fyEnd)).at(-1)
-        ?.quarter as QuarterNo | undefined) ?? 1;
+    const months = fyMonths(fy, benchmark.fy_start_month);
+    const reachedMonths = months.filter((m) => m.start <= (writtenTo ?? fyEnd));
+    const latestQuarter = (reachedMonths.at(-1)?.quarter as QuarterNo | undefined) ?? 1;
 
     const q = ([1, 2, 3, 4].includes(Number(params.q)) ? Number(params.q) : latestQuarter) as QuarterNo;
     const cumulative = params.basis !== "quarter"; // default cumulative
+
+    // A month inside that quarter, when one is picked - "expand to months" on
+    // this page. Ignored if it is not actually in the quarter or the ledger
+    // has not reached it yet, so a stale link cannot show a period with
+    // nothing behind it.
+    const requestedMonth = typeof params.m === "string" ? params.m : null;
+    const month =
+      reachedMonths.find((m) => m.key === requestedMonth && m.quarter === q)?.key ?? null;
+
+    // A partner picking one team lead's row from the picker below, to read it
+    // the way that TL would - a slice's own login already narrows to its own
+    // row without one, so the picker is not offered there.
+    const requestedVertical = typeof params.v === "string" ? params.v : null;
+    const pickedCode =
+      !isSlice && ROWS.some((r) => r.code === requestedVertical) ? requestedVertical : null;
 
     const data = await buildScorecard({
       entity: benchmark,
       fyStartYear: fy,
       quarter: q,
       cumulative,
+      month,
     });
-    // The rows on show: every rated vertical, or just the slice's own.
-    const shown = visibleCodes
-      ? data.rows.filter((r) => visibleCodes!.has(r.code))
-      : data.rows;
+    // The rows on show: every rated vertical, just the slice's own, or the
+    // one a partner picked to read as if they were that team lead.
+    const shown = isSlice
+      ? visibleCodes
+        ? data.rows.filter((r) => visibleCodes!.has(r.code))
+        : data.rows
+      : pickedCode
+        ? data.rows.filter((r) => r.code === pickedCode)
+        : data.rows;
+
+    // One vertical on screen - whether because this is a TL's own slice or a
+    // partner picked one - reads better with every month a click away than
+    // gated behind picking its quarter first.
+    const singleVertical = isSlice || pickedCode !== null;
+
+    // The code the whole page is narrowed to, when it is narrowed to one at
+    // all - a slice's own code, or the one a partner picked.
+    const targetCode = isSlice ? ([...(visibleCodes ?? [])][0] ?? null) : pickedCode;
+
+    /**
+     * "This year" or "this quarter" for one vertical reads as a trend, not a
+     * single lumped figure - every card below becomes one row per month
+     * rather than one row per vertical. A single month already reads as one
+     * period on its own, so it keeps the plain single-row shape; so does the
+     * all-verticals comparison table, where a trend row per vertical would
+     * mean twelve months across eleven verticals - a grid nobody can read.
+     */
+    // Matches the aggregate's own window exactly - months of the quarter(s),
+    // not further cut down to what the ledger has reached - so the footer
+    // (still struck from that aggregate) is the sum of the rows above it
+    // rather than a number that quietly disagrees with them.
+    const monthsInView =
+      !month && singleVertical && targetCode
+        ? months.filter((m) => (cumulative ? m.quarter <= q : m.quarter === q))
+        : [];
+
+    const trend =
+      monthsInView.length > 0
+        ? await Promise.all(
+            monthsInView.map((m) =>
+              buildScorecard({
+                entity: benchmark,
+                fyStartYear: fy,
+                quarter: m.quarter,
+                cumulative: false,
+                month: m.key,
+              }),
+            ),
+          )
+        : null;
+
+    const targetLabel = targetCode ? (ROWS.find((r) => r.code === targetCode)?.label ?? targetCode) : "";
+    const zeroRow = (code: string, label: string): ScorecardRow => ({
+      code,
+      label,
+      revenueBudget: 0,
+      revenueActual: 0,
+      revenueAchievement: null,
+      collectionBudget: 0,
+      collectionActual: 0,
+      collectionAchievement: null,
+      directCost: 0,
+      apportionedCost: 0,
+      cost: 0,
+      contributionRevenue: 0,
+      revenueContribution: 0,
+      revenueContributionShare: null,
+      collectionContribution: 0,
+      collectionContributionShare: null,
+      ageingBuckets: [0, 0, 0, 0, 0, 0],
+      ageingTotal: 0,
+      ageingDays: null,
+      ratings: {
+        revenue: 0,
+        collection: 0,
+        netRevContrib: 0,
+        netCollContrib: 0,
+        ageing: null,
+        mgmt: MGMT_APPRAISAL_DEFAULT,
+      },
+      composite: 0,
+    });
+
+    // What every card below actually renders as its rows: one per vertical
+    // normally, or - when trend is not null - one per month of the single
+    // vertical on screen. A month the trend has no data for still gets its
+    // own zero row, so a quiet month reads as quiet rather than disappearing
+    // from the table.
+    const rowSource: { label: string; row: ScorecardRow }[] = trend
+      ? monthsInView.map((m, i) => ({
+          label: m.label,
+          row: trend[i].rows.find((r) => r.code === targetCode) ?? zeroRow(targetCode!, targetLabel),
+        }))
+      : shown.map((r) => ({ label: r.label, row: r }));
+    const firstColHead = trend ? "Month" : "Vertical";
 
     const weightRow = [
       ["Revenue vs budget", WEIGHTS.revenue],
@@ -157,7 +266,7 @@ export default async function ScorecardPage({
       <>
         <PageHeader
           title="Vertical Performance Scorecard"
-          subtitle={`${fyLabel(fy)} · ${data.window.label}${cumulative && q > 1 ? " (cumulative)" : ""}${
+          subtitle={`${fyLabel(fy)} · ${data.window.label}${!month && cumulative && q > 1 ? " (cumulative)" : ""}${
             ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""
           }`}
           actions={
@@ -165,7 +274,15 @@ export default async function ScorecardPage({
               financialYears={availableYears}
               currentFy={fy}
               currentQuarter={q}
+              currentMonth={month}
               cumulative={cumulative}
+              months={months}
+              reachedQuarter={latestQuarter}
+              writtenTo={writtenTo}
+              params={params}
+              verticalOptions={isSlice ? [] : ROWS.map((r) => ({ code: r.code, label: r.label }))}
+              currentVertical={pickedCode}
+              alwaysShowMonths={singleVertical}
             />
           }
         />
@@ -174,8 +291,16 @@ export default async function ScorecardPage({
           {isSlice && (
             <Notice tone="info" title="Your vertical only">
               {shown.length > 0
-                ? "Every card below is narrowed to your vertical; the footer row is the whole firm, as a benchmark."
+                ? `Every card below is narrowed to your vertical${trend ? ", one row per month" : ""}; the footer row is the whole firm, as a benchmark.`
                 : "Your vertical is not rated on the partners’ scorecard this quarter — it carries no budget or activity in the period, or is not a rated line. The footer rows below are the whole firm."}
+            </Notice>
+          )}
+
+          {pickedCode && (
+            <Notice tone="info" title={`Reading as ${ROWS.find((r) => r.code === pickedCode)?.label}`}>
+              {shown.length > 0
+                ? `Every card below is narrowed to this vertical${trend ? ", one row per month" : ""}, the same view its team lead sees; the footer row is the whole firm, as a benchmark.`
+                : "This vertical is not rated on the partners’ scorecard this period — it carries no budget or activity, or is not a rated line. The footer rows below are the whole firm."}
             </Notice>
           )}
 
@@ -207,7 +332,7 @@ export default async function ScorecardPage({
                 <thead>
                   <tr className="border-b border-line bg-surface-sunk/40">
                     <th className={th}>#</th>
-                    <th className={th}>Team Lead / Vertical</th>
+                    <th className={th}>{trend ? "Month" : "Team Lead / Vertical"}</th>
                     <th className={clsx(th, "text-center")}>Revenue</th>
                     <th className={clsx(th, "text-center")}>Collection</th>
                     <th className={clsx(th, "text-center")}>Net rev. contrib.</th>
@@ -218,24 +343,24 @@ export default async function ScorecardPage({
                   </tr>
                 </thead>
                 <tbody>
-                  {shown.map((r, i) => (
-                    <tr key={r.code} className="border-b border-line/70 odd:bg-surface-sunk/20">
+                  {rowSource.map(({ label, row }, i) => (
+                    <tr key={label} className="border-b border-line/70 odd:bg-surface-sunk/20">
                       <td className={clsx(td, "text-ink-muted")}>{i + 1}</td>
-                      <td className={clsx(td, "font-medium text-ink")}>{r.label}</td>
-                      <td className="px-3 py-2 text-center"><Pill v={r.ratings.revenue} /></td>
-                      <td className="px-3 py-2 text-center"><Pill v={r.ratings.collection} /></td>
-                      <td className="px-3 py-2 text-center"><Pill v={r.ratings.netRevContrib} /></td>
-                      <td className="px-3 py-2 text-center"><Pill v={r.ratings.netCollContrib} /></td>
-                      <td className="px-3 py-2 text-center"><Pill v={r.ratings.ageing} /></td>
-                      <td className="px-3 py-2 text-center"><Pill v={r.ratings.mgmt} /></td>
+                      <td className={clsx(td, "font-medium text-ink")}>{label}</td>
+                      <td className="px-3 py-2 text-center"><Pill v={row.ratings.revenue} /></td>
+                      <td className="px-3 py-2 text-center"><Pill v={row.ratings.collection} /></td>
+                      <td className="px-3 py-2 text-center"><Pill v={row.ratings.netRevContrib} /></td>
+                      <td className="px-3 py-2 text-center"><Pill v={row.ratings.netCollContrib} /></td>
+                      <td className="px-3 py-2 text-center"><Pill v={row.ratings.ageing} /></td>
+                      <td className="px-3 py-2 text-center"><Pill v={row.ratings.mgmt} /></td>
                       <td className="px-3 py-2.5 text-center">
                         <span
                           className={clsx(
                             "inline-block rounded-md px-2 py-0.5 text-[12.5px] font-semibold num",
-                            compositeTone(r.composite),
+                            compositeTone(row.composite),
                           )}
                         >
-                          {r.composite.toFixed(2)}
+                          {row.composite.toFixed(2)}
                         </span>
                       </td>
                     </tr>
@@ -244,7 +369,7 @@ export default async function ScorecardPage({
                 <tfoot>
                   <tr className="border-t-2 border-line-strong bg-surface-sunk/50 font-semibold">
                     <td className={td} />
-                    <td className={clsx(td, "text-ink")}>{isSlice ? "Firm average" : "Average"}</td>
+                    <td className={clsx(td, "text-ink")}>{singleVertical ? "Firm average" : "Average"}</td>
                     <td className={clsx(num, "text-center")}>{avg((r) => r.ratings.revenue).toFixed(1)}</td>
                     <td className={clsx(num, "text-center")}>{avg((r) => r.ratings.collection).toFixed(1)}</td>
                     <td className={clsx(num, "text-center")}>{avg((r) => r.ratings.netRevContrib).toFixed(1)}</td>
@@ -262,18 +387,18 @@ export default async function ScorecardPage({
           <WorkingCard
             title="Revenue — budget vs actual"
             accent="border-navy"
-            head={["Vertical", "Period budget", "Actual", "Achievement", "Rating"]}
-            rows={shown.map((r) => ({
+            head={[firstColHead, "Period budget", "Actual", "Achievement", "Rating"]}
+            rows={rowSource.map(({ label, row }) => ({
               cells: [
-                r.label,
-                compactINR(r.revenueBudget),
-                compactINR(r.revenueActual),
-                r.revenueAchievement === null ? "–" : percent(r.revenueAchievement * 100, 1),
+                label,
+                compactINR(row.revenueBudget),
+                compactINR(row.revenueActual),
+                row.revenueAchievement === null ? "–" : percent(row.revenueAchievement * 100, 1),
               ],
-              rating: r.ratings.revenue,
+              rating: row.ratings.revenue,
             }))}
             foot={[
-              isSlice ? "Firm total" : "Total",
+              singleVertical ? "Firm total" : "Total",
               compactINR(revBudTot),
               compactINR(revActTot),
               revBudTot > 0 ? percent((revActTot / revBudTot) * 100, 1) : "–",
@@ -283,18 +408,18 @@ export default async function ScorecardPage({
           <WorkingCard
             title="Collection — budget vs actual"
             accent="border-navy"
-            head={["Vertical", "Period budget", "Actual", "Achievement", "Rating"]}
-            rows={shown.map((r) => ({
+            head={[firstColHead, "Period budget", "Actual", "Achievement", "Rating"]}
+            rows={rowSource.map(({ label, row }) => ({
               cells: [
-                r.label,
-                compactINR(r.collectionBudget),
-                compactINR(r.collectionActual),
-                r.collectionAchievement === null ? "–" : percent(r.collectionAchievement * 100, 1),
+                label,
+                compactINR(row.collectionBudget),
+                compactINR(row.collectionActual),
+                row.collectionAchievement === null ? "–" : percent(row.collectionAchievement * 100, 1),
               ],
-              rating: r.ratings.collection,
+              rating: row.ratings.collection,
             }))}
             foot={[
-              isSlice ? "Firm total" : "Total",
+              singleVertical ? "Firm total" : "Total",
               compactINR(collBudTot),
               compactINR(collActTot),
               collBudTot > 0 ? percent((collActTot / collBudTot) * 100, 1) : "–",
@@ -305,7 +430,7 @@ export default async function ScorecardPage({
             title="Net revenue contribution"
             accent="border-positive"
             head={[
-              "Vertical",
+              firstColHead,
               "Revenue",
               "Direct cost",
               "Apportioned cost",
@@ -313,19 +438,19 @@ export default async function ScorecardPage({
               "% of total",
               "Rating",
             ]}
-            rows={shown.map((r) => ({
+            rows={rowSource.map(({ label, row }) => ({
               cells: [
-                r.label,
-                compactINR(r.contributionRevenue),
-                compactINR(r.directCost),
-                compactINR(r.apportionedCost),
-                compactINR(r.revenueContribution),
-                r.revenueContributionShare === null ? "–" : percent(r.revenueContributionShare * 100, 1),
+                label,
+                compactINR(row.contributionRevenue),
+                compactINR(row.directCost),
+                compactINR(row.apportionedCost),
+                compactINR(row.revenueContribution),
+                row.revenueContributionShare === null ? "–" : percent(row.revenueContributionShare * 100, 1),
               ],
-              rating: r.ratings.netRevContrib,
+              rating: row.ratings.netRevContrib,
             }))}
             foot={[
-              isSlice ? "Firm total" : "Total",
+              singleVertical ? "Firm total" : "Total",
               compactINR(contribRevTot),
               compactINR(directCostTot),
               compactINR(apportCostTot),
@@ -351,7 +476,7 @@ export default async function ScorecardPage({
             title="Net collection contribution"
             accent="border-positive"
             head={[
-              "Vertical",
+              firstColHead,
               "Collection",
               "Direct cost",
               "Apportioned cost",
@@ -359,19 +484,19 @@ export default async function ScorecardPage({
               "% of total",
               "Rating",
             ]}
-            rows={shown.map((r) => ({
+            rows={rowSource.map(({ label, row }) => ({
               cells: [
-                r.label,
-                compactINR(r.collectionActual),
-                compactINR(r.directCost),
-                compactINR(r.apportionedCost),
-                compactINR(r.collectionContribution),
-                r.collectionContributionShare === null ? "–" : percent(r.collectionContributionShare * 100, 1),
+                label,
+                compactINR(row.collectionActual),
+                compactINR(row.directCost),
+                compactINR(row.apportionedCost),
+                compactINR(row.collectionContribution),
+                row.collectionContributionShare === null ? "–" : percent(row.collectionContributionShare * 100, 1),
               ],
-              rating: r.ratings.netCollContrib,
+              rating: row.ratings.netCollContrib,
             }))}
             foot={[
-              isSlice ? "Firm total" : "Total",
+              singleVertical ? "Firm total" : "Total",
               compactINR(collActTot),
               compactINR(directCostTot),
               compactINR(apportCostTot),
@@ -383,18 +508,18 @@ export default async function ScorecardPage({
           <WorkingCard
             title={`Receivables ageing${data.arAsOf ? ` — as at ${data.arAsOf}` : ""}`}
             accent="border-caution"
-            head={["Vertical", ...BUCKET_LABELS, "Total", "Wtd avg days", "Rating"]}
-            rows={shown.map((r) => ({
+            head={[firstColHead, ...BUCKET_LABELS, "Total", "Wtd avg days", "Rating"]}
+            rows={rowSource.map(({ label, row }) => ({
               cells: [
-                r.label,
-                ...r.ageingBuckets.map((b) => (b ? money(b) : "–")),
-                money(r.ageingTotal),
-                r.ageingDays === null ? "–" : r.ageingDays.toFixed(0),
+                label,
+                ...row.ageingBuckets.map((b) => (b ? money(b) : "–")),
+                money(row.ageingTotal),
+                row.ageingDays === null ? "–" : row.ageingDays.toFixed(0),
               ],
-              rating: r.ratings.ageing,
+              rating: row.ratings.ageing,
             }))}
             foot={[
-              isSlice ? "Firm total" : "Total",
+              singleVertical ? "Firm total" : "Total",
               ...ageBucketTot.map((b) => (b ? money(b) : "–")),
               money(ageGrandTot),
               ageBlendedDays === null ? "–" : ageBlendedDays.toFixed(0),
