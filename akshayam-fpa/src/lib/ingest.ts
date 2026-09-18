@@ -1328,7 +1328,7 @@ export async function commitBudget(
   return transaction(async (client) => {
     const fy = parsed.fyStartYear;
     const loaded: { slug: string; name: string; pnlRows: number; expenseRows: number }[] = [];
-    let uploadId = 0;
+    let primaryUploadId = 0;
     let rowsInserted = 0;
 
     for (const sheet of parsed.entities) {
@@ -1342,16 +1342,20 @@ export async function commitBudget(
       // error - it is a sheet for someone else's books.
       if (!entity) continue;
 
-      // The upload row is recorded against the first entity loaded, because an
-      // upload belongs to one; the others are named in its summary.
-      if (uploadId === 0) {
-        uploadId = await createUpload(
-          client, entity.id, "budget", meta,
-          `${fy}-04-01`, `${fy + 1}-03-31`,
-          parsed.entities.reduce((n, e) => n + e.pnl.length + e.expenses.length, 0),
-          { detected: parsed.detected, warnings: parsed.warnings },
-        );
-      }
+      // One upload row per entity actually loaded, not just the first the
+      // sheets happen to list (the group's own sheet reads before either
+      // company's). Each company's own Uploaded Files register should show
+      // what this workbook did to its own books; a single record tied only
+      // to whichever entity loaded first would never appear there at all -
+      // "group" is not among any company's own memberIds, so it would not
+      // even show on the group's own register.
+      const uploadId = await createUpload(
+        client, entity.id, "budget", meta,
+        `${fy}-04-01`, `${fy + 1}-03-31`,
+        sheet.pnl.length + sheet.expenses.length,
+        { detected: parsed.detected, warnings: parsed.warnings },
+      );
+      if (primaryUploadId === 0) primaryUploadId = uploadId;
 
       await client.query(
         "delete from budget_pnl where entity_id = $1 and fy_start_year = $2",
@@ -1388,7 +1392,7 @@ export async function commitBudget(
     }
 
     return {
-      uploadId,
+      uploadId: primaryUploadId,
       rowsInserted,
       newAccounts: [],
       newVerticals: [],
