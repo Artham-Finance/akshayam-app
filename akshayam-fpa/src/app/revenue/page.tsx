@@ -316,6 +316,19 @@ export default async function RevenuePage({
         : null,
     });
 
+    // "Actual" ties to the P&L exactly, except here: a revenue-transfer
+    // deduction (see the P&L's own card) comes off this figure but never off
+    // the ledger-derived statement, so the two diverge on purpose within the
+    // window it applies. The tile's caption says so only when it actually did.
+    const hasRevenueTransferInWindow =
+      entity.slug === "akshayam" &&
+      (
+        await query<{ exists: boolean }>(
+          "select exists(select 1 from revenue_transfer_entries where entity_id = $1 and invoice_date between $2 and $3) as exists",
+          [entity.id, start, end],
+        )
+      )[0]?.exists === true;
+
     const customerRows = customer
       ? await runDrill({
           kind: "revenue",
@@ -538,7 +551,11 @@ export default async function RevenuePage({
             <KpiTile
               label="Actual"
               value={compactINR(headline.actual)}
-              note="Net of credit notes · matches the P&L"
+              note={
+                hasRevenueTransferInWindow
+                  ? "Net of credit notes and revenue transferred to RBJV — see the P&L's own card"
+                  : "Net of credit notes · matches the P&L"
+              }
               tone="positive"
               active={drill === "fee"}
               href={withParams("/revenue", params, { drill: drill === "fee" ? null : "fee" })}

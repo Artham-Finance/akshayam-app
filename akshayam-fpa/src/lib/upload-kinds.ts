@@ -99,6 +99,31 @@ export const UPLOAD_KINDS: Omit<UploadKindInfo, "lastUpload">[] = [
     needsAsOf: true,
     asOfLabel: "Snapshot date",
   },
+  {
+    kind: "osb_entries",
+    title: "OSB Entries — Revenue transfer to RBJV",
+    zohoPath: "Not a Zoho report — a hand-maintained list of the invoices transferred",
+    blurb:
+      "For Akshayam: invoices raised through GIFT where a portion of the value is really RBJV's " +
+      "own team's work. Shown as its own card on the P&L (no ledger entry of its own to fold " +
+      "into the statement) and deducted from GIFT's revenue and collection actuals on the " +
+      "Revenue and Collections tabs. Replaces the whole list on every upload — remove a row " +
+      "from the file and it disappears here too.",
+    cadence: "Weekly",
+    needsAsOf: false,
+  },
+  {
+    kind: "reimbursement_bills",
+    title: "Bills — item-wise (for RE / RI reconciliation)",
+    zohoPath: "Purchases → Bills → Export (item-wise), or Settings → Import/Export → Export Data",
+    blurb:
+      "Only the reimbursable-expense (RE) lines feed the RE / RI Reconciliation view: the General Ledger " +
+      "export collapses a bill's line items and loses the RI number typed into each one, so this narrower, " +
+      "item-level export is read instead, and only lines booked to a reimbursement account are kept. " +
+      "A file replaces exactly the bill dates it covers.",
+    cadence: "Weekly",
+    needsAsOf: false,
+  },
 ];
 
 /** The report title behind a stored upload's `kind`. */

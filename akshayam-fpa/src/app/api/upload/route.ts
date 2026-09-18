@@ -11,13 +11,17 @@ import {
   commitGeneralLedger,
   commitInvoices,
   commitPayments,
+  commitReimbursementBills,
   commitRetainers,
+  commitRevenueTransferEntries,
   commitTrialBalance,
   type CommitResult,
 } from "@/lib/ingest";
 import { parseBudgetWorkbook } from "@/lib/parse/budget";
 import { parseGeneralLedger } from "@/lib/parse/gl";
+import { parseReimbursementBills } from "@/lib/parse/reimbursement-bills";
 import { parseRetainers } from "@/lib/parse/retainers";
+import { parseRevenueTransfer } from "@/lib/parse/revenue-transfer";
 import { parseArAging, parseCreditNotes, parseInvoices, parsePayments } from "@/lib/parse/sales";
 import { parseTrialBalance, type TbBasis } from "@/lib/parse/tb";
 import { parseForm26AS } from "@/lib/parse/tds26as";
@@ -29,7 +33,7 @@ export const maxDuration = 300;
 
 const KINDS = [
   "gl", "opening_tb", "invoices", "payments", "ar_aging", "credit_notes", "retainers",
-  "budget", "tds_26as",
+  "budget", "tds_26as", "reimbursement_bills", "osb_entries",
 ] as const;
 type Kind = (typeof KINDS)[number];
 
@@ -255,6 +259,26 @@ export async function POST(request: Request) {
         warnings = parsed.warnings;
         detected = parsed.detected;
         summary = { asOf: parsed.asOf, totalOutstanding: parsed.totalOutstanding };
+        break;
+      }
+      case "reimbursement_bills": {
+        const parsed = await parseReimbursementBills(bytes);
+        result = await commitReimbursementBills(entity.id, parsed, meta);
+        warnings = parsed.warnings;
+        detected = parsed.detected;
+        summary = {
+          period: [parsed.periodStart, parsed.periodEnd],
+          reimbursementLines: parsed.rows.length,
+          untagged: parsed.untaggedCount,
+        };
+        break;
+      }
+      case "osb_entries": {
+        const parsed = await parseRevenueTransfer(bytes);
+        result = await commitRevenueTransferEntries(entity.id, parsed, meta);
+        warnings = parsed.warnings;
+        detected = parsed.detected;
+        summary = { period: [parsed.periodStart, parsed.periodEnd], rows: parsed.rows.length };
         break;
       }
       default:

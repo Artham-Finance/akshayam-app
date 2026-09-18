@@ -110,7 +110,7 @@ async function actualsByVertical(
      * total the same way, reading the same is_osb rows, so the two stay
      * equal without either copying the other's total.
      */
-    const [gl, osb] = await Promise.all([
+    const [gl, osb, transferred] = await Promise.all([
       query<ActualRow>(
         `select g.vertical_id, max(v.name) as name,
                 sum(g.credit - g.debit)::numeric as actual
@@ -136,24 +136,60 @@ async function actualsByVertical(
           group by i.vertical_id`,
         [entityIds, window.start, window.end, verticalIds, verticalId],
       ),
+      revenueTransferByVertical(entityIds, verticalIds, verticalId, window),
     ]);
-    return [...gl, ...osb];
+    return [...gl, ...osb, ...transferred];
   }
 
   // Fee receipts only: a reimbursement recovery is not collection performance,
   // and the allocation split is what keeps a mixed remittance out of the wrong
   // half.
+  const [collections, transferred] = await Promise.all([
+    query<ActualRow>(
+      `select a.vertical_id, max(v.name) as name,
+              sum(case when a.is_reimbursement then 0 else a.amount_base end)::numeric as actual
+         from payment_allocations a
+         join payments p on p.id = a.payment_id
+         left join verticals v on v.id = a.vertical_id
+        where a.entity_id = any($1::int[]) and p.payment_date between $2 and $3
+          ${verticalScope("$4", "a.vertical_id")}
+          and ($5::int is null or a.vertical_id = $5)
+        group by a.vertical_id`,
+      [entityIds, window.start, window.end, verticalIds, verticalId],
+    ),
+    // Only the ones marked paid - collection performance, not billing.
+    revenueTransferByVertical(entityIds, verticalIds, verticalId, window, true),
+  ]);
+  return [...collections, ...transferred];
+}
+
+/**
+ * Revenue passed on to RBJV, deducted from the vertical it was raised
+ * under (GIFT, for Akshayam) rather than left in that vertical's own
+ * figures - the portion is really RBJV's team's work, not Akshayam's.
+ *
+ * Negative by construction, unioned into actualsByVertical's own totals the
+ * same way OSB revenue is added: as a plain row the caller sums in, not a
+ * special case it has to know about.
+ */
+async function revenueTransferByVertical(
+  entityIds: number[],
+  verticalIds: number[] | null,
+  verticalId: number | null,
+  window: BudgetWindow,
+  paidOnly = false,
+): Promise<ActualRow[]> {
   return query<ActualRow>(
-    `select a.vertical_id, max(v.name) as name,
-            sum(case when a.is_reimbursement then 0 else a.amount_base end)::numeric as actual
-       from payment_allocations a
-       join payments p on p.id = a.payment_id
-       left join verticals v on v.id = a.vertical_id
-      where a.entity_id = any($1::int[]) and p.payment_date between $2 and $3
-        ${verticalScope("$4", "a.vertical_id")}
-        and ($5::int is null or a.vertical_id = $5)
-      group by a.vertical_id`,
-    [entityIds, window.start, window.end, verticalIds, verticalId],
+    `select t.vertical_id, max(v.name) as name,
+            -sum(t.amount)::numeric as actual
+       from revenue_transfer_entries t
+       left join verticals v on v.id = t.vertical_id
+      where t.entity_id = any($1::int[]) and t.invoice_date between $2 and $3
+        and (not $6::boolean or lower(coalesce(t.status, '')) = 'paid')
+        ${verticalScope("$4", "t.vertical_id")}
+        and ($5::int is null or t.vertical_id = $5)
+      group by t.vertical_id`,
+    [entityIds, window.start, window.end, verticalIds, verticalId, paidOnly],
   );
 }
 

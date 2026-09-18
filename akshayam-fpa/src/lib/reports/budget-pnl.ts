@@ -119,7 +119,7 @@ export async function buildBudgetVsActualPnl(opts: {
   const start = window?.start ?? fyRange.start;
   const end = window?.end ?? fyRange.end;
 
-  const [glRows, osbRows, revenueTransferRows, budgetRows] = await Promise.all([
+  const [glRows, osbRows, budgetRows] = await Promise.all([
     query<{ month_key: string; group_code: string | null; amount: number }>(
       // credit - debit, so income is positive and a cost negative: the same
       // convention the P&L page uses, which is what lets the two agree.
@@ -157,26 +157,6 @@ export async function buildBudgetVsActualPnl(opts: {
       [entity.memberIds, start, end, verticalId, entity.verticalIds],
     ),
     /**
-     * Revenue transferred to RBJV - the mirror image of OSB revenue above.
-     * These invoices have real gl_entries behind them, but a portion of the
-     * value is not really Akshayam's own, so it is deducted from the same
-     * 'revenue' bucket OSB revenue adds to. Excluded when consolidating: see
-     * buildProfitAndLoss for the same exclusion and its reasoning.
-     */
-    query<{ month_key: string; group_code: string; amount: number }>(
-      `select to_char(i.invoice_date, 'YYYY-MM') as month_key,
-              'revenue' as group_code,
-              -sum(i.amount_base) as amount
-         from invoice_lines i
-        where i.entity_id = any($1::int[]) and i.is_revenue_transfer
-          and not $6::boolean
-          and i.invoice_date between $2 and $3
-          and ($4::int is null or i.vertical_id = $4)
-          ${verticalScope("$5", "i.vertical_id")}
-        group by 1`,
-      [entity.memberIds, start, end, verticalId, entity.verticalIds, entity.consolidates],
-    ),
-    /**
      * The budget is held for the entity itself, not summed from members: the
      * consolidated sheet is its own schedule and already excludes the common
      * cost Akshayam is charged by RBJV, which adding the two companies would
@@ -202,7 +182,7 @@ export async function buildBudgetVsActualPnl(opts: {
   const byCode = new Map(lines.map((l) => [l.code, l]));
   const valid = new Set(months.map((m) => m.key));
 
-  for (const row of [...glRows, ...osbRows, ...revenueTransferRows]) {
+  for (const row of [...glRows, ...osbRows]) {
     if (!valid.has(row.month_key)) continue;
     const code = row.group_code ? GROUP_TO_LINE[row.group_code] : undefined;
     // An account with no reporting line has nowhere to sit on a statement this

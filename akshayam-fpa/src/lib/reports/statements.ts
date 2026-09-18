@@ -90,7 +90,7 @@ export async function buildProfitAndLoss(opts: {
     amount: number;
   };
 
-  const [groups, rows, osbRows, revenueTransferRows] = await Promise.all([
+  const [groups, rows, osbRows] = await Promise.all([
     loadGroups(entity.id, "pnl"),
     query<FlatRow>(
       `select to_char(g.txn_date, 'YYYY-MM') as month_key,
@@ -141,43 +141,9 @@ export async function buildProfitAndLoss(opts: {
         group by 1, 2, 3, 4, 5`,
       [entity.memberIds, start, end, verticalId, entity.verticalIds],
     ),
-    /**
-     * Revenue transferred to RBJV, deducted from the ledger's own figure
-     * rather than posted into it.
-     *
-     * The mirror image of OSB revenue above: these invoices have real
-     * gl_entries behind them (they are genuine Akshayam invoices), but a
-     * portion of the value is not really Akshayam's own, so it comes off
-     * Revenue from Operations here rather than being left in it. Negated so
-     * it lands as a deduction, and joined to the same 'revenue' group_code
-     * Akshayam's own ledger revenue uses, so it sits under Revenue from
-     * Operations rather than beside it.
-     *
-     * Excluded entirely when consolidating: the client's payment is genuine
-     * third-party revenue for the group regardless of which company's team
-     * did the work, and there is nothing on RBJV's own books to offset a
-     * deduction here.
-     */
-    query<FlatRow>(
-      `select to_char(i.invoice_date, 'YYYY-MM') as month_key,
-              a.group_code,
-              a.id         as account_id,
-              a.name       as account_name,
-              a.sort_order as account_sort,
-              -sum(i.amount_base) as amount
-         from invoice_lines i
-         join accounts a on a.entity_id = i.entity_id and a.name = 'Revenue transferred to RBJV'
-        where i.entity_id = any($1::int[]) and i.is_revenue_transfer
-          and not $6::boolean
-          and i.invoice_date between $2 and $3
-          and ($4::int is null or i.vertical_id = $4)
-          ${verticalScope("$5", "i.vertical_id")}
-        group by 1, 2, 3, 4, 5`,
-      [entity.memberIds, start, end, verticalId, entity.verticalIds, entity.consolidates],
-    ),
   ]);
 
-  const result = assemble(months, groups, [...rows, ...osbRows, ...revenueTransferRows], detail);
+  const result = assemble(months, groups, [...rows, ...osbRows], detail);
 
   // Presentational only, and only for the whole company - a single vertical's
   // slice of Profit Before Tax is not a taxable base of its own.

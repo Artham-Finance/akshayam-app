@@ -15,6 +15,8 @@ import type {
 } from "@/lib/parse/sales";
 import type { BudgetParseResult } from "@/lib/parse/budget";
 import type { RetainerParseResult } from "@/lib/parse/retainers";
+import type { ReimbursementBillsParseResult } from "@/lib/parse/reimbursement-bills";
+import type { RevenueTransferParseResult } from "@/lib/parse/revenue-transfer";
 
 /**
  * Committing a parsed file into the database.
@@ -641,6 +643,98 @@ export async function commitPayments(
 
     await linkByInvoice(client, entityId);
     return { uploadId, rowsInserted, newAccounts: [], newVerticals, needsReview: [] };
+  });
+}
+
+/* ============================================================
+   Reimbursement bill lines (RE / RI reconciliation)
+   ============================================================ */
+
+export async function commitReimbursementBills(
+  entityId: number,
+  parsed: ReimbursementBillsParseResult,
+  meta: FileMeta,
+): Promise<CommitResult> {
+  return transaction(async (client) => {
+    const { ids: verticalIds, created: newVerticals } = await resolveVerticals(
+      client,
+      entityId,
+      parsed.verticals,
+    );
+
+    const uploadId = await createUpload(
+      client, entityId, "reimbursement_bills", meta, parsed.periodStart, parsed.periodEnd,
+      parsed.rows.length, { detected: parsed.detected, warnings: parsed.warnings },
+    );
+
+    // Replace the period wholesale, the same rule every other bill-date-keyed
+    // upload follows: a re-export of a range replaces exactly that range.
+    if (parsed.periodStart && parsed.periodEnd) {
+      await client.query(
+        "delete from reimbursement_bill_lines where entity_id = $1 and bill_date between $2 and $3",
+        [entityId, parsed.periodStart, parsed.periodEnd],
+      );
+    }
+
+    const rowsInserted = await bulkInsert(
+      client,
+      "reimbursement_bill_lines",
+      [
+        "entity_id", "upload_id", "bill_date", "vendor_name", "bill_number", "description",
+        "customer_name", "vertical_id", "amount", "ri_references",
+      ],
+      parsed.rows.map((row) => [
+        entityId, uploadId, row.billDate, row.vendorName, row.billNumber, row.description,
+        row.customerName, row.vertical ? verticalIds.get(row.vertical) ?? null : null,
+        row.amount, row.riReferences,
+      ]),
+    );
+
+    return { uploadId, rowsInserted, newAccounts: [], newVerticals, needsReview: [] };
+  });
+}
+
+/* ============================================================
+   Revenue transferred to RBJV
+   ============================================================ */
+
+export async function commitRevenueTransferEntries(
+  entityId: number,
+  parsed: RevenueTransferParseResult,
+  meta: FileMeta,
+): Promise<CommitResult> {
+  return transaction(async (client) => {
+    // Hand-maintained, like OSB: the sheet itself says which invoices carry
+    // a transfer right now, so an invoice removed from it has to disappear
+    // here too, not just stop being added - a wholesale replace, not scoped
+    // to a date range the way a period export would be.
+    const vertical = await client.query<{ id: number }>(
+      "select id from verticals where entity_id = $1 and upper(code) = 'GIFT'",
+      [entityId],
+    );
+    const verticalId = vertical.rows[0]?.id ?? null;
+
+    const uploadId = await createUpload(
+      client, entityId, "osb_entries", meta, parsed.periodStart, parsed.periodEnd,
+      parsed.rows.length, { detected: parsed.detected, warnings: parsed.warnings },
+    );
+
+    await client.query("delete from revenue_transfer_entries where entity_id = $1", [entityId]);
+
+    const rowsInserted = await bulkInsert(
+      client,
+      "revenue_transfer_entries",
+      [
+        "entity_id", "upload_id", "vertical_id", "invoice_number", "invoice_date",
+        "customer_name", "salesperson_name", "amount", "status",
+      ],
+      parsed.rows.map((row) => [
+        entityId, uploadId, verticalId, row.invoiceNumber, row.invoiceDate,
+        row.customerName, row.salesperson, row.amount, row.status,
+      ]),
+    );
+
+    return { uploadId, rowsInserted, newAccounts: [], newVerticals: [], needsReview: [] };
   });
 }
 
