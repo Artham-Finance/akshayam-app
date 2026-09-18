@@ -843,8 +843,18 @@ export async function projectRevenueFromLedger(
   if (hasLedgerRevenue.rowCount === 0) return;
 
   // OSB rows have no ledger behind them by definition - leave them be.
+  //
+  // Revenue-transfer rows are spared for the opposite reason: they do have a
+  // ledger behind them, but they are hand-maintained markers on top of it, not
+  // something this projection can rebuild. The re-insert below reads only
+  // gl_entries and never sets is_revenue_transfer, so sweeping them up here
+  // would drop them for good - and because commitInvoices calls this straight
+  // after commitRevenueTransfer, inside the same transaction, it would drop the
+  // rows the upload had just written. The sheet parsed, the rows were inserted,
+  // the delete removed them, and the upload still reported success: exactly the
+  // silence this was reported as.
   await client.query(
-    "delete from invoice_lines where entity_id = $1 and not is_osb",
+    "delete from invoice_lines where entity_id = $1 and not is_osb and not is_revenue_transfer",
     [entityId],
   );
 
