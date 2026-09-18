@@ -22,6 +22,7 @@ export function QuarterTabs({
   months,
   writtenTo,
   hrefFor,
+  alwaysShowMonths = false,
 }: {
   current: QuarterNo;
   /** the month key inside the quarter, when one is picked */
@@ -33,10 +34,18 @@ export function QuarterTabs({
   /** the date the ledger has been written to */
   writtenTo: string | null;
   hrefFor: (quarter: QuarterNo, month: string | null) => string;
+  /**
+   * Show every reached month regardless of quarter, rather than only the
+   * active quarter's - for a reader who reads one vertical at a time and
+   * wants any month a click away, not gated behind picking its quarter
+   * first. The quarter tabs above still choose which whole-quarter (or
+   * cumulative-to-quarter) figure "no month picked" shows.
+   */
+  alwaysShowMonths?: boolean;
 }) {
   const labels = ["Q1 Apr-Jun", "Q2 Jul-Sep", "Q3 Oct-Dec", "Q4 Jan-Mar"];
   const inQuarter = months.filter(
-    (m) => m.quarter === current && (!writtenTo || m.start <= writtenTo),
+    (m) => (alwaysShowMonths || m.quarter === current) && (!writtenTo || m.start <= writtenTo),
   );
 
   const chip =
@@ -81,7 +90,7 @@ export function QuarterTabs({
           {inQuarter.map((m) => (
             <Link
               key={m.key}
-              href={hrefFor(current, m.key)}
+              href={hrefFor(m.quarter, m.key)}
               scroll={false}
               className={clsx(
                 chip,
