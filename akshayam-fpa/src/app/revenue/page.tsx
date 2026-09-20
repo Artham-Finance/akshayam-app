@@ -28,6 +28,10 @@ import {
 import { buildBudgetVsActual } from "@/lib/reports/budget";
 import { isDrill, runDrill } from "@/lib/reports/drilldowns";
 import { listCustomers } from "@/lib/reports/customer-statement";
+import {
+  buildReimbursementReco,
+  hasReimbursementBillLines,
+} from "@/lib/reports/reimbursement-reco";
 import { requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
@@ -328,6 +332,13 @@ export default async function RevenuePage({
           [entity.id, start, end],
         )
       )[0]?.exists === true;
+
+    // A compact summary card, not the full page: the whole financial year's
+    // running position (same scope /reimbursements itself uses), regardless
+    // of whatever period the header picker is showing.
+    const reimbursementReco = (await hasReimbursementBillLines(entity.memberIds))
+      ? await buildReimbursementReco({ entity, start: fyRange.start, end: fyRange.end, fyStartYear: fy })
+      : null;
 
     const customerRows = customer
       ? await runDrill({
@@ -704,6 +715,38 @@ export default async function RevenuePage({
           )}
 
           {chosen && chosenPanel}
+
+          {reimbursementReco && (
+            <Card>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <CardTitle hint={`FY ${fy}-${String(fy + 1).slice(2)} · running position`}>
+                    RE / RI Reconciliation
+                  </CardTitle>
+                  <p className="-mt-2 text-[12.5px] text-ink-muted">
+                    <span className="font-medium text-caution">
+                      {reimbursementReco.totals.reNeedsRiCount} RI still need raising
+                    </span>{" "}
+                    ({money(reimbursementReco.totals.reNeedsRiAmount)}) ·{" "}
+                    <span className="font-medium text-caution">
+                      {reimbursementReco.totals.riOnlyCount} RI raised, RE not accounted
+                    </span>{" "}
+                    ({money(reimbursementReco.totals.riOnlyAmount)}) ·{" "}
+                    <span className="font-medium text-positive">
+                      {reimbursementReco.totals.matchedCount} matched
+                    </span>{" "}
+                    ({money(reimbursementReco.totals.matchedAmount)})
+                  </p>
+                </div>
+                <Link
+                  href="/reimbursements"
+                  className="whitespace-nowrap rounded-md border border-line px-3 py-1.5 text-[12.5px] font-medium text-navy hover:bg-surface-sunk"
+                >
+                  View full reconciliation →
+                </Link>
+              </div>
+            </Card>
+          )}
 
           {showCurrencySplit && (
             <Card padded={false}>

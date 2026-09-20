@@ -1,6 +1,6 @@
 import { query } from "@/lib/db";
 import type { Entity } from "@/lib/entity";
-import { normaliseRiRef } from "@/lib/parse/reimbursement-bills";
+import { extractRiRefs, normaliseRiRef } from "@/lib/parse/reimbursement-bills";
 
 /**
  * RE / RI reconciliation.
@@ -18,6 +18,20 @@ import { normaliseRiRef } from "@/lib/parse/reimbursement-bills";
  * not Akshayam's. A credit note against an already-raised RI (its own
  * txn_number starts "RICN") is not a fresh RI raised, so it is left out of
  * the RI side entirely rather than read as a second, contradictory invoice.
+ *
+ * RE has two sources, not one: most of it is credit-card bill lines (the
+ * item-wise Bills upload), but petty cash is reimbursed by posting a journal
+ * entry straight to the same expense account, with the RI number typed into
+ * *that* entry's own description instead ("PETTY_APRIL-011 stamp paper
+ * RI-2627-0028") - confirmed against RBJV's ledger, where 36 of 38 such
+ * journal entries carry one. Reading only the Bills upload left every one of
+ * those permanently unmatched, which is a real gap, not a card that will
+ * eventually clear. The other GL side of this account, ordinary card
+ * "expense" postings with no invoice or journal behind them, carries no
+ * narrative at all (just the bank account's own name) and so has nothing to
+ * extract - those stay unrepresented on the RE side, a genuine hole no text
+ * matching can close, until they are booked through the bill or a journal
+ * that names the RI.
  *
  * One RE line can name more than one RI ("CDSL- RI-2627-0013, RI-2627-0042"
  * is a real one) and is shown once per reference it matches; an RI matched by
@@ -101,6 +115,26 @@ interface ReRow {
   ri_references: string[];
 }
 
+interface PettyCashRow {
+  entity_id: number;
+  entity_name: string;
+  txn_date: string;
+  description: string | null;
+  amount: string;
+}
+
+/** A reimbursable expense from either source, in the one shape the matching loop reads. */
+interface ReCandidate {
+  entity_id: number;
+  entity_name: string;
+  date: string;
+  vendor: string | null;
+  customer: string | null;
+  description: string | null;
+  amount: number;
+  ri_references: string[];
+}
+
 interface RiRow {
   entity_id: number;
   entity_name: string;
@@ -119,7 +153,7 @@ export async function buildReimbursementReco(opts: {
   const { entity, start, end, fyStartYear } = opts;
   const thisFyCode = currentFyCode(fyStartYear);
 
-  const [reRows, riRows] = await Promise.all([
+  const [reRows, pettyCashRows, riRows] = await Promise.all([
     query<ReRow>(
       `select r.entity_id, e.name as entity_name, to_char(r.bill_date, 'YYYY-MM-DD') as bill_date,
               r.vendor_name, r.bill_number, r.description, r.customer_name, r.amount, r.ri_references
@@ -127,6 +161,22 @@ export async function buildReimbursementReco(opts: {
          join entities e on e.id = r.entity_id
         where r.entity_id = any($1::int[]) and r.bill_date between $2 and $3
         order by r.bill_date`,
+      [entity.memberIds, start, end],
+    ),
+    // Petty cash reimbursed by a journal straight to the expense account,
+    // with the RI number in that entry's own description - see the module
+    // docstring. Ordinary card "expense" postings are deliberately not read
+    // here: confirmed against RBJV's ledger, none of them carry a narrative
+    // an RI number could ever be extracted from.
+    query<PettyCashRow>(
+      `select g.entity_id, e.name as entity_name, to_char(g.txn_date, 'YYYY-MM-DD') as txn_date,
+              g.description, g.debit as amount
+         from gl_entries g
+         join accounts a on a.id = g.account_id
+         join entities e on e.id = g.entity_id
+        where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
+          and a.group_code = 'reimbursements' and a.name not ilike '%income%' and g.txn_type = 'journal'
+        order by g.txn_date`,
       [entity.memberIds, start, end],
     ),
     query<RiRow>(
@@ -141,6 +191,29 @@ export async function buildReimbursementReco(opts: {
       [entity.memberIds, start, end],
     ),
   ]);
+
+  const reCandidates: ReCandidate[] = [
+    ...reRows.map((r) => ({
+      entity_id: r.entity_id,
+      entity_name: r.entity_name,
+      date: r.bill_date,
+      vendor: r.vendor_name,
+      customer: r.customer_name,
+      description: r.description,
+      amount: Number(r.amount),
+      ri_references: r.ri_references ?? [],
+    })),
+    ...pettyCashRows.map((r) => ({
+      entity_id: r.entity_id,
+      entity_name: r.entity_name,
+      date: r.txn_date,
+      vendor: "Petty cash",
+      customer: null,
+      description: r.description,
+      amount: Number(r.amount),
+      ri_references: extractRiRefs(r.description),
+    })),
+  ];
 
   interface RiEntry {
     entityId: number;
@@ -179,8 +252,8 @@ export async function buildReimbursementReco(opts: {
   const reNotTagged: RecoRow[] = [];
   const rePriorYear: RecoRow[] = [];
 
-  for (const re of reRows) {
-    const refs = re.ri_references ?? [];
+  for (const re of reCandidates) {
+    const refs = re.ri_references;
     let anyMatched = false;
 
     for (const ref of refs) {
@@ -192,10 +265,10 @@ export async function buildReimbursementReco(opts: {
         status: "matched",
         entityName: re.entity_name,
         riRef: ri.txnNumber,
-        reDate: re.bill_date,
-        reAmount: Number(re.amount),
-        reVendor: re.vendor_name,
-        reCustomer: re.customer_name,
+        reDate: re.date,
+        reAmount: re.amount,
+        reVendor: re.vendor,
+        reCustomer: re.customer,
         reDescription: re.description,
         riDate: ri.date,
         riAmount: ri.amount,
@@ -209,10 +282,10 @@ export async function buildReimbursementReco(opts: {
       status: "re_needs_ri",
       entityName: re.entity_name,
       riRef: refs.length > 0 ? refs.join(", ") : null,
-      reDate: re.bill_date,
-      reAmount: Number(re.amount),
-      reVendor: re.vendor_name,
-      reCustomer: re.customer_name,
+      reDate: re.date,
+      reAmount: re.amount,
+      reVendor: re.vendor,
+      reCustomer: re.customer,
       reDescription: re.description,
       riDate: null,
       riAmount: null,
