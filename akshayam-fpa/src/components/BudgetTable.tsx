@@ -129,6 +129,37 @@ export function BudgetTable({
     );
   };
 
+  /** One vertical's row, or the total - reused for the pinned copy on top and the plain one at the bottom. */
+  const renderRow = (row: (typeof rows)[number], isTotal: boolean, key: string) => (
+    <tr
+      key={key}
+      className={clsx(isTotal ? "bg-surface-sunk font-semibold" : "hover:bg-surface-sunk/50")}
+    >
+      <th
+        scope="row"
+        className={clsx(
+          "border-b border-line px-4 py-2 text-left",
+          isTotal ? "font-semibold text-ink" : "font-normal text-ink",
+        )}
+      >
+        {(() => {
+          const href = isTotal ? null : hrefFor?.(row);
+          return href ? (
+            <Link href={href} className="font-medium text-navy hover:underline">
+              {row.name}
+            </Link>
+          ) : (
+            row.name
+          );
+        })()}
+      </th>
+      <td className="num border-b border-line px-4 py-2 text-right text-ink-muted">
+        {money(row.annual)}
+      </td>
+      {ORDER(twin).map((which) => group(cellsFor(row, which), isTotal, twin, which))}
+    </tr>
+  );
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-max border-collapse text-[13px]">
@@ -181,38 +212,8 @@ export function BudgetTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, i) => {
-            const isTotal = i === rows.length - 1;
-            return (
-              <tr
-                key={row.code ?? row.name}
-                className={clsx(isTotal ? "bg-surface-sunk font-semibold" : "hover:bg-surface-sunk/50")}
-              >
-                <th
-                  scope="row"
-                  className={clsx(
-                    "border-b border-line px-4 py-2 text-left",
-                    isTotal ? "font-semibold text-ink" : "font-normal text-ink",
-                  )}
-                >
-                  {(() => {
-                    const href = isTotal ? null : hrefFor?.(row);
-                    return href ? (
-                      <Link href={href} className="font-medium text-navy hover:underline">
-                        {row.name}
-                      </Link>
-                    ) : (
-                      row.name
-                    );
-                  })()}
-                </th>
-                <td className="num border-b border-line px-4 py-2 text-right text-ink-muted">
-                  {money(row.annual)}
-                </td>
-                {ORDER(twin).map((which) => group(cellsFor(row, which), isTotal, twin, which))}
-              </tr>
-            );
-          })}
+          {renderRow(data.total, true, "top-total")}
+          {data.rows.map((row) => renderRow(row, false, row.code ?? row.name))}
         </tbody>
       </table>
     </div>

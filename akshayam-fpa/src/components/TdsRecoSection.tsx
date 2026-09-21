@@ -137,6 +137,12 @@ export async function TdsRecoSection({
   const drill = drillCustomer
     ? await tdsDrill(entity, fyStartYear, quarter, side, drillCustomer, DRILL_LIMIT)
     : null;
+  const drillTotalsRow = drill
+    ? [
+        "Total",
+        ...drill.columns.slice(1).map((c, i) => (i === drill.columns.length - 2 ? money(drill.total) : "")),
+      ]
+    : undefined;
 
   const unmatchedValue = reco.unmatchedDeductors.reduce((s, d) => s + d.taxDeducted, 0);
 
@@ -155,6 +161,44 @@ export async function TdsRecoSection({
 
   const linkFor = (row: { label: string }, s: TdsDrillSide) =>
     withParams("/receivables", params, { tds: row.label, tdsSide: s });
+
+  // Shared by each table's pinned copy above the rows and the plain one below them.
+  const segmentTotalsRow = [
+    "Total",
+    reco.byCustomer.length,
+    money(reco.totals.books),
+    money(reco.totals.form26as),
+    moneySigned(reco.totals.difference),
+  ];
+  const booksOnlyTotalsRow = [
+    `Total — ${reco.booksOnlyInvoices.length} invoice${reco.booksOnlyInvoices.length === 1 ? "" : "s"}`,
+    "",
+    "",
+    "",
+    money(reco.booksOnlyInvoices.reduce((s, r) => s + r.amount, 0)),
+  ];
+  const byVerticalTotalsRow = [
+    "Total",
+    money(reco.totals.books),
+    money(reco.totals.form26as),
+    moneySigned(reco.totals.difference),
+  ];
+  const unallocatedTotalsRow = [
+    `Total — ${reco.unallocated.length} customer${reco.unallocated.length === 1 ? "" : "s"}`,
+    money(reco.unallocated.reduce((s, r) => s + r.books, 0)),
+    money(reco.unallocated.reduce((s, r) => s + r.form26as, 0)),
+    moneySigned(reco.unallocated.reduce((s, r) => s + r.difference, 0)),
+  ];
+  const byCustomerTotalsRow = [
+    shownCustomers.length > 60
+      ? `Total — all ${shownCustomers.length} customers`
+      : `Total — ${shownCustomers.length} customer${shownCustomers.length === 1 ? "" : "s"}`,
+    "",
+    money(shownTotals.books),
+    money(shownTotals.form26as),
+    moneySigned(shownTotals.difference),
+  ];
+  const unmatchedDeductorsTotalsRow = ["Total", "", "", money(unmatchedValue)];
 
   return (
     <Card padded={false}>
@@ -306,13 +350,7 @@ export async function TdsRecoSection({
             s.form26as ? money(s.form26as) : "—",
             <DiffCell key={`d-${s.segment}`} value={s.difference} />,
           ])}
-          footer={[
-            "Total",
-            reco.byCustomer.length,
-            money(reco.totals.books),
-            money(reco.totals.form26as),
-            moneySigned(reco.totals.difference),
-          ]}
+          topTotals={segmentTotalsRow}
         />
         {segment && (
           <p className="px-4 py-3 text-[11.5px] text-ink-faint sm:px-5">
@@ -354,13 +392,7 @@ export async function TdsRecoSection({
               r.invoiceDate ? dateLabel(r.invoiceDate) : "—",
               money(r.amount),
             ])}
-            footer={[
-              `Total — ${reco.booksOnlyInvoices.length} invoice${reco.booksOnlyInvoices.length === 1 ? "" : "s"}`,
-              "",
-              "",
-              "",
-              money(reco.booksOnlyInvoices.reduce((s, r) => s + r.amount, 0)),
-            ]}
+            topTotals={booksOnlyTotalsRow}
           />
         </div>
       )}
@@ -389,12 +421,7 @@ export async function TdsRecoSection({
             <DataTable
               columns={drillColumns(drill.columns)}
               rows={drill.rows.map((r) => renderDrillRow(r, drill.columns))}
-              footer={[
-                "Total",
-                ...drill.columns.slice(1).map((c, i) =>
-                  i === drill.columns.length - 2 ? money(drill.total) : "",
-                ),
-              ]}
+              topTotals={drillTotalsRow}
             />
           </DrillPanel>
         </div>
@@ -455,12 +482,7 @@ export async function TdsRecoSection({
             money(v.form26as),
             <DiffCell key={`d-${v.key}`} value={v.difference} />,
           ])}
-          footer={[
-            "Total",
-            money(reco.totals.books),
-            money(reco.totals.form26as),
-            moneySigned(reco.totals.difference),
-          ]}
+          topTotals={byVerticalTotalsRow}
         />
 
         {showUnallocated && (
@@ -491,12 +513,7 @@ export async function TdsRecoSection({
                   r.form26as ? money(r.form26as) : "—",
                   <DiffCell key={`u-${r.key}`} value={r.difference} />,
                 ])}
-                footer={[
-                  `Total — ${reco.unallocated.length} customer${reco.unallocated.length === 1 ? "" : "s"}`,
-                  money(reco.unallocated.reduce((s, r) => s + r.books, 0)),
-                  money(reco.unallocated.reduce((s, r) => s + r.form26as, 0)),
-                  moneySigned(reco.unallocated.reduce((s, r) => s + r.difference, 0)),
-                ]}
+                topTotals={unallocatedTotalsRow}
               />
             </DrillPanel>
           </div>
@@ -564,15 +581,7 @@ export async function TdsRecoSection({
             disagree with the tiles above and with the segment table, which is
             worse than a footer that needs one line of explanation.
           */
-          footer={[
-            shownCustomers.length > 60
-              ? `Total — all ${shownCustomers.length} customers`
-              : `Total — ${shownCustomers.length} customer${shownCustomers.length === 1 ? "" : "s"}`,
-            "",
-            money(shownTotals.books),
-            money(shownTotals.form26as),
-            moneySigned(shownTotals.difference),
-          ]}
+          topTotals={byCustomerTotalsRow}
         />
         {shownCustomers.length > 60 && (
           <p className="px-4 py-3 text-[11.5px] text-ink-faint sm:px-5">
@@ -611,7 +620,7 @@ export async function TdsRecoSection({
               d.lines,
               money(d.taxDeducted),
             ])}
-            footer={["Total", "", "", money(unmatchedValue)]}
+            topTotals={unmatchedDeductorsTotalsRow}
           />
         </div>
       )}

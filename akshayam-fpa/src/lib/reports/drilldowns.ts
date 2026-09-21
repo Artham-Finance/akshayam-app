@@ -46,6 +46,13 @@ export interface DrillResult {
   rows: DrillCell[][];
   /** how many rows exist in total, which may exceed those returned */
   total: number;
+  /**
+   * A totals row, shaped like a row of `columns`, struck across every record
+   * matching the request - not just the ones returned when `limit` cut the
+   * list short. Shown above the individual rows so it reads without scrolling
+   * to the end of a long list.
+   */
+  totalsRow?: DrillCell[];
 }
 
 export interface DrillRequest {
@@ -494,6 +501,13 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
     const ordered = [...byCustomer.values()].sort((a, b) => b.total - a.total);
     const capped = req.limit ? ordered.slice(0, Math.max(1, Math.floor(req.limit))) : ordered;
 
+    // Struck across every customer matching the request, not just the ones
+    // `limit` returned - a cap should never quietly understate the total.
+    const totalsByMonth = monthKeys.map((k) =>
+      ordered.reduce((s, c) => s + (c.months.get(k) ?? 0), 0),
+    );
+    const grandTotal = ordered.reduce((s, c) => s + c.total, 0);
+
     return {
       title,
       columns: [
@@ -511,6 +525,12 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
         c.total,
       ]),
       total: ordered.length,
+      totalsRow: [
+        "Total",
+        ...(req.verticalId === null ? [null] : []),
+        ...totalsByMonth,
+        grandTotal,
+      ],
     };
   }
 

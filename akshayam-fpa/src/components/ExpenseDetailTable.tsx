@@ -22,10 +22,11 @@ import type { ExpenseDetailLine, ExpenseEntry } from "@/lib/reports/expense-deta
  * with the budget's heads closely enough to be trusted, and a figure matched
  * by name would be wrong in a way nobody could see.
  *
- * Entries belong to a month, so only a single month can be edited, and only
- * the period's own bills are ever opened. A quarter or a year to date is
- * shown read-only rather than inviting an entry that would have nowhere to be
- * filed.
+ * Opening a line always shows the bills behind its year-to-date actual, since
+ * that is the figure shown regardless of what the picker narrows the other
+ * columns to. Entries still belong to a month, so only a single month can be
+ * edited; a quarter or a year to date is shown read-only rather than inviting
+ * an entry that would have nowhere to be filed.
  *
  * Lines are grouped under their head - Staff Welfare, Computer - subscription,
  * and so on - and every group with more than one line collapses to a single
@@ -114,8 +115,8 @@ export function ExpenseDetailTable({
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-1 pt-4 sm:px-5">
         <p className="text-[11.5px] text-ink-muted">
           {month
-            ? "Open a line to see the bills behind it and record another. Each line's actual is the sum of its entries."
-            : "Read-only across more than one month — an entry belongs to the month the cost is reported in. Pick a single month to record one."}
+            ? "Open a line to see the bills behind its year-to-date actual and record another. Each line's actual is the sum of its entries."
+            : "Open a line to see the bills behind its year-to-date actual. Read-only across more than one month — an entry belongs to the month the cost is reported in. Pick a single month to record one."}
         </p>
         {collapsible.length > 0 && (
           <div className="flex shrink-0 gap-2 text-[11.5px]">

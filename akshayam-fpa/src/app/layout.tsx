@@ -6,6 +6,7 @@ import { fyBounds } from "@/lib/period";
 import type { PeriodCookie } from "@/lib/period-presets";
 import {
   getReportingPeriod,
+  ledgerWrittenTo,
   readReportingPeriodCookie,
 } from "@/lib/reporting-period";
 import "./globals.css";
@@ -33,6 +34,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   let periodLabel = "";
   let periodFyBounds: { start: string; end: string } | null = null;
   let isSlice = false;
+  let writtenTo: string | null = null;
 
   const user = await getCurrentUser();
 
@@ -55,6 +57,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       period = cookie;
       periodLabel = resolved.shortLabel;
       periodFyBounds = fyBounds(resolved.fyStartYear, entity.fy_start_month);
+      // How current the ledger is - said once in the header, rather than
+      // repeated (and occasionally omitted) on every page's own subtitle.
+      writtenTo = await ledgerWrittenTo(entity.memberIds, resolved.fyStartYear);
     } catch {
       // Database not reachable yet, or this user has been granted no company.
       // Either way the shell still renders; the page below says what is wrong.
@@ -76,6 +81,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             period={period}
             periodLabel={periodLabel}
             periodFyBounds={periodFyBounds}
+            ledgerWrittenTo={writtenTo}
             isSlice={isSlice}
             user={{
               name: user.name,

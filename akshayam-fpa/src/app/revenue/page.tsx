@@ -336,7 +336,7 @@ export default async function RevenuePage({
     // A compact summary card, not the full page: the whole financial year's
     // running position (same scope /reimbursements itself uses), regardless
     // of whatever period the header picker is showing.
-    const reimbursementReco = (await hasReimbursementBillLines(entity.memberIds))
+    const reimbursementReco = (await hasReimbursementBillLines(entity.memberIds, entity.verticalIds))
       ? await buildReimbursementReco({ entity, start: fyRange.start, end: fyRange.end, fyStartYear: fy })
       : null;
 
@@ -391,6 +391,7 @@ export default async function RevenuePage({
         <DataTable
           columns={drillColumns(chosen.columns)}
           rows={chosen.rows.map((r) => renderDrillRow(r, chosen.columns))}
+          topTotals={chosen.totalsRow ? renderDrillRow(chosen.totalsRow, chosen.columns) : undefined}
           emptyMessage="No documents of this kind in the period."
         />
       </DrillPanel>
@@ -509,6 +510,16 @@ export default async function RevenuePage({
       ri: verticalRows.reduce((n, r) => n + r.ri, 0),
       cnRi: verticalRows.reduce((n, r) => n + r.cnRi, 0),
     };
+    // Shared by the pinned copy above the rows and the plain one below them.
+    const verticalTotalsRow = [
+      "Total",
+      verticalTotals.professional === null ? "—" : money(verticalTotals.professional),
+      verticalTotals.retainer ? money(verticalTotals.retainer) : "—",
+      money(verticalTotals.fee),
+      verticalTotals.cnFee ? `(${money(verticalTotals.cnFee)})` : "—",
+      money(verticalTotals.fee - verticalTotals.cnFee),
+      verticalTotals.ri - verticalTotals.cnRi ? money(verticalTotals.ri - verticalTotals.cnRi) : "—",
+    ];
 
     return (
       <>
@@ -940,17 +951,7 @@ export default async function RevenuePage({
                 // here rather than in the Credit notes column to its left.
                 r.ri - r.cnRi ? money(r.ri - r.cnRi) : "—",
               ])}
-              footer={[
-                "Total",
-                verticalTotals.professional === null ? "—" : money(verticalTotals.professional),
-                verticalTotals.retainer ? money(verticalTotals.retainer) : "—",
-                money(verticalTotals.fee),
-                verticalTotals.cnFee ? `(${money(verticalTotals.cnFee)})` : "—",
-                money(verticalTotals.fee - verticalTotals.cnFee),
-                verticalTotals.ri - verticalTotals.cnRi
-                  ? money(verticalTotals.ri - verticalTotals.cnRi)
-                  : "—",
-              ]}
+              topTotals={verticalTotalsRow}
             />
             <p className="px-4 pb-4 text-[11.5px] text-ink-muted sm:px-5">
               Reimbursement is net of credit notes raised against those invoices, the same way

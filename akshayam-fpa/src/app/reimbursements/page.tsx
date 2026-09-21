@@ -44,7 +44,7 @@ export default async function ReimbursementsPage() {
     { header: "RI amount", numeric: true },
   ];
 
-  if (!(await hasReimbursementBillLines(entity.memberIds))) {
+  if (!(await hasReimbursementBillLines(entity.memberIds, entity.verticalIds))) {
     return (
       <>
         <PageHeader title="RE / RI Reconciliation" />

@@ -64,10 +64,11 @@ export interface ExpenseDetailLine {
   /** ytdVariance as a percentage of ytdBudget, null when there is no YTD budget */
   ytdVariancePct: number | null;
   /**
-   * The bills recorded in the picker's own period, newest first - an entry
-   * belongs to the month it was spent in, so only the period's own bills are
-   * ever opened or added to here, regardless of how the year-to-date columns
-   * read.
+   * The bills behind the year-to-date actual, newest first - regardless of
+   * what the picker's own period narrows the other columns to, since YTD
+   * Actual is the figure always shown and the one a reader opening a line
+   * expects a breakup of. A new entry is still filed against whatever single
+   * month is picked, when one is.
    */
   entries: ExpenseEntry[];
 }
@@ -233,9 +234,12 @@ export async function buildExpenseDetail(opts: {
   }
   const sumEntries = (raw: RawEntry[], keys: Set<string>) =>
     raw.filter((e) => keys.has(e.monthKey)).reduce((s, e) => s + e.amount, 0);
+  // Year to date, not the picker's own narrower period: YTD Actual is the
+  // figure shown regardless of what the picker reads, so it is the one a
+  // reader opening a line expects a breakup of.
   const entriesFor = (raw: RawEntry[]): ExpenseEntry[] =>
     raw
-      .filter((e) => periodKeys.has(e.monthKey))
+      .filter((e) => ytdKeys.has(e.monthKey))
       .map(({ id, spentOn, vendor, amount, remark }) => ({ id, spentOn, vendor, amount, remark }));
 
   // One row per (head, label), the budget summed into the two windows -

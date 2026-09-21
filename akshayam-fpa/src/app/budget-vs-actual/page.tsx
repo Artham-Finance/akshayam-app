@@ -210,7 +210,7 @@ export default async function BudgetVsActualPage({
             schedule: AKSHAYAM_OTHER_EXPENSES_SCHEDULE,
           })
         : null,
-      isAkshayam && (await hasReimbursementBillLines(entity.memberIds))
+      isAkshayam && (await hasReimbursementBillLines(entity.memberIds, entity.verticalIds))
         ? buildReimbursementReco({
             entity,
             start: fyBounds(fy, entity.fy_start_month).start,

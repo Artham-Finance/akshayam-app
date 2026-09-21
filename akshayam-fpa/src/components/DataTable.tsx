@@ -73,11 +73,17 @@ export function DataTable({
   rows,
   emptyMessage = "Nothing to show for this period.",
   footer,
+  topTotals,
 }: {
   columns: Column[];
   rows: ReactNode[][];
   emptyMessage?: string;
   footer?: ReactNode[];
+  /**
+   * A totals row pinned above the individual rows, so it reads without
+   * scrolling to the end of a long list.
+   */
+  topTotals?: ReactNode[];
 }) {
   if (rows.length === 0) {
     return <p className="px-4 py-6 text-center text-[13px] text-ink-muted">{emptyMessage}</p>;
@@ -103,6 +109,21 @@ export function DataTable({
           </tr>
         </thead>
         <tbody>
+          {topTotals && (
+            <tr className="bg-surface-sunk/60">
+              {topTotals.map((cell, j) => (
+                <td
+                  key={j}
+                  className={clsx(
+                    "border-b-2 border-line-strong px-4 py-2 font-semibold text-ink",
+                    columns[j]?.numeric ? "num text-right" : "text-left",
+                  )}
+                >
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          )}
           {rows.map((row, i) => (
             <tr key={i} className="hover:bg-surface-sunk/50">
               {row.map((cell, j) => (

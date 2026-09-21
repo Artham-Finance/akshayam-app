@@ -235,8 +235,14 @@ export default async function ScorecardPage({
     // the benchmark the team lead is read against, not a sum of what is shown.
     const rows = data.rows;
     const sum = (f: (r: (typeof rows)[number]) => number) => rows.reduce((s, r) => s + f(r), 0);
-    const avg = (f: (r: (typeof rows)[number]) => number) =>
-      rows.length ? sum(f) / rows.length : 0;
+
+    // What is actually on screen - one row per vertical normally, or one row
+    // per month when trended to a single vertical - summed/averaged on its
+    // own, for "this vertical's own total", separate from the firm total.
+    const ownRows = rowSource.map((r) => r.row);
+    const ownSum = (f: (r: ScorecardRow) => number) => ownRows.reduce((s, r) => s + f(r), 0);
+    const avg = (f: (r: ScorecardRow) => number) => (ownRows.length ? ownSum(f) / ownRows.length : 0);
+    const pctOf = (part: number, total: number) => (total > 0 ? percent((part / total) * 100, 1) : "–");
 
     const revBudTot = sum((r) => r.revenueBudget);
     const revActTot = sum((r) => r.revenueActual);
@@ -247,6 +253,15 @@ export default async function ScorecardPage({
     const contribRevTot = sum((r) => r.contributionRevenue);
     const revContribTot = sum((r) => r.revenueContribution);
 
+    const vertRevBudTot = ownSum((r) => r.revenueBudget);
+    const vertRevActTot = ownSum((r) => r.revenueActual);
+    const vertCollBudTot = ownSum((r) => r.collectionBudget);
+    const vertCollActTot = ownSum((r) => r.collectionActual);
+    const vertDirectCostTot = ownSum((r) => r.directCost);
+    const vertApportCostTot = ownSum((r) => r.apportionedCost);
+    const vertContribRevTot = ownSum((r) => r.contributionRevenue);
+    const vertRevContribTot = ownSum((r) => r.revenueContribution);
+
     // The Revenue-vs-budget card counts out-of-books billing; contribution is
     // struck on the ledger only. Their difference is the whole gap between the
     // two firm-total revenue figures, so it is named under the contribution card.
@@ -255,12 +270,18 @@ export default async function ScorecardPage({
       .filter((x) => x.osb > 0.5);
     const osbTotal = osbRows.reduce((s, x) => s + x.osb, 0);
     const collContribTot = sum((r) => r.collectionContribution);
+    const vertCollContribTot = ownSum((r) => r.collectionContribution);
     const ageBucketTot = [0, 1, 2, 3, 4, 5].map((i) => sum((r) => r.ageingBuckets[i] ?? 0));
     const ageGrandTot = ageBucketTot.reduce((s, b) => s + b, 0);
     const ageBlendedDays =
       ageGrandTot > 0
         ? sum((r) => (r.ageingDays ?? 0) * r.ageingTotal) / ageGrandTot
         : null;
+
+    // The ageing snapshot is a single point in time, not a monthly figure -
+    // every month of a trend reads it identically, so repeating it per month
+    // is just noise. Only the most recently reached month is shown.
+    const ageingRowSource = trend ? rowSource.slice(-1) : rowSource;
 
     return (
       <>
@@ -369,7 +390,7 @@ export default async function ScorecardPage({
                 <tfoot>
                   <tr className="border-t-2 border-line-strong bg-surface-sunk/50 font-semibold">
                     <td className={td} />
-                    <td className={clsx(td, "text-ink")}>{singleVertical ? "Firm average" : "Average"}</td>
+                    <td className={clsx(td, "text-ink")}>Average</td>
                     <td className={clsx(num, "text-center")}>{avg((r) => r.ratings.revenue).toFixed(1)}</td>
                     <td className={clsx(num, "text-center")}>{avg((r) => r.ratings.collection).toFixed(1)}</td>
                     <td className={clsx(num, "text-center")}>{avg((r) => r.ratings.netRevContrib).toFixed(1)}</td>
@@ -397,6 +418,26 @@ export default async function ScorecardPage({
               ],
               rating: row.ratings.revenue,
             }))}
+            subFoot={
+              singleVertical
+                ? [
+                    [
+                      "Vertical total",
+                      compactINR(vertRevBudTot),
+                      compactINR(vertRevActTot),
+                      pctOf(vertRevActTot, vertRevBudTot),
+                      "",
+                    ],
+                    [
+                      "% of firm total",
+                      pctOf(vertRevBudTot, revBudTot),
+                      pctOf(vertRevActTot, revActTot),
+                      "–",
+                      "",
+                    ],
+                  ]
+                : undefined
+            }
             foot={[
               singleVertical ? "Firm total" : "Total",
               compactINR(revBudTot),
@@ -418,6 +459,26 @@ export default async function ScorecardPage({
               ],
               rating: row.ratings.collection,
             }))}
+            subFoot={
+              singleVertical
+                ? [
+                    [
+                      "Vertical total",
+                      compactINR(vertCollBudTot),
+                      compactINR(vertCollActTot),
+                      pctOf(vertCollActTot, vertCollBudTot),
+                      "",
+                    ],
+                    [
+                      "% of firm total",
+                      pctOf(vertCollBudTot, collBudTot),
+                      pctOf(vertCollActTot, collActTot),
+                      "–",
+                      "",
+                    ],
+                  ]
+                : undefined
+            }
             foot={[
               singleVertical ? "Firm total" : "Total",
               compactINR(collBudTot),
@@ -449,6 +510,30 @@ export default async function ScorecardPage({
               ],
               rating: row.ratings.netRevContrib,
             }))}
+            subFoot={
+              singleVertical
+                ? [
+                    [
+                      "Vertical total",
+                      compactINR(vertContribRevTot),
+                      compactINR(vertDirectCostTot),
+                      compactINR(vertApportCostTot),
+                      compactINR(vertRevContribTot),
+                      pctOf(vertRevContribTot, revContribTot),
+                      "",
+                    ],
+                    [
+                      "% of firm total",
+                      pctOf(vertContribRevTot, contribRevTot),
+                      pctOf(vertDirectCostTot, directCostTot),
+                      pctOf(vertApportCostTot, apportCostTot),
+                      pctOf(vertRevContribTot, revContribTot),
+                      "–",
+                      "",
+                    ],
+                  ]
+                : undefined
+            }
             foot={[
               singleVertical ? "Firm total" : "Total",
               compactINR(contribRevTot),
@@ -495,6 +580,30 @@ export default async function ScorecardPage({
               ],
               rating: row.ratings.netCollContrib,
             }))}
+            subFoot={
+              singleVertical
+                ? [
+                    [
+                      "Vertical total",
+                      compactINR(vertCollActTot),
+                      compactINR(vertDirectCostTot),
+                      compactINR(vertApportCostTot),
+                      compactINR(vertCollContribTot),
+                      pctOf(vertCollContribTot, collContribTot),
+                      "",
+                    ],
+                    [
+                      "% of firm total",
+                      pctOf(vertCollActTot, collActTot),
+                      pctOf(vertDirectCostTot, directCostTot),
+                      pctOf(vertApportCostTot, apportCostTot),
+                      pctOf(vertCollContribTot, collContribTot),
+                      "–",
+                      "",
+                    ],
+                  ]
+                : undefined
+            }
             foot={[
               singleVertical ? "Firm total" : "Total",
               compactINR(collActTot),
@@ -509,7 +618,7 @@ export default async function ScorecardPage({
             title={`Receivables ageing${data.arAsOf ? ` — as at ${data.arAsOf}` : ""}`}
             accent="border-caution"
             head={[firstColHead, ...BUCKET_LABELS, "Total", "Wtd avg days", "Rating"]}
-            rows={rowSource.map(({ label, row }) => ({
+            rows={ageingRowSource.map(({ label, row }) => ({
               cells: [
                 label,
                 ...row.ageingBuckets.map((b) => (b ? money(b) : "–")),
@@ -518,6 +627,19 @@ export default async function ScorecardPage({
               ],
               rating: row.ratings.ageing,
             }))}
+            subFoot={
+              singleVertical && ageingRowSource[0]
+                ? [
+                    [
+                      "% of firm total",
+                      ...ageingRowSource[0].row.ageingBuckets.map((b, i) => pctOf(b, ageBucketTot[i] ?? 0)),
+                      pctOf(ageingRowSource[0].row.ageingTotal, ageGrandTot),
+                      "–",
+                      "",
+                    ],
+                  ]
+                : undefined
+            }
             foot={[
               singleVertical ? "Firm total" : "Total",
               ...ageBucketTot.map((b) => (b ? money(b) : "–")),
@@ -583,6 +705,7 @@ function WorkingCard({
   accent,
   head,
   rows,
+  subFoot,
   foot,
   note,
 }: {
@@ -591,6 +714,8 @@ function WorkingCard({
   accent: string;
   head: string[];
   rows: { cells: (string | number)[]; rating: number | null }[];
+  /** extra, lighter total rows shown above the main foot row - e.g. one vertical's own total and its share of the firm */
+  subFoot?: (string | number)[][];
   foot?: (string | number)[];
   /** an explanatory line shown under the table */
   note?: ReactNode;
@@ -635,21 +760,44 @@ function WorkingCard({
               </tr>
             ))}
           </tbody>
-          {foot && (
+          {(subFoot || foot) && (
             <tfoot>
-              <tr className="border-t-2 border-line-strong bg-surface-sunk/50 font-semibold text-ink">
-                {foot.map((c, ci) => (
-                  <td
-                    key={ci}
-                    className={clsx(
-                      "px-3 py-2.5 text-[12.5px]",
-                      ci === 0 ? "text-left" : "text-right num",
-                    )}
-                  >
-                    {c}
-                  </td>
-                ))}
-              </tr>
+              {subFoot?.map((cells, ri) => (
+                <tr
+                  key={`sub-${ri}`}
+                  className={clsx(
+                    "border-t border-line bg-surface-sunk/25",
+                    ri === 0 ? "font-semibold text-ink" : "text-ink-muted",
+                  )}
+                >
+                  {cells.map((c, ci) => (
+                    <td
+                      key={ci}
+                      className={clsx(
+                        "px-3 py-2 text-[12px]",
+                        ci === 0 ? "text-left font-medium" : "text-right num",
+                      )}
+                    >
+                      {c}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+              {foot && (
+                <tr className="border-t-2 border-line-strong bg-surface-sunk/50 font-semibold text-ink">
+                  {foot.map((c, ci) => (
+                    <td
+                      key={ci}
+                      className={clsx(
+                        "px-3 py-2.5 text-[12.5px]",
+                        ci === 0 ? "text-left" : "text-right num",
+                      )}
+                    >
+                      {c}
+                    </td>
+                  ))}
+                </tr>
+              )}
             </tfoot>
           )}
         </table>
