@@ -48,24 +48,31 @@ export function TeamCostTable({
   return (
     <div className="overflow-x-auto">
       <div className="flex flex-wrap items-center gap-2 px-4 pb-3 sm:px-5">
-        <label className="text-[11px] font-medium uppercase tracking-[0.08em] text-ink-faint">
-          Vertical
-        </label>
-        <select
-          value={scopeCode}
-          onChange={(e) => {
-            setScopeCode(e.target.value);
-            setOpen(null);
-          }}
-          className="rounded-md border border-line bg-surface px-2 py-1 text-[12px] text-ink outline-none focus:border-navy"
-        >
-          <option value="ALL">Whole company</option>
-          {result.verticals.map((v) => (
-            <option key={v.code} value={v.code}>
-              {v.name}
-            </option>
-          ))}
-        </select>
+        {/* A picker with one real vertical to choose from decides nothing -
+            "Whole company" and that vertical are the same figures - so it is
+            left out rather than offered as a choice. */}
+        {result.verticals.length > 1 && (
+          <>
+            <label className="text-[11px] font-medium uppercase tracking-[0.08em] text-ink-faint">
+              Vertical
+            </label>
+            <select
+              value={scopeCode}
+              onChange={(e) => {
+                setScopeCode(e.target.value);
+                setOpen(null);
+              }}
+              className="rounded-md border border-line bg-surface px-2 py-1 text-[12px] text-ink outline-none focus:border-navy"
+            >
+              <option value="ALL">Whole company</option>
+              {result.verticals.map((v) => (
+                <option key={v.code} value={v.code}>
+                  {v.name}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
         <span className="text-[11.5px] text-ink-muted">
           Budget hard-coded from the plan; actuals are the vertical-tagged
           direct-cost postings in the ledger. Open a line for the postings behind

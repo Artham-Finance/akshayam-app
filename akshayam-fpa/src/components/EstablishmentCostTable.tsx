@@ -18,12 +18,18 @@ export function EstablishmentCostTable({
   result,
   periodLabel,
   ytdLabel,
+  caption,
+  totalLabel = "Establishment cost",
 }: {
   result: EstablishmentResult;
   /** short label for the period columns, e.g. "This month" or "Jul 26" */
   periodLabel: string;
   /** short label for the YTD columns, e.g. "to 27 Aug 26" */
   ytdLabel: string;
+  /** the table's own explanatory line - defaults to the establishment-cost wording */
+  caption?: string;
+  /** the footer row's label - defaults to "Establishment cost" */
+  totalLabel?: string;
 }) {
   const [open, setOpen] = useState<string | null>(null);
 
@@ -36,10 +42,14 @@ export function EstablishmentCostTable({
     <div className="overflow-x-auto">
       <table className="w-full min-w-max border-collapse text-[13px]">
         <caption className="px-4 pb-3 text-left text-[11.5px] text-ink-muted">
-          Budget is the office schedule, spread evenly. Actual is the
-          establishment-cost postings in the ledger — rent, building maintenance
-          and electricity — so the total ties to the statement above. Open a line
-          for the postings behind it.
+          {caption ?? (
+            <>
+              Budget is the office schedule, spread evenly. Actual is the
+              establishment-cost postings in the ledger — rent, building maintenance
+              and electricity — so the total ties to the statement above. Open a line
+              for the postings behind it.
+            </>
+          )}
         </caption>
         <thead>
           <tr>
@@ -85,7 +95,7 @@ export function EstablishmentCostTable({
         <tfoot>
           <tr className="bg-surface-sunk font-semibold">
             <th scope="row" className="border-y border-line-strong px-3 py-2 text-left">
-              Establishment cost
+              {totalLabel}
             </th>
             <td className="num border-y border-line-strong px-3 py-2 text-right">
               {money(totals.periodBudget)}

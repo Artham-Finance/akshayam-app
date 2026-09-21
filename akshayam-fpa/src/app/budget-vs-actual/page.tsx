@@ -19,7 +19,7 @@ import {
   getVerticals,
 } from "@/lib/entity";
 import { withParams } from "@/lib/href";
-import { dateLabel } from "@/lib/format";
+import { dateLabel, money } from "@/lib/format";
 import { fyBounds, fyMonths } from "@/lib/period";
 import {
   getReportingPeriod,
@@ -29,6 +29,15 @@ import {
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
 import { buildEstablishmentDetail } from "@/lib/reports/establishment-detail";
 import { buildExpenseDetail } from "@/lib/reports/expense-detail";
+import {
+  AKSHAYAM_ESTABLISHMENT_SCHEDULE,
+  AKSHAYAM_OTHER_EXPENSES_SCHEDULE,
+  buildLineItemBudget,
+} from "@/lib/reports/line-item-budget";
+import {
+  buildReimbursementReco,
+  hasReimbursementBillLines,
+} from "@/lib/reports/reimbursement-reco";
 import { buildTeamCost } from "@/lib/reports/team-cost";
 import { requireEntityAccess } from "@/lib/auth/dal";
 
@@ -172,6 +181,45 @@ export default async function BudgetVsActualPage({
     ]);
     const editableMonth = periodMonths.length === 1 ? `${periodMonths[0].key}-01` : null;
 
+    /**
+     * Akshayam's own office/overhead schedule and reimbursement position.
+     * Akshayam carries no line-by-line Establishment schedule in
+     * establishment-detail.ts (RBJV only) and no expense_budget_lines detail
+     * at all (its budget sheet has no overhead breakdown block to read one
+     * from - see budget.ts), so both cards here are built from "4 - Akshayam
+     * Monthly"'s own figures directly rather than the mechanisms RBJV's
+     * equivalent cards read.
+     */
+    const isAkshayam = !isSlice && entity.slug === "akshayam";
+    const [akshayamEstablishment, akshayamOtherExpenses, reimbursementReco] = await Promise.all([
+      isAkshayam
+        ? buildLineItemBudget({
+            entity,
+            fyStartYear: fy,
+            periodMonths,
+            ytdMonths,
+            schedule: AKSHAYAM_ESTABLISHMENT_SCHEDULE,
+          })
+        : null,
+      isAkshayam
+        ? buildLineItemBudget({
+            entity,
+            fyStartYear: fy,
+            periodMonths,
+            ytdMonths,
+            schedule: AKSHAYAM_OTHER_EXPENSES_SCHEDULE,
+          })
+        : null,
+      isAkshayam && (await hasReimbursementBillLines(entity.memberIds))
+        ? buildReimbursementReco({
+            entity,
+            start: fyBounds(fy, entity.fy_start_month).start,
+            end: fyBounds(fy, entity.fy_start_month).end,
+            fyStartYear: fy,
+          })
+        : null,
+    ]);
+
     // Lines the budget carries but the ledger has not yet posted. Depreciation
     // and tax land at audit and drawings may be booked to the balance sheet, so
     // an empty actual is a timing difference, not a saving.
@@ -279,6 +327,62 @@ export default async function BudgetVsActualPage({
                 periodLabel={periodColumnLabel}
                 ytdLabel={ytdLabel}
               />
+            </Card>
+          )}
+
+          {akshayamEstablishment?.hasData && (
+            <Card padded={false}>
+              <div className="px-4 pt-4 sm:px-5">
+                <CardTitle hint={periodLabel}>Establishment cost — budget vs actual</CardTitle>
+              </div>
+              <EstablishmentCostTable
+                result={akshayamEstablishment}
+                periodLabel={periodColumnLabel}
+                ytdLabel={ytdLabel}
+                caption="Budget is the office schedule from the planning workbook, spread evenly. Actual is the named ledger accounts behind each line — rent and its maintenance combined, per the plan. Open a line for the postings behind it."
+              />
+            </Card>
+          )}
+
+          {akshayamOtherExpenses?.hasData && (
+            <Card padded={false}>
+              <div className="px-4 pt-4 sm:px-5">
+                <CardTitle hint={periodLabel}>Other expenses — budget vs actual</CardTitle>
+              </div>
+              <EstablishmentCostTable
+                result={akshayamOtherExpenses}
+                periodLabel={periodColumnLabel}
+                ytdLabel={ytdLabel}
+                caption="Budget is from the planning workbook, spread evenly. Actual is the named ledger accounts behind each line. Open a line for the postings behind it."
+                totalLabel="Other expenses"
+              />
+              {reimbursementReco && (
+                <div className="border-t border-line px-4 py-4 sm:px-5">
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-faint">
+                    RE / RI Reconciliation
+                  </p>
+                  <p className="text-[12.5px] text-ink-muted">
+                    <span className="font-medium text-caution">
+                      {reimbursementReco.totals.reNeedsRiCount} RI still need raising
+                    </span>{" "}
+                    ({money(reimbursementReco.totals.reNeedsRiAmount)}) ·{" "}
+                    <span className="font-medium text-caution">
+                      {reimbursementReco.totals.riOnlyCount} RI raised, RE not accounted
+                    </span>{" "}
+                    ({money(reimbursementReco.totals.riOnlyAmount)}) ·{" "}
+                    <span className="font-medium text-positive">
+                      {reimbursementReco.totals.matchedCount} matched
+                    </span>{" "}
+                    ({money(reimbursementReco.totals.matchedAmount)})
+                  </p>
+                  <Link
+                    href="/reimbursements"
+                    className="mt-2 inline-block text-[12.5px] font-medium text-navy hover:underline"
+                  >
+                    View full reconciliation →
+                  </Link>
+                </div>
+              )}
             </Card>
           )}
 
