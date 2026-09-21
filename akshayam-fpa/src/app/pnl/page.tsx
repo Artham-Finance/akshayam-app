@@ -31,6 +31,7 @@ import {
 import { buildApportionment, receiverKeyFor } from "@/lib/reports/apportionment";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
 import { buildRevenueTransferCard } from "@/lib/reports/revenue-transfer-card";
+import { buildAccountEntries, type StatementEntry } from "@/lib/reports/statement-drill";
 import {
   buildScorecard,
   resolveScorecardScope,
@@ -191,6 +192,31 @@ export default async function ProfitAndLossPage({
             verticals: apportionment.verticals.filter((v) => v.key === focusKey),
           };
 
+    // Whole-company view can have hundreds of postings per account across
+    // verticals, so the drill-down below only runs once the view is narrowed
+    // to one - either a vertical picked from the page, or a team lead's own
+    // slice login, which is narrowed the same way without a picker to show it.
+    const singleVerticalView = verticalId !== null || entity.verticalIds !== null;
+
+    // The postings behind each account row - a second, unaggregated read of
+    // the same accounts and window the statement above already summed, so
+    // "Direct Costs" opening to "Consultancy Charges" can open again to the
+    // bills that make it up.
+    const entriesByAccount =
+      singleVerticalView
+        ? await buildAccountEntries({
+            entity,
+            accountIds: [
+              ...new Set(
+                statement.lines.map((l) => l.accountId).filter((id): id is number => id !== null),
+              ),
+            ],
+            start: window.start,
+            end: window.end,
+            verticalId,
+          })
+        : new Map<number, StatementEntry[]>();
+
     const lines: ClientLine[] = statement.lines.map((line) => ({
       key: line.key,
       name: line.name,
@@ -199,6 +225,7 @@ export default async function ProfitAndLossPage({
       sign: line.sign,
       groupCode: line.groupCode,
       accountId: line.accountId,
+      entries: line.accountId !== null ? entriesByAccount.get(line.accountId) : undefined,
       values: line.values,
     }));
 
@@ -301,6 +328,7 @@ export default async function ProfitAndLossPage({
             lines={lines}
             emphasise={["gross_profit", "ebitda", "pat"]}
             totalLabel={period.periodMonths.length < 12 ? period.shortLabel : undefined}
+            initialShowDetail={singleVerticalView}
           />
 
           {contribution && (

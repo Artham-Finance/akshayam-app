@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import clsx from "clsx";
-import { money, scaled, scaleLabel, type Scale } from "@/lib/format";
+import { dateLabel, money, scaled, scaleLabel, type Scale } from "@/lib/format";
 import { groupByQuarter, quarterLabel, type FyMonth, type QuarterNo } from "@/lib/period";
 
 /**
@@ -16,6 +16,13 @@ import { groupByQuarter, quarterLabel, type FyMonth, type QuarterNo } from "@/li
  * to show the ledger accounts beneath it.
  */
 
+export interface StatementEntry {
+  date: string;
+  particulars: string;
+  reference: string;
+  amount: number;
+}
+
 export interface ClientLine {
   key: string;
   name: string;
@@ -27,6 +34,8 @@ export interface ClientLine {
   values: Record<string, number>;
   /** overrides the table's own setting, for a position line inside a flow statement */
   columnAggregate?: "sum" | "first" | "last";
+  /** the ledger postings behind an account row, for the whole window shown - absent where the caller has not fetched them */
+  entries?: StatementEntry[];
 }
 
 interface Column {
@@ -48,6 +57,7 @@ export function StatementTable({
   aggregate = "sum",
   drillHref,
   totalLabel,
+  initialShowDetail = false,
 }: {
   months: FyMonth[];
   lines: ClientLine[];
@@ -65,11 +75,26 @@ export function StatementTable({
   aggregate?: "sum" | "closing";
   /** builds a link for a detail row, when drill-down is available */
   drillHref?: (line: ClientLine, monthKeys: string[]) => string | null;
+  /**
+   * Whether every group's ledger accounts start open. Off by default - a
+   * balance sheet or cash flow statement can carry far more accounts than a
+   * P&L, where reading it pre-expanded is the point rather than clutter.
+   */
+  initialShowDetail?: boolean;
 }) {
   const [expandedQuarters, setExpandedQuarters] = useState<Set<QuarterNo>>(new Set());
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+  const [openAccounts, setOpenAccounts] = useState<Set<string>>(new Set());
   const [scale, setScale] = useState<Scale>(initialScale);
-  const [showAllDetail, setShowAllDetail] = useState(false);
+  const [showAllDetail, setShowAllDetail] = useState(initialShowDetail);
+
+  const toggleAccount = (key: string) =>
+    setOpenAccounts((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   const quarters = useMemo(() => groupByQuarter(months), [months]);
 
@@ -248,10 +273,12 @@ export function StatementTable({
               const strong = line.isSubtotal;
               const highlighted = line.groupCode ? emphasise.includes(line.groupCode) : false;
               const canOpen = isGroup && line.groupCode && hasDetail.has(line.groupCode);
+              const canOpenAccount = !isGroup && !!line.entries && line.entries.length > 0;
+              const accountOpen = openAccounts.has(line.key);
 
               return (
+                <Fragment key={line.key}>
                 <tr
-                  key={line.key}
                   className={clsx(
                     "group",
                     strong && "bg-surface",
@@ -283,6 +310,18 @@ export function StatementTable({
                         >
                           <Chevron open={openGroups.has(line.groupCode!) || showAllDetail} />
                           {line.name}
+                        </button>
+                      ) : canOpenAccount ? (
+                        <button
+                          type="button"
+                          onClick={() => toggleAccount(line.key)}
+                          className="no-print inline-flex items-center gap-1.5 text-left hover:text-navy"
+                        >
+                          <Chevron open={accountOpen} />
+                          {line.name}
+                          <span className="text-[11px] font-normal normal-case tracking-normal text-ink-faint">
+                            {line.entries!.length} posting{line.entries!.length === 1 ? "" : "s"}
+                          </span>
                         </button>
                       ) : (
                         line.name
@@ -336,12 +375,61 @@ export function StatementTable({
                     );
                   })}
                 </tr>
+                {accountOpen && line.entries && (
+                  <tr>
+                    <td colSpan={columns.length + 1} className="border-b border-line bg-surface-sunk/30 px-4 py-3 sm:px-8">
+                      <AccountDrillTable entries={line.entries} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               );
             })}
           </tbody>
         </table>
       </div>
     </div>
+  );
+}
+
+/**
+ * The postings behind one ledger account, for the whole window the
+ * statement above is showing - not scaled with the rest of the table, since
+ * a single bill read in lakhs is unreadable.
+ */
+function AccountDrillTable({ entries }: { entries: StatementEntry[] }) {
+  const cell = "border-t border-line px-2 py-1.5";
+  const total = entries.reduce((s, e) => s + e.amount, 0);
+
+  return (
+    <table className="w-full min-w-max border-collapse text-[12px]">
+      <thead>
+        <tr className="text-ink-faint">
+          <th scope="col" className="px-2 py-1 text-left font-medium">Date</th>
+          <th scope="col" className="px-2 py-1 text-left font-medium">Particulars</th>
+          <th scope="col" className="px-2 py-1 text-left font-medium">Reference</th>
+          <th scope="col" className="px-2 py-1 text-right font-medium">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        {entries.map((e, i) => (
+          <tr key={i} className="text-ink">
+            <td className={clsx(cell, "num whitespace-nowrap text-ink-muted")}>{dateLabel(e.date)}</td>
+            <td className={cell}>{e.particulars}</td>
+            <td className={clsx(cell, "text-ink-muted")}>{e.reference || "—"}</td>
+            <td className={clsx(cell, "num text-right font-medium")}>{money(e.amount)}</td>
+          </tr>
+        ))}
+      </tbody>
+      <tfoot>
+        <tr className="font-semibold text-ink">
+          <td className={clsx(cell, "border-t-line-strong")} colSpan={3}>
+            {entries.length} posting{entries.length === 1 ? "" : "s"}
+          </td>
+          <td className={clsx(cell, "num border-t-line-strong text-right")}>{money(total)}</td>
+        </tr>
+      </tfoot>
+    </table>
   );
 }
 
