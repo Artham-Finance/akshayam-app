@@ -191,6 +191,24 @@ export async function resolveVerticals(
   const ids = new Map<string, number>();
   const created: string[] = [];
 
+  /**
+   * An entity with exactly one vertical has nothing to disambiguate: every
+   * tag its own books ever carry is that vertical, whatever the tag says.
+   * Akshayam is exactly this - "GIFT and Support" is its only real business
+   * line - and a tag that failed to match used to fall through to the
+   * create-a-new-vertical branch below instead, which is how an unrelated
+   * "Common" tag once became its own Akshayam vertical, sharing RBJV's own
+   * "COMMON" *code* and silently inheriting RBJV's Team Cost budget for it
+   * (see 059_akshayam_verticals_into_gift.sql). Computed once, before the
+   * loop: this function never creates a second vertical for such an entity,
+   * so the count cannot change partway through a call.
+   */
+  const only = await client.query<{ id: number }>(
+    "select id from verticals where entity_id = $1",
+    [entityId],
+  );
+  const soleVerticalId = only.rows.length === 1 ? only.rows[0].id : null;
+
   for (const rawCode of codes) {
     const alias = await client.query<{ vertical_id: number }>(
       "select vertical_id from vertical_aliases where entity_id = $1 and raw_code = $2",
@@ -234,6 +252,15 @@ export async function resolveVerticals(
         [entityId, rawCode, verticalId],
       );
       ids.set(rawCode, verticalId);
+      continue;
+    }
+
+    if (soleVerticalId !== null) {
+      await client.query(
+        "insert into vertical_aliases (entity_id, raw_code, vertical_id) values ($1, $2, $3) on conflict do nothing",
+        [entityId, rawCode, soleVerticalId],
+      );
+      ids.set(rawCode, soleVerticalId);
       continue;
     }
 
