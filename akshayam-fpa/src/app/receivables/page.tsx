@@ -199,6 +199,12 @@ export default async function ReceivablesPage({
     const openCurrency =
       requestedCurrency && currencies.includes(requestedCurrency) ? requestedCurrency : null;
     const multiCurrency = currencies.length > 1;
+    // Shared by the pinned copy above the ageing-by-currency rows and the plain one below them.
+    const ageingByCurrencyTotalsRow = [
+      "Grand total",
+      byCurrency.reduce((n, c) => n + Number(c.n ?? 0), 0),
+      ...byCurrency.flatMap((c) => [moneyIn(String(c.currency), Number(c.total)), Number(c.n)]),
+    ];
 
     /**
      * The financial year the movements are measured over. Receivables are a
@@ -303,6 +309,12 @@ export default async function ReceivablesPage({
     const overYear = Number(totals?.y1 ?? 0);
     const topTenValue = Number(topTen?.v ?? 0);
     const peakBucket = Math.max(1, ...AR_BUCKETS.map((b) => Number(totals?.[b.key] ?? 0)));
+    // Shared by the pinned copy above the By vertical rows and the plain one below them.
+    const byVerticalTotalsRow = [
+      "Total",
+      money(Number(totals?.total ?? 0)),
+      ...AR_BUCKETS.map((b) => (Number(totals?.[b.key]) ? money(Number(totals?.[b.key])) : "—")),
+    ];
 
     return (
       <>
@@ -589,14 +601,7 @@ export default async function ReceivablesPage({
                     Number(c[`${b.key}_n`]) || "—",
                   ]),
                 ])}
-                footer={[
-                  "Grand total",
-                  byCurrency.reduce((n, c) => n + Number(c.n ?? 0), 0),
-                  ...byCurrency.flatMap((c) => [
-                    moneyIn(String(c.currency), Number(c.total)),
-                    Number(c.n),
-                  ]),
-                ]}
+                topTotals={ageingByCurrencyTotalsRow}
               />
               {/*
                 The rupee total on the tiles above and these columns are the
@@ -685,13 +690,7 @@ export default async function ReceivablesPage({
                 money(Number(r.total)),
                 ...AR_BUCKETS.map((b) => (Number(r[b.key]) ? money(Number(r[b.key])) : "—")),
               ])}
-              footer={[
-                "Total",
-                money(Number(totals?.total ?? 0)),
-                ...AR_BUCKETS.map((b) =>
-                  Number(totals?.[b.key]) ? money(Number(totals?.[b.key])) : "—",
-                ),
-              ]}
+              topTotals={byVerticalTotalsRow}
             />
           </Card>
 

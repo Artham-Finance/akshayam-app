@@ -96,6 +96,22 @@ export function CurrencySplit({
           </tr>
         </thead>
         <tbody>
+          {rows.length > 0 && (
+            <tr className="bg-surface-sunk/60 font-semibold text-ink">
+              <th scope="row" className="border-b-2 border-line-strong px-3 py-2 text-left">
+                Total
+              </th>
+              <td className="num border-b-2 border-line-strong px-3 py-2 text-right">
+                {rows.reduce((s, r) => s + r.count, 0)}
+              </td>
+              <td className="border-b-2 border-line-strong px-3 py-2" />
+              <td className="num border-b-2 border-line-strong px-3 py-2 text-right">
+                {money(total)}
+              </td>
+              <td className="border-b-2 border-line-strong px-3 py-2" />
+              <td className="num border-b-2 border-line-strong px-3 py-2 text-right">100.0%</td>
+            </tr>
+          )}
           {rows.map((row) => {
             const isBase = row.currency.toUpperCase() === baseCurrency;
             const rate = row.foreign && row.foreign !== 0 ? row.inr / row.foreign : null;
@@ -153,22 +169,6 @@ export function CurrencySplit({
             );
           })}
         </tbody>
-        <tfoot>
-          <tr className="bg-surface-sunk font-semibold">
-            <th scope="row" className="border-y border-line-strong px-3 py-2 text-left">
-              Total
-            </th>
-            <td className="num border-y border-line-strong px-3 py-2 text-right">
-              {rows.reduce((s, r) => s + r.count, 0)}
-            </td>
-            <td className="border-y border-line-strong px-3 py-2" />
-            <td className="num border-y border-line-strong px-3 py-2 text-right">
-              {money(total)}
-            </td>
-            <td className="border-y border-line-strong px-3 py-2" />
-            <td className="num border-y border-line-strong px-3 py-2 text-right">100.0%</td>
-          </tr>
-        </tfoot>
       </table>
     </div>
   );

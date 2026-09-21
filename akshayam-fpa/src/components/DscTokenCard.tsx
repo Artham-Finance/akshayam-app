@@ -41,6 +41,33 @@ export function DscTokenCard({
   const head =
     "border-y border-line px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-faint";
   const cell = "border-b border-line px-3 py-2";
+  const diffRow = (
+    <tr className="bg-surface-sunk font-semibold">
+      <th scope="row" className="border-y border-line-strong px-3 py-2 text-left">
+        Difference (physical less books)
+      </th>
+      <td
+        className={clsx(
+          "num border-y border-line-strong px-3 py-2 text-right",
+          qtyGap < 0 ? "text-negative" : qtyGap > 0 ? "text-positive" : "text-ink-muted",
+        )}
+      >
+        {qtyGap === 0 ? "—" : moneySigned(qtyGap)}
+      </td>
+      <td
+        className={clsx(
+          "num border-y border-line-strong px-3 py-2 text-right",
+          Math.abs(valueGap) < 0.5
+            ? "text-ink-muted"
+            : valueGap < 0
+              ? "text-negative"
+              : "text-positive",
+        )}
+      >
+        {Math.abs(valueGap) < 0.5 ? "—" : moneySigned(valueGap)}
+      </td>
+    </tr>
+  );
 
   return (
     <div className="overflow-x-auto">
@@ -84,6 +111,7 @@ export function DscTokenCard({
           </tr>
         </thead>
         <tbody>
+          {diffRow}
           <tr className="hover:bg-surface-sunk/40">
             <th scope="row" className={clsx(cell, "text-left font-normal text-ink")}>
               Token as per books
@@ -126,33 +154,6 @@ export function DscTokenCard({
             </td>
           </tr>
         </tbody>
-        <tfoot>
-          <tr className="bg-surface-sunk font-semibold">
-            <th scope="row" className="border-y border-line-strong px-3 py-2 text-left">
-              Difference (physical less books)
-            </th>
-            <td
-              className={clsx(
-                "num border-y border-line-strong px-3 py-2 text-right",
-                qtyGap < 0 ? "text-negative" : qtyGap > 0 ? "text-positive" : "text-ink-muted",
-              )}
-            >
-              {qtyGap === 0 ? "—" : moneySigned(qtyGap)}
-            </td>
-            <td
-              className={clsx(
-                "num border-y border-line-strong px-3 py-2 text-right",
-                Math.abs(valueGap) < 0.5
-                  ? "text-ink-muted"
-                  : valueGap < 0
-                    ? "text-negative"
-                    : "text-positive",
-              )}
-            >
-              {Math.abs(valueGap) < 0.5 ? "—" : moneySigned(valueGap)}
-            </td>
-          </tr>
-        </tfoot>
       </table>
     </div>
   );
