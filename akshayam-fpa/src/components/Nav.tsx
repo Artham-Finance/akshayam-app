@@ -8,6 +8,7 @@ import { EntitySwitcher } from "@/components/EntitySwitcher";
 import { PeriodPicker } from "@/components/PeriodPicker";
 import { UserMenu } from "@/components/UserMenu";
 import type { Permission, Role } from "@/lib/auth/permissions";
+import { dateLabel } from "@/lib/format";
 import type { PeriodCookie } from "@/lib/period-presets";
 
 /**
@@ -67,6 +68,7 @@ export function Nav({
   period,
   periodLabel,
   periodFyBounds,
+  ledgerWrittenTo,
   user,
   isSlice = false,
 }: {
@@ -76,6 +78,8 @@ export function Nav({
   period: PeriodCookie | null;
   periodLabel: string;
   periodFyBounds: { start: string; end: string } | null;
+  /** the latest ledger date across every uploaded GL, or null when there is none yet */
+  ledgerWrittenTo: string | null;
   user: { name: string | null; email: string; role: Role; permissions: Permission[] };
   /**
    * The active company is a single-vertical slice - a team lead's own book.
@@ -145,6 +149,14 @@ export function Nav({
               currentLabel={periodLabel}
               fyBounds={periodFyBounds}
             />
+          </div>
+        )}
+        {ledgerWrittenTo && (
+          <div
+            className="order-3 w-full shrink-0 rounded-md border border-navy bg-navy px-2.5 py-1.5 text-[12px] font-medium text-ink-invert sm:order-none sm:w-auto"
+            title="The latest transaction date across every uploaded general ledger"
+          >
+            GL updated till – {dateLabel(ledgerWrittenTo)}
           </div>
         )}
         <nav className="ml-auto flex shrink-0 items-center gap-1">
