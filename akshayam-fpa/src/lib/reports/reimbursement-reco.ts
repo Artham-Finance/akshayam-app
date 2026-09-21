@@ -1,5 +1,5 @@
 import { query } from "@/lib/db";
-import type { Entity } from "@/lib/entity";
+import { verticalScope, type Entity } from "@/lib/entity";
 import { extractRiRefs, normaliseRiRef } from "@/lib/parse/reimbursement-bills";
 
 /**
@@ -160,8 +160,9 @@ export async function buildReimbursementReco(opts: {
          from reimbursement_bill_lines r
          join entities e on e.id = r.entity_id
         where r.entity_id = any($1::int[]) and r.bill_date between $2 and $3
+          ${verticalScope("$4", "r.vertical_id")}
         order by r.bill_date`,
-      [entity.memberIds, start, end],
+      [entity.memberIds, start, end, entity.verticalIds],
     ),
     // Petty cash reimbursed by a journal straight to the expense account,
     // with the RI number in that entry's own description - see the module
@@ -176,8 +177,9 @@ export async function buildReimbursementReco(opts: {
          join entities e on e.id = g.entity_id
         where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
           and a.group_code = 'reimbursements' and a.name not ilike '%income%' and g.txn_type = 'journal'
+          ${verticalScope("$4", "g.vertical_id")}
         order by g.txn_date`,
-      [entity.memberIds, start, end],
+      [entity.memberIds, start, end, entity.verticalIds],
     ),
     query<RiRow>(
       `select g.entity_id, e.name as entity_name, to_char(g.txn_date, 'YYYY-MM-DD') as txn_date,
@@ -187,8 +189,9 @@ export async function buildReimbursementReco(opts: {
          join entities e on e.id = g.entity_id
         where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
           and a.group_code = 'reimbursements' and a.name ilike '%income%' and g.txn_type = 'invoice'
+          ${verticalScope("$4", "g.vertical_id")}
         order by g.txn_date`,
-      [entity.memberIds, start, end],
+      [entity.memberIds, start, end, entity.verticalIds],
     ),
   ]);
 
@@ -344,11 +347,21 @@ export async function buildReimbursementReco(opts: {
   };
 }
 
-/** Whether any reimbursement bill line has ever been loaded for this entity. */
-export async function hasReimbursementBillLines(memberIds: number[]): Promise<boolean> {
+/**
+ * Whether any reimbursement bill line has ever been loaded for this entity -
+ * narrowed to its own vertical(s) for a slice, so a team lead is not shown
+ * the card on the strength of activity elsewhere in the company that their
+ * own reconciliation would then show as empty.
+ */
+export async function hasReimbursementBillLines(
+  memberIds: number[],
+  verticalIds: number[] | null = null,
+): Promise<boolean> {
   const row = await query<{ exists: boolean }>(
-    "select exists(select 1 from reimbursement_bill_lines where entity_id = any($1::int[])) as exists",
-    [memberIds],
+    `select exists(
+       select 1 from reimbursement_bill_lines where entity_id = any($1::int[]) ${verticalScope("$2")}
+     ) as exists`,
+    [memberIds, verticalIds],
   );
   return row[0]?.exists ?? false;
 }
