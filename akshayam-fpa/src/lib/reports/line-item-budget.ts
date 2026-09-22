@@ -19,8 +19,16 @@ import type { EstablishmentResult } from "@/lib/reports/establishment-detail";
 
 export interface LineItemSchedule {
   label: string;
-  /** the whole-year budget, from the planning workbook */
+  /** the whole-year budget, from the planning workbook - the sum of `monthly` when given */
   annual: number;
+  /**
+   * The workbook's own month-by-month figure, keyed by calendar month
+   * ("04"..."12", "01"..."03"), for a line the sheet does not budget evenly
+   * across the year - a rent that runs for one quarter and then stops, say.
+   * Read in preference to spreading `annual` evenly whenever a month is
+   * missing from this map it is budgeted at zero, not at the annual average.
+   */
+  monthly?: Partial<Record<string, number>>;
   /** exact ledger account name(s) this line's actual is read from */
   accountNames: string[];
 }
@@ -82,12 +90,19 @@ export async function buildLineItemBudget(opts: {
   const sumRows = (rs: typeof rows, keys: Set<string>) =>
     rs.filter((r) => keys.has(r.month_key)).reduce((s, r) => s + Number(r.amount), 0);
 
+  const budgetOver = (s: LineItemSchedule, monthKeys: Set<string>, fraction: number) => {
+    if (!s.monthly) return s.annual * fraction;
+    let total = 0;
+    for (const key of monthKeys) total += s.monthly[key.slice(5, 7)] ?? 0;
+    return total;
+  };
+
   const lines = schedule.map((s) => {
     const matched = rows.filter((r) => s.accountNames.includes(r.name));
     const periodActual = sumRows(matched, periodKeys);
     const ytdActual = sumRows(matched, ytdKeys);
-    const periodBudget = s.annual * periodFraction;
-    const ytdBudget = s.annual * ytdFraction;
+    const periodBudget = budgetOver(s, periodKeys, periodFraction);
+    const ytdBudget = budgetOver(s, ytdKeys, ytdFraction);
     const ytdVariance = ytdBudget - ytdActual;
     return {
       label: s.label,
@@ -132,16 +147,38 @@ export async function buildLineItemBudget(opts: {
  * maintenance half of the same budgeted line, so its actual is read in here
  * too rather than left to surface as unexplained overhead elsewhere.
  */
+/** "04" through "03" - every month of the FY the workbook's own columns run, April first. */
+const ALL_MONTHS = ["04", "05", "06", "07", "08", "09", "10", "11", "12", "01", "02", "03"];
+
+/** The same figure in every month of the FY, from the workbook's own columns - not assumed, read off the sheet and found even. */
+const flat = (amount: number): Record<string, number> =>
+  Object.fromEntries(ALL_MONTHS.map((m) => [m, amount]));
+
 export const AKSHAYAM_ESTABLISHMENT_SCHEDULE: LineItemSchedule[] = [
-  { label: "Branch Office Rent — GIFT City", annual: 816000, accountNames: ["Branch Office Rent"] },
   {
+    label: "Branch Office Rent — GIFT City",
+    annual: 816000,
+    monthly: flat(68000),
+    accountNames: ["Branch Office Rent"],
+  },
+  {
+    // Budgeted for Q1 only - the sheet's own Jul-Mar columns are blank, not
+    // an equal share of the annual figure. See "why is this 5,750" in the
+    // load history: spreading 69,000 evenly across twelve months invented a
+    // Rs 5,750 a month the workbook never budgeted past June.
     label: "Flat Rent & Maintenance",
     annual: 69000,
+    monthly: { "04": 23000, "05": 23000, "06": 23000 },
     accountNames: ["Flat Rent", "Flat Maintanance"],
   },
 ];
 
 export const AKSHAYAM_OTHER_EXPENSES_SCHEDULE: LineItemSchedule[] = [
-  { label: "Accounting support", annual: 240000, accountNames: ["Accounting  Services Fees"] },
-  { label: "Other Expenses", annual: 300000, accountNames: ["Other Expenses"] },
+  {
+    label: "Accounting support",
+    annual: 240000,
+    monthly: flat(20000),
+    accountNames: ["Accounting  Services Fees"],
+  },
+  { label: "Other Expenses", annual: 300000, monthly: flat(25000), accountNames: ["Other Expenses"] },
 ];
