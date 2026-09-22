@@ -127,6 +127,14 @@ export interface TdsRecoRow {
   form26as: number;
   difference: number;
   segment: TdsSegment;
+  /**
+   * Why the TDS entry is not in Zoho, or whatever else explains this
+   * customer's gap - free text, kept per (entity, FY, quarter, customer).
+   * Only set on `byCustomer` rows; the vertical and unallocated views group
+   * differently and a remark keyed to one customer would read as belonging
+   * to whichever customer happened to be folded in first.
+   */
+  remark: string | null;
 }
 
 export interface TdsSegmentSummary {
@@ -233,6 +241,16 @@ export async function buildTdsReco({
   );
   const has26as = (coverage?.rows ?? 0) > 0;
 
+  // Remarks are written against the entity actually being looked at, not
+  // its member ids - a note is someone's own account of what they found,
+  // and a slice has no reconciliation of its own to write one against.
+  const remarkRows = await query<{ customer: string; remark: string }>(
+    `select customer, remark from tds_remarks
+      where entity_id = $1 and fy_start_year = $2 and quarter = $3`,
+    [entity.id, fyStartYear, quarter],
+  );
+  const remarkByCustomer = new Map(remarkRows.map((r) => [r.customer, r.remark]));
+
   const args = [entity.memberIds, period.start, period.end, verticalId, entity.verticalIds, customer];
 
   /*
@@ -307,6 +325,7 @@ export async function buildTdsReco({
     form26as: Number(r.form26as),
     difference: Number(r.books) - Number(r.form26as),
     segment: tdsSegmentOf(Number(r.books), Number(r.form26as)),
+    remark: null,
   }));
 
   /*
@@ -345,6 +364,7 @@ export async function buildTdsReco({
     .map(({ verticals: _verticals, ...row }) => ({
       ...row,
       segment: tdsSegmentOf(row.books, row.form26as),
+      remark: remarkByCustomer.get(row.label) ?? null,
     }))
     .sort((a, b) => Math.abs(b.difference) - Math.abs(a.difference) || b.form26as - a.form26as);
 
@@ -381,6 +401,7 @@ export async function buildTdsReco({
         form26as: row.form26as,
         difference: row.difference,
         segment: row.segment,
+        remark: null,
       });
     }
   }
@@ -566,6 +587,49 @@ export interface TdsDrillResult {
   columns: { header: string; type: string; strong?: boolean }[];
   rows: (string | number | null)[][];
   total: number;
+  /**
+   * Set only for `side: "invoice"` - the same customer's Form 26AS entries,
+   * shown alongside the invoice list so a "difference" or "in Form 26AS, not
+   * in books" customer can be read both ways at once. 26AS carries no
+   * invoice number, so this is the closest a reader gets to lining the two
+   * up without inventing a link that is not really there.
+   */
+  secondary?: { title: string; result: TdsDrillResult };
+}
+
+/** Form 26AS's own entries for one customer - shared by `side: "26as"` and, alongside the invoice list, `side: "invoice"`. */
+async function tds26asRows(
+  entity: Entity,
+  period: { start: string; end: string },
+  customer: string,
+  limit: number,
+): Promise<TdsDrillResult> {
+  const rows = await query<Record<string, string | number | null>>(
+    `select transaction_date::text as d, deductor_name, tan, section,
+            booking_status, amount_credited, tax_deducted
+       from tds_entries
+      where entity_id = any($1::int[])
+        and transaction_date between $2 and $3
+        and customer_name = $4
+      order by tax_deducted desc limit $5`,
+    [entity.memberIds, period.start, period.end, customer, limit],
+  );
+  return {
+    columns: [
+      { header: "Date", type: "date" },
+      { header: "Deductor", type: "text" },
+      { header: "TAN", type: "text" },
+      { header: "Section", type: "text" },
+      { header: "Booking", type: "text" },
+      { header: "Amount credited", type: "money" },
+      { header: "TDS", type: "money", strong: true },
+    ],
+    rows: rows.map((r) => [
+      r.d, r.deductor_name, r.tan, r.section, r.booking_status,
+      Number(r.amount_credited), Number(r.tax_deducted),
+    ]),
+    total: rows.reduce((s, r) => s + Number(r.tax_deducted), 0),
+  };
 }
 
 /** The individual lines behind one customer's books or 26AS figure, for one quarter. */
@@ -610,6 +674,8 @@ export async function tdsDrill(
       [entity.memberIds, period.start, period.end, customer, limit],
     );
 
+    const secondary26as = await tds26asRows(entity, period, customer, limit);
+
     return {
       columns: [
         { header: "Invoice date", type: "date" },
@@ -630,36 +696,18 @@ export async function tdsDrill(
         ];
       }),
       total: rows.reduce((s, r) => s + Number(r.tds), 0),
+      // Only worth showing beside the invoice list when there is something on
+      // that side to compare against - an empty table would just read as
+      // "26AS was checked and carries nothing", which the segment already says.
+      secondary:
+        secondary26as.rows.length > 0
+          ? { title: "Form 26AS entries for this customer", result: secondary26as }
+          : undefined,
     };
   }
 
   if (side === "26as") {
-    const rows = await query<Record<string, string | number | null>>(
-      `select transaction_date::text as d, deductor_name, tan, section,
-              booking_status, amount_credited, tax_deducted
-         from tds_entries
-        where entity_id = any($1::int[])
-          and transaction_date between $2 and $3
-          and customer_name = $4
-        order by tax_deducted desc limit $5`,
-      [entity.memberIds, period.start, period.end, customer, limit],
-    );
-    return {
-      columns: [
-        { header: "Date", type: "date" },
-        { header: "Deductor", type: "text" },
-        { header: "TAN", type: "text" },
-        { header: "Section", type: "text" },
-        { header: "Booking", type: "text" },
-        { header: "Amount credited", type: "money" },
-        { header: "TDS", type: "money", strong: true },
-      ],
-      rows: rows.map((r) => [
-        r.d, r.deductor_name, r.tan, r.section, r.booking_status,
-        Number(r.amount_credited), Number(r.tax_deducted),
-      ]),
-      total: rows.reduce((s, r) => s + Number(r.tax_deducted), 0),
-    };
+    return tds26asRows(entity, period, customer, limit);
   }
 
   const rows = await query<Record<string, string | number | null>>(

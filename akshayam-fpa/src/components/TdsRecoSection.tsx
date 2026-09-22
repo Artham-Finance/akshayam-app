@@ -2,6 +2,7 @@ import Link from "next/link";
 import clsx from "clsx";
 import { DataTable, drillColumns, renderDrillRow } from "@/components/DataTable";
 import { Card, CardTitle, DrillPanel, KpiTile, Notice } from "@/components/ui";
+import { TdsRemarkCell } from "@/components/TdsRemarkCell";
 import { compactINR, dateLabel, money, moneySigned } from "@/lib/format";
 import { withParams, type Params } from "@/lib/href";
 import type { Entity } from "@/lib/entity";
@@ -176,6 +177,13 @@ export async function TdsRecoSection({
     "",
     "",
     money(reco.booksOnlyInvoices.reduce((s, r) => s + r.amount, 0)),
+  ];
+  const retOnlyCustomers = reco.byCustomer.filter((r) => r.segment === "ret_only");
+  const retOnlyTotalsRow = [
+    `Total — ${retOnlyCustomers.length} customer${retOnlyCustomers.length === 1 ? "" : "s"}`,
+    "",
+    money(retOnlyCustomers.reduce((s, r) => s + r.form26as, 0)),
+    "",
   ];
   const byVerticalTotalsRow = [
     "Total",
@@ -397,6 +405,42 @@ export async function TdsRecoSection({
         </div>
       )}
 
+      {segment === "ret_only" && retOnlyCustomers.length > 0 && (
+        <div className="border-t border-line">
+          <div className="p-4 sm:p-5">
+            <CardTitle hint={`${retOnlyCustomers.length} customer${retOnlyCustomers.length === 1 ? "" : "s"} · every vertical`}>
+              Form 26AS entries not in Zoho
+            </CardTitle>
+            <p className="-mt-1 text-[12.5px] leading-relaxed text-ink-muted">
+              The department recorded a deduction against these customers, but no bill raises a
+              matching TDS receivable in the books — there is no invoice to point at, so the
+              reason is whatever is written down here.
+            </p>
+          </div>
+          <DataTable
+            columns={[
+              { header: "Customer" },
+              { header: "Vertical" },
+              { header: "Per 26AS", numeric: true, strong: true },
+              { header: "Remarks" },
+            ]}
+            rows={retOnlyCustomers.map((r) => [
+              r.label,
+              r.verticalCode ?? "—",
+              money(r.form26as),
+              <TdsRemarkCell
+                key="r"
+                fyStartYear={fyStartYear}
+                quarter={quarter}
+                customer={r.label}
+                initialValue={r.remark}
+              />,
+            ])}
+            topTotals={retOnlyTotalsRow}
+          />
+        </div>
+      )}
+
       {drill && (
         <div className="px-4 pb-4 sm:px-5">
           <DrillPanel
@@ -423,6 +467,17 @@ export async function TdsRecoSection({
               rows={drill.rows.map((r) => renderDrillRow(r, drill.columns))}
               topTotals={drillTotalsRow}
             />
+            {drill.secondary && (
+              <div className="mt-4 border-t border-line pt-4">
+                <p className="mb-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
+                  {drill.secondary.title}
+                </p>
+                <DataTable
+                  columns={drillColumns(drill.secondary.result.columns)}
+                  rows={drill.secondary.result.rows.map((r) => renderDrillRow(r, drill.secondary!.result.columns))}
+                />
+              </div>
+            )}
           </DrillPanel>
         </div>
       )}

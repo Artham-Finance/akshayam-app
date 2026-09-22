@@ -1,4 +1,3 @@
-import { ApportionmentTable } from "@/components/ApportionmentTable";
 import { CommonSize } from "@/components/BvaTable";
 import { DataTable, type Column } from "@/components/DataTable";
 import { PeriodControls } from "@/components/PeriodControls";
@@ -6,6 +5,7 @@ import { QuarterTabs } from "@/components/QuarterTabs";
 import { SetupRequired } from "@/components/SetupRequired";
 import { StatementTable, type ClientLine } from "@/components/StatementTable";
 import { VerticalContributionCard } from "@/components/VerticalContributionCard";
+import { VerticalCostApportionmentTable } from "@/components/VerticalCostApportionmentTable";
 import {
   Card,
   CardTitle,
@@ -32,6 +32,10 @@ import { buildApportionment, receiverKeyFor } from "@/lib/reports/apportionment"
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
 import { buildRevenueTransferCard } from "@/lib/reports/revenue-transfer-card";
 import { buildAccountEntries, type StatementEntry } from "@/lib/reports/statement-drill";
+import {
+  buildVerticalCostApportionment,
+  costApportionmentKeyFor,
+} from "@/lib/reports/vertical-cost-apportionment";
 import {
   buildScorecard,
   resolveScorecardScope,
@@ -142,10 +146,10 @@ export default async function ProfitAndLossPage({
     const apportionMonth =
       months.find((m) => m.key === requestedMonth && m.quarter === quarter)?.key ?? null;
 
-    const [bva, apportionment] = await Promise.all([
+    const [bva, costApportionment] = await Promise.all([
       buildBudgetVsActualPnl({ entity, fyStartYear: fy, verticalId, window }),
       /**
-       * Always struck across every vertical, even when one is picked.
+       * Always struck across all six verticals, even when one is picked.
        *
        * Common cost is spread over the verticals that use it, so computing it
        * for one alone would hand that vertical the whole pool. The spread is
@@ -155,7 +159,7 @@ export default async function ProfitAndLossPage({
        */
       scope.isSlice
         ? null
-        : buildApportionment({ entity, fyStartYear: fy, quarter, month: apportionMonth }),
+        : buildVerticalCostApportionment({ entity, fyStartYear: fy, quarter, month: apportionMonth }),
     ]);
 
     /**
@@ -174,22 +178,18 @@ export default async function ProfitAndLossPage({
     /**
      * The table, narrowed to the picked vertical.
      *
-     * AIF and GIFT share one column, so the code is resolved through the
-     * apportionment's own mapping rather than matched directly. A vertical the
-     * budget does not apportion to - Common, partner contribution - resolves to
-     * nothing, and the table is left out rather than shown empty.
+     * A vertical outside the six this card apportions to - Common, ACC, HRCM,
+     * GIFT/AIF, DSC - resolves to nothing, and the table is left out rather
+     * than shown empty.
      */
     const focusCode = verticals.find((v) => v.id === verticalId)?.code ?? null;
-    // The lines outside the budget's nine - Common, partner contribution -
-    // are keyed on their own code, so a vertical that receives no
-    // apportionment still has a column of its own to show.
-    const focusKey = receiverKeyFor(focusCode) ?? focusCode;
-    const shownApportionment =
-      !apportionment || verticalId === null
-        ? apportionment
+    const costFocusKey = costApportionmentKeyFor(focusCode);
+    const shownCostApportionment =
+      !costApportionment || verticalId === null
+        ? costApportionment
         : {
-            ...apportionment,
-            verticals: apportionment.verticals.filter((v) => v.key === focusKey),
+            ...costApportionment,
+            verticals: costApportionment.verticals.filter((v) => v.key === costFocusKey),
           };
 
     // Whole-company view can have hundreds of postings per account across
@@ -386,10 +386,10 @@ export default async function ProfitAndLossPage({
             />
           </Card>
 
-          {shownApportionment?.applicable && shownApportionment.verticals.length > 0 && (
+          {shownCostApportionment?.applicable && shownCostApportionment.verticals.length > 0 && (
             <Card padded={false}>
               <div className="flex flex-wrap items-start justify-between gap-3 px-4 pt-4 sm:px-5">
-                <CardTitle hint={`${shownApportionment.label} · for VPP`}>
+                <CardTitle hint={`${shownCostApportionment.label} · for VPP`}>
                   Vertical-wise P&amp;L, after cost apportionment
                 </CardTitle>
                 <QuarterTabs
@@ -401,20 +401,7 @@ export default async function ProfitAndLossPage({
                   hrefFor={(q, m) => withParams("/pnl", params, { q: `q${q}`, qm: m })}
                 />
               </div>
-              <ApportionmentTable data={shownApportionment} canEditHeads={canEditHeads} />
-              {verticalId === null && apportionment && apportionment.outside.length > 0 && (
-                <p className="px-4 pb-4 text-[11.5px] text-ink-muted sm:px-5">
-                  Outside the nine budgeted verticals:{" "}
-                  {apportionment.outside
-                    .map(
-                      (o) =>
-                        `${o.label} — revenue ${Math.round(o.revenue).toLocaleString("en-IN")}, cost ${Math.round(o.directCost).toLocaleString("en-IN")}`,
-                    )
-                    .join("; ")}
-                  . These carry no apportionment: the budget spreads common cost
-                  over nine verticals and these are not among them.
-                </p>
-              )}
+              <VerticalCostApportionmentTable data={shownCostApportionment} canEditHeads={canEditHeads} />
             </Card>
           )}
         </div>

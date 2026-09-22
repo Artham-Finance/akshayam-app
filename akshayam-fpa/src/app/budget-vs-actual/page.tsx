@@ -220,13 +220,18 @@ export default async function BudgetVsActualPage({
         : null,
     ]);
 
-    // Lines the budget carries but the ledger has not yet posted. Depreciation
-    // and tax land at audit and drawings may be booked to the balance sheet, so
-    // an empty actual is a timing difference, not a saving.
+    // Lines the budget carries but the ledger has not yet posted - only the
+    // ones where that is expected and explained by audit timing: depreciation
+    // and tax land once a year at audit, and drawings may be booked to the
+    // balance sheet instead of the P&L. A real operating line (team cost,
+    // establishment cost, other expenses) reading nil for the period is a
+    // ledger question worth asking, not timing, so it is left off this notice
+    // rather than explained away by a line that does not apply to it.
+    const AUDIT_TIMING_CODES = new Set(["depreciation", "tax", "partner_drawings"]);
     const notYetPosted = (statement?.lines ?? [])
       .filter(
         (l) =>
-          !l.isSubtotal &&
+          AUDIT_TIMING_CODES.has(l.code) &&
           periodMonths.reduce((s, m) => s + l.budget[m.key], 0) > 0 &&
           Math.abs(periodMonths.reduce((s, m) => s + l.actual[m.key], 0)) < 0.5,
       )
@@ -386,7 +391,13 @@ export default async function BudgetVsActualPage({
             </Card>
           )}
 
-          {!isSlice && expenseDetail?.hasDetail && (
+          {/*
+            Akshayam has its own "Other expenses - budget vs actual" card
+            above, read from "4 - Akshayam Monthly"'s own named accounts -
+            this generic keyed-entry breakdown would just duplicate it with a
+            different definition of the same line.
+          */}
+          {!isSlice && !isAkshayam && expenseDetail?.hasDetail && (
             <Card padded={false}>
               <div className="px-4 pt-4 sm:px-5">
                 <CardTitle
