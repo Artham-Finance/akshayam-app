@@ -1,7 +1,5 @@
 import type { Entity } from "@/lib/entity";
 import { fyLabel, fyMonths, groupByQuarter, quarterLabel, type FyMonth } from "@/lib/period";
-import { buildApportionment } from "@/lib/reports/apportionment";
-import { BASIS_LABEL, HEAD_BASIS } from "@/lib/reports/apportionment";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
 import { buildEstablishmentDetail } from "@/lib/reports/establishment-detail";
 import { buildExpenseDetail, type ExpenseDetailLine } from "@/lib/reports/expense-detail";
@@ -12,6 +10,7 @@ import {
   type StatementResult,
 } from "@/lib/reports/statements";
 import { buildTeamCost } from "@/lib/reports/team-cost";
+import { buildVerticalCostApportionment } from "@/lib/reports/vertical-cost-apportionment";
 import { addSheet, createWorkbook, type SheetSpec } from "@/lib/reports/xlsx";
 
 /**
@@ -266,38 +265,46 @@ export async function buildStatementWorkbook(opts: {
 
     // One sheet per quarter that has something to apportion.
     for (const quarter of [1, 2, 3, 4] as const) {
-      const a = await buildApportionment({ entity, fyStartYear, quarter });
+      const a = await buildVerticalCostApportionment({ entity, fyStartYear, quarter });
       if (!a.applicable) continue;
 
+      const total = (pick: (v: (typeof a.verticals)[number]) => number) =>
+        a.verticals.reduce((s, v) => s + pick(v), 0);
+      const lineRows = (lines: typeof a.directTeamCostLines) =>
+        lines.map((line) => [
+          `    ${line.account}`,
+          ...a.verticals.map((v) => line.amountByKey[v.key] ?? null),
+          line.total,
+        ]);
+
       const rows: (string | number | null)[][] = [
-        ["Head count", ...a.verticals.map((v) => v.heads), a.verticals.reduce((s, v) => s + v.heads, 0)],
-        ["Revenue", ...a.verticals.map((v) => v.revenue), a.verticals.reduce((s, v) => s + v.revenue, 0)],
-        [
-          "Direct cost",
-          ...a.verticals.map((v) => v.directCost),
-          a.verticals.reduce((s, v) => s + v.directCost, 0),
-        ],
-        ...a.heads.map((h) => [
-          `    ${h}  (${BASIS_LABEL[HEAD_BASIS[h]]})`,
-          ...a.verticals.map((v) => v.apportioned[h] ?? null),
-          a.pool[h] ?? 0,
-        ]),
-        [
-          "Apportioned common cost",
-          ...a.verticals.map((v) => v.apportionedTotal),
-          a.poolTotal,
-        ],
-        [
-          "Total cost",
-          ...a.verticals.map((v) => v.totalCost),
-          a.verticals.reduce((s, v) => s + v.totalCost, 0),
-        ],
-        [
-          "Contribution",
-          ...a.verticals.map((v) => v.contribution),
-          a.verticals.reduce((s, v) => s + v.contribution, 0),
-        ],
+        ["Head count", ...a.verticals.map((v) => v.heads), total((v) => v.heads)],
+        ["Revenue", ...a.verticals.map((v) => v.revenue), total((v) => v.revenue)],
       ];
+      const emphasise = [0];
+      const rule = [2];
+
+      emphasise.push(rows.length);
+      rows.push(["Direct team cost", ...a.verticals.map((v) => v.directTeamCost), total((v) => v.directTeamCost)]);
+      rows.push(...lineRows(a.directTeamCostLines));
+
+      emphasise.push(rows.length);
+      rows.push(["Direct overheads", ...a.verticals.map((v) => v.directOverheads), total((v) => v.directOverheads)]);
+      rows.push(...lineRows(a.directOverheadLines));
+
+      emphasise.push(rows.length);
+      rows.push([
+        "Common cost — apportioned",
+        ...a.verticals.map((v) => v.commonApportioned),
+        total((v) => v.commonApportioned),
+      ]);
+      rows.push(...lineRows(a.commonCostLines));
+
+      rule.push(rows.length);
+      emphasise.push(rows.length);
+      rows.push(["Total cost", ...a.verticals.map((v) => v.totalCost), total((v) => v.totalCost)]);
+      emphasise.push(rows.length);
+      rows.push(["Contribution", ...a.verticals.map((v) => v.contribution), total((v) => v.contribution)]);
 
       addSheet(workbook, {
         name: `Apportionment ${a.label.slice(0, 2)}`,
@@ -305,7 +312,7 @@ export async function buildStatementWorkbook(opts: {
         context: [
           ...context,
           `${a.start} to ${a.end}`,
-          "on the budget's own bases · contribution is the VPP line",
+          "on head count only, across the six verticals · contribution is the VPP line",
         ],
         columns: [
           { header: "Particulars", type: "text" },
@@ -316,8 +323,8 @@ export async function buildStatementWorkbook(opts: {
         // Excel takes the format from the column, so it is left unformatted
         // rather than given a column type the other rows would inherit.
         rows,
-        emphasise: [0, rows.length - 3, rows.length - 2, rows.length - 1],
-        rule: [3, rows.length - 3],
+        emphasise,
+        rule,
         freezeColumns: 1,
       });
     }
