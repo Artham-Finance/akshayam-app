@@ -21,11 +21,18 @@ export function VerticalCostApportionmentTable({
   data,
   initialScale = "abs",
   canEditHeads = false,
+  compact = false,
 }: {
   data: VerticalCostApportionmentResult;
   initialScale?: Scale;
   /** the viewer may key head count in - only takes effect on a single-month view */
   canEditHeads?: boolean;
+  /**
+   * Figures only, no expand and no head-count editing - for a team lead's own
+   * vertical, narrowed to one column, where the accounts behind a figure are
+   * not this login's to see.
+   */
+  compact?: boolean;
 }) {
   const router = useRouter();
   const [scale, setScale] = useState<Scale>(initialScale);
@@ -33,7 +40,7 @@ export function VerticalCostApportionmentTable({
   const [applyForward, setApplyForward] = useState(true);
   const [saving, startSave] = useTransition();
 
-  const editHeads = canEditHeads && data.month !== null;
+  const editHeads = !compact && canEditHeads && data.month !== null;
 
   const saveHeads = async (verticalId: number, heads: number) => {
     try {
@@ -72,13 +79,15 @@ export function VerticalCostApportionmentTable({
     <>
       <div className="no-print flex flex-wrap items-center justify-between gap-3 px-3 pb-3">
         <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setShowDetail((v) => !v)}
-            className="rounded-md border border-line px-2.5 py-1.5 text-[12px] font-medium text-ink-muted transition-colors hover:border-line-strong hover:text-ink"
-          >
-            {showDetail ? "Hide cost detail" : "Show cost detail"}
-          </button>
+          {!compact && (
+            <button
+              type="button"
+              onClick={() => setShowDetail((v) => !v)}
+              className="rounded-md border border-line px-2.5 py-1.5 text-[12px] font-medium text-ink-muted transition-colors hover:border-line-strong hover:text-ink"
+            >
+              {showDetail ? "Hide cost detail" : "Show cost detail"}
+            </button>
+          )}
           {editHeads && (
             <label className="flex items-center gap-1.5 text-[12px] text-ink-muted">
               <input

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { query, queryOne, transaction } from "@/lib/db";
 import { apiGuard, audit } from "@/lib/auth/dal";
 import { ROLES } from "@/lib/auth/permissions";
+import { REPORT_CODES } from "@/lib/auth/reports";
 import { hashPassword, passwordProblem } from "@/lib/auth/password";
 import { destroyAllSessionsFor } from "@/lib/auth/session";
 
@@ -23,6 +24,7 @@ export const runtime = "nodejs";
  */
 
 const EntityIds = z.array(z.number().int().positive()).max(50);
+const ReportCodes = z.array(z.enum(REPORT_CODES)).max(REPORT_CODES.length);
 
 const Create = z.object({
   action: z.literal("create"),
@@ -31,6 +33,7 @@ const Create = z.object({
   role: z.enum(ROLES),
   password: z.string(),
   entityIds: EntityIds,
+  reportAccess: ReportCodes,
 });
 
 const Update = z.object({
@@ -40,6 +43,7 @@ const Update = z.object({
   role: z.enum(ROLES).optional(),
   isActive: z.boolean().optional(),
   entityIds: EntityIds.optional(),
+  reportAccess: ReportCodes.optional(),
   /** Optional. Saving a new password alongside the other changes is the same
    *  act to whoever is doing it, so it is the same request. */
   password: z.string().optional(),
@@ -104,6 +108,13 @@ export async function POST(request: Request) {
           `insert into user_entities (user_id, entity_id)
            select $1, unnest($2::int[])`,
           [id, body.entityIds],
+        );
+      }
+      if (body.reportAccess.length > 0) {
+        await client.query(
+          `insert into user_report_access (user_id, report_code)
+           select $1, unnest($2::text[])`,
+          [id, body.reportAccess],
         );
       }
       return id;
@@ -172,6 +183,16 @@ export async function POST(request: Request) {
           );
         }
       }
+      if (body.reportAccess !== undefined) {
+        await client.query("delete from user_report_access where user_id = $1", [body.id]);
+        if (body.reportAccess.length > 0) {
+          await client.query(
+            `insert into user_report_access (user_id, report_code)
+             select $1, unnest($2::text[])`,
+            [body.id, body.reportAccess],
+          );
+        }
+      }
     });
 
     // A revoked role or a withdrawn company should bite now, not in a
@@ -181,7 +202,8 @@ export async function POST(request: Request) {
       newHash ||
       body.role !== undefined ||
       body.isActive === false ||
-      body.entityIds !== undefined
+      body.entityIds !== undefined ||
+      body.reportAccess !== undefined
     ) {
       await destroyAllSessionsFor(body.id);
     }
@@ -192,6 +214,7 @@ export async function POST(request: Request) {
       role: body.role,
       isActive: body.isActive,
       entityIds: body.entityIds,
+      reportAccess: body.reportAccess,
       passwordChanged: Boolean(newHash),
     });
     return NextResponse.json({ ok: true });

@@ -4,7 +4,6 @@ import { PeriodControls } from "@/components/PeriodControls";
 import { QuarterTabs } from "@/components/QuarterTabs";
 import { SetupRequired } from "@/components/SetupRequired";
 import { StatementTable, type ClientLine } from "@/components/StatementTable";
-import { VerticalContributionCard } from "@/components/VerticalContributionCard";
 import { VerticalCostApportionmentTable } from "@/components/VerticalCostApportionmentTable";
 import { VerticalCostApportionmentWideTable } from "@/components/VerticalCostApportionmentWideTable";
 import {
@@ -23,13 +22,12 @@ import {
 } from "@/lib/entity";
 import { withParams } from "@/lib/href";
 import { compactINR, dateLabel, money } from "@/lib/format";
-import { fyBounds, fyMonths, type QuarterNo } from "@/lib/period";
+import { fyMonths, type QuarterNo } from "@/lib/period";
 import {
   getReportingPeriod,
   ledgerAsOfLabel,
   ledgerWrittenTo,
 } from "@/lib/reporting-period";
-import { buildApportionment, receiverKeyFor } from "@/lib/reports/apportionment";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
 import { buildRevenueTransferCard } from "@/lib/reports/revenue-transfer-card";
 import { buildAccountEntries, type StatementEntry } from "@/lib/reports/statement-drill";
@@ -37,13 +35,9 @@ import {
   buildVerticalCostApportionment,
   costApportionmentKeyFor,
 } from "@/lib/reports/vertical-cost-apportionment";
-import {
-  buildScorecard,
-  resolveScorecardScope,
-  type ScorecardRow,
-} from "@/lib/reports/scorecard";
+import { resolveScorecardScope } from "@/lib/reports/scorecard";
 import { buildProfitAndLoss } from "@/lib/reports/statements";
-import { can, requireEntityAccess } from "@/lib/auth/dal";
+import { can, requireEntityAccess, requireReportAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -62,6 +56,7 @@ export default async function ProfitAndLossPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   await requireEntityAccess();
+  await requireReportAccess("pnl");
   const params = await searchParams;
 
   try {
@@ -150,43 +145,29 @@ export default async function ProfitAndLossPage({
     const [bva, costApportionment] = await Promise.all([
       buildBudgetVsActualPnl({ entity, fyStartYear: fy, verticalId, window }),
       /**
-       * Always struck across all six verticals, even when one is picked.
-       *
-       * Common cost is spread over the verticals that use it, so computing it
+       * Always struck across all six verticals, even when one is picked -
+       * common cost is spread over the verticals that use it, so computing it
        * for one alone would hand that vertical the whole pool. The spread is
-       * the company's; only the column shown narrows to the picker.
-       *
-       * A slice gets the scorecard-matching card instead, so this is skipped.
+       * the company's; only the columns shown narrow, below, to whichever one
+       * vertical the picker or a team lead's own slice narrows to.
        */
-      scope.isSlice
-        ? null
-        : buildVerticalCostApportionment({ entity, fyStartYear: fy, quarter, month: apportionMonth }),
+      buildVerticalCostApportionment({ entity, fyStartYear: fy, quarter, month: apportionMonth }),
     ]);
 
     /**
-     * A team lead's net revenue contribution, struck exactly as the Vertical
-     * Performance Scorecard does it - the whole book the slice is cut from,
-     * cumulative to the last quarter the ledger reaches - then narrowed to
-     * their own row. Same builder, so the two pages cannot disagree.
+     * The table, narrowed to the picked vertical - or, for a team lead, to
+     * the one vertical their slice login is scoped to, with no picker needed
+     * to say so. A vertical outside the six this card apportions to - Common,
+     * ACC, HRCM, GIFT/AIF, DSC - resolves to nothing, and the table is left
+     * out rather than shown empty.
      */
-    const contribution = await buildSliceContribution({
-      scope,
-      fy,
-      writtenTo,
-      sliceVerticalCodes: verticals.map((v) => v.code),
-    });
-
-    /**
-     * The table, narrowed to the picked vertical.
-     *
-     * A vertical outside the six this card apportions to - Common, ACC, HRCM,
-     * GIFT/AIF, DSC - resolves to nothing, and the table is left out rather
-     * than shown empty.
-     */
-    const focusCode = verticals.find((v) => v.id === verticalId)?.code ?? null;
+    const focusCode = scope.isSlice
+      ? (verticals[0]?.code ?? null)
+      : (verticals.find((v) => v.id === verticalId)?.code ?? null);
     const costFocusKey = costApportionmentKeyFor(focusCode);
+    const narrowToFocus = verticalId !== null || scope.isSlice;
     const shownCostApportionment =
-      !costApportionment || verticalId === null
+      !costApportionment || !narrowToFocus
         ? costApportionment
         : {
             ...costApportionment,
@@ -332,21 +313,6 @@ export default async function ProfitAndLossPage({
             initialShowDetail={singleVerticalView}
           />
 
-          {contribution && (
-            <Card padded={false}>
-              <div className="px-4 pt-4 sm:px-5">
-                <CardTitle hint={`${contribution.quarterLabel} · as on the scorecard`}>
-                  Net revenue contribution — direct &amp; apportioned cost
-                </CardTitle>
-              </div>
-              <VerticalContributionCard
-                rows={contribution.rows}
-                firmTotals={contribution.firmTotals}
-                apportionedByHead={contribution.apportionedByHead}
-              />
-            </Card>
-          )}
-
           {revenueTransfer && revenueTransfer.rows.length > 0 && (
             <Card padded={false}>
               <div className="px-4 pt-4 sm:px-5">
@@ -402,7 +368,11 @@ export default async function ProfitAndLossPage({
                   hrefFor={(q, m) => withParams("/pnl", params, { q: `q${q}`, qm: m })}
                 />
               </div>
-              <VerticalCostApportionmentTable data={shownCostApportionment} canEditHeads={canEditHeads} />
+              <VerticalCostApportionmentTable
+                data={shownCostApportionment}
+                canEditHeads={canEditHeads}
+                compact={scope.isSlice}
+              />
             </Card>
           )}
 
@@ -413,7 +383,11 @@ export default async function ProfitAndLossPage({
                   Vertical-wise P&amp;L, apportioned on company-wide head count
                 </CardTitle>
               </div>
-              <VerticalCostApportionmentWideTable data={shownCostApportionment} canEditHeads={canEditHeads} />
+              <VerticalCostApportionmentWideTable
+                data={shownCostApportionment}
+                canEditHeads={canEditHeads}
+                compact={scope.isSlice}
+              />
             </Card>
           )}
         </div>
@@ -424,84 +398,4 @@ export default async function ProfitAndLossPage({
       err instanceof Error ? err.message : "Could not reach the database.";
     return <SetupRequired message={message} />;
   }
-}
-
-/**
- * A team lead's net revenue contribution, struck exactly as the Vertical
- * Performance Scorecard strikes it - the whole book the slice is cut from,
- * cumulative to the last quarter the ledger reaches - then narrowed to their
- * own row. Uses the same builder as the scorecard, so the numbers match; the
- * per-head apportioned breakdown is folded from the same quarters.
- */
-async function buildSliceContribution(opts: {
-  scope: Awaited<ReturnType<typeof resolveScorecardScope>>;
-  fy: number;
-  writtenTo: string | null;
-  sliceVerticalCodes: string[];
-}): Promise<{
-  rows: ScorecardRow[];
-  firmTotals: {
-    revenue: number;
-    directCost: number;
-    apportionedCost: number;
-    contribution: number;
-  };
-  apportionedByHead: Record<string, number>;
-  quarterLabel: string;
-} | null> {
-  const { scope, fy, writtenTo, sliceVerticalCodes } = opts;
-  if (!scope.isSlice || !scope.visibleCodes || scope.visibleCodes.size === 0) {
-    return null;
-  }
-
-  const { end: fyEnd } = fyBounds(fy, scope.benchmark.fy_start_month);
-  const latestQuarter =
-    (fyMonths(fy, scope.benchmark.fy_start_month)
-      .filter((m) => m.start <= (writtenTo ?? fyEnd))
-      .at(-1)?.quarter as QuarterNo | undefined) ?? 1;
-  const quartersInRange = ([1, 2, 3, 4] as QuarterNo[]).filter((q) => q <= latestQuarter);
-
-  const [sc, aps] = await Promise.all([
-    buildScorecard({
-      entity: scope.benchmark,
-      fyStartYear: fy,
-      quarter: latestQuarter,
-      cumulative: true,
-    }),
-    Promise.all(
-      quartersInRange.map((q) =>
-        buildApportionment({ entity: scope.benchmark, fyStartYear: fy, quarter: q }),
-      ),
-    ),
-  ]);
-
-  const rows = sc.rows.filter((r) => scope.visibleCodes!.has(r.code));
-  if (rows.length === 0) return null;
-
-  const focusKeys = new Set(
-    sliceVerticalCodes
-      .map((c) => receiverKeyFor(c))
-      .filter((k): k is string => k !== null),
-  );
-  const apportionedByHead: Record<string, number> = {};
-  for (const ap of aps) {
-    for (const v of ap.verticals) {
-      if (!focusKeys.has(v.key)) continue;
-      for (const [h, amt] of Object.entries(v.apportioned)) {
-        apportionedByHead[h] = (apportionedByHead[h] ?? 0) + Number(amt);
-      }
-    }
-  }
-
-  return {
-    rows,
-    firmTotals: {
-      revenue: sc.rows.reduce((s, r) => s + r.contributionRevenue, 0),
-      directCost: sc.rows.reduce((s, r) => s + r.directCost, 0),
-      apportionedCost: sc.rows.reduce((s, r) => s + r.apportionedCost, 0),
-      contribution: sc.rows.reduce((s, r) => s + r.revenueContribution, 0),
-    },
-    apportionedByHead,
-    quarterLabel: sc.window.label,
-  };
 }

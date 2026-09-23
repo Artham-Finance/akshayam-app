@@ -8,6 +8,7 @@ import { EntitySwitcher } from "@/components/EntitySwitcher";
 import { PeriodPicker } from "@/components/PeriodPicker";
 import { UserMenu } from "@/components/UserMenu";
 import type { Permission, Role } from "@/lib/auth/permissions";
+import { HREF_TO_REPORT_CODE, type ReportCode } from "@/lib/auth/reports";
 import { dateLabel } from "@/lib/format";
 import type { PeriodCookie } from "@/lib/period-presets";
 
@@ -71,6 +72,7 @@ export function Nav({
   ledgerWrittenTo,
   user,
   isSlice = false,
+  reportAccess,
 }: {
   entities: { slug: string; name: string }[];
   currentSlug: string;
@@ -87,17 +89,33 @@ export function Nav({
    * and analysis tabs are company-only and are dropped from the nav.
    */
   isSlice?: boolean;
+  /**
+   * A finer, per-person grant on top of everything above: which of the five
+   * report tabs backed by user_report_access this person may see. A tab
+   * whose href maps to no report code (Balance Sheet, Cash Flow, Budget vs
+   * Actual, DuPont, Overview) is unaffected - only the five ever gated this
+   * way are filtered, and a group left with nothing in it is dropped too.
+   */
+  reportAccess: ReportCode[];
 }) {
   const pathname = usePathname();
   const allowed = new Set(user.permissions);
+  const grantedReports = new Set(reportAccess);
+  const reportVisible = (href: string) => {
+    const code = HREF_TO_REPORT_CODE[href];
+    return !code || grantedReports.has(code);
+  };
   // A team lead's slice sees their own P&L, then the vertical-performance tabs.
   // The statement sits under Core Financials, right after Overview.
-  const groups = isSlice
+  const baseGroups = isSlice
     ? [
         { title: "Core Financials", items: [{ href: "/pnl", label: "Profit & Loss" }] },
         ...GROUPS.filter((g) => g.title === "Vertical Performance"),
       ]
     : GROUPS;
+  const groups = baseGroups
+    .map((g) => ({ ...g, items: g.items.filter((item) => reportVisible(item.href)) }))
+    .filter((g) => g.items.length > 0);
 
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);

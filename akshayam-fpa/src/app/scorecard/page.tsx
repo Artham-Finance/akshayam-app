@@ -15,7 +15,7 @@ import {
   MGMT_APPRAISAL_DEFAULT,
   type ScorecardRow,
 } from "@/lib/reports/scorecard";
-import { requireEntityAccess } from "@/lib/auth/dal";
+import { requireEntityAccess, requireReportAccess } from "@/lib/auth/dal";
 import { ScorecardControls } from "./ScorecardControls";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +32,7 @@ export default async function ScorecardPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   await requireEntityAccess();
+  await requireReportAccess("scorecard");
   const params = await searchParams;
 
   try {

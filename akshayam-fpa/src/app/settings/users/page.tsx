@@ -4,6 +4,7 @@ import { query } from "@/lib/db";
 import { requirePermission } from "@/lib/auth/dal";
 import { listAllEntities } from "@/lib/entity";
 import { isRole, type Role } from "@/lib/auth/permissions";
+import { isReportCode } from "@/lib/auth/reports";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,7 @@ interface Row {
   must_change_password: boolean;
   last_login_at: Date | null;
   entity_ids: number[] | null;
+  report_codes: string[] | null;
 }
 
 export default async function UsersPage() {
@@ -27,9 +29,11 @@ export default async function UsersPage() {
     query<Row>(
       `select u.id, u.email, u.name, u.role, u.is_active, u.must_change_password,
               u.last_login_at,
-              array_remove(array_agg(ue.entity_id), null) as entity_ids
+              array_remove(array_agg(distinct ue.entity_id), null) as entity_ids,
+              array_remove(array_agg(distinct ura.report_code), null) as report_codes
          from users u
          left join user_entities ue on ue.user_id = u.id
+         left join user_report_access ura on ura.user_id = u.id
         group by u.id
         order by u.is_active desc, lower(coalesce(u.name, u.email))`,
     ),
@@ -45,6 +49,7 @@ export default async function UsersPage() {
     mustChangePassword: r.must_change_password,
     lastLoginAt: r.last_login_at ? r.last_login_at.toISOString() : null,
     entityIds: r.entity_ids ?? [],
+    reportAccess: (r.report_codes ?? []).filter(isReportCode),
   }));
 
   return (

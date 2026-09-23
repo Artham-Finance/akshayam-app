@@ -38,7 +38,7 @@ import {
 import { buildCustomerStatement, listCustomers } from "@/lib/reports/customer-statement";
 import { buildDscToken } from "@/lib/reports/dsc-token";
 import { fyBounds, fyLabel, fyMonths, fyStartYearOf, type QuarterNo } from "@/lib/period";
-import { requireEntityAccess } from "@/lib/auth/dal";
+import { requireEntityAccess, requireReportAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -82,6 +82,7 @@ export default async function ReceivablesPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   await requireEntityAccess();
+  await requireReportAccess("receivables");
   const params = await searchParams;
 
   try {

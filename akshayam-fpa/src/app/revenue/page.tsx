@@ -32,7 +32,7 @@ import {
   buildReimbursementReco,
   hasReimbursementBillLines,
 } from "@/lib/reports/reimbursement-reco";
-import { requireEntityAccess } from "@/lib/auth/dal";
+import { requireEntityAccess, requireReportAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +57,7 @@ export default async function RevenuePage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   await requireEntityAccess();
+  await requireReportAccess("revenue");
   const params = await searchParams;
 
   try {
