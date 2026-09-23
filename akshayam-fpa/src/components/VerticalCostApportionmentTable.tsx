@@ -21,11 +21,18 @@ export function VerticalCostApportionmentTable({
   data,
   initialScale = "abs",
   canEditHeads = false,
+  compact = false,
 }: {
   data: VerticalCostApportionmentResult;
   initialScale?: Scale;
   /** the viewer may key head count in - only takes effect on a single-month view */
   canEditHeads?: boolean;
+  /**
+   * Figures only, no expand and no head-count editing - for a team lead's own
+   * vertical, narrowed to one column, where the accounts behind a figure are
+   * not this login's to see.
+   */
+  compact?: boolean;
 }) {
   const router = useRouter();
   const [scale, setScale] = useState<Scale>(initialScale);
@@ -33,7 +40,7 @@ export function VerticalCostApportionmentTable({
   const [applyForward, setApplyForward] = useState(true);
   const [saving, startSave] = useTransition();
 
-  const editHeads = canEditHeads && data.month !== null;
+  const editHeads = !compact && canEditHeads && data.month !== null;
 
   const saveHeads = async (verticalId: number, heads: number) => {
     try {
@@ -72,13 +79,15 @@ export function VerticalCostApportionmentTable({
     <>
       <div className="no-print flex flex-wrap items-center justify-between gap-3 px-3 pb-3">
         <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setShowDetail((v) => !v)}
-            className="rounded-md border border-line px-2.5 py-1.5 text-[12px] font-medium text-ink-muted transition-colors hover:border-line-strong hover:text-ink"
-          >
-            {showDetail ? "Hide cost detail" : "Show cost detail"}
-          </button>
+          {!compact && (
+            <button
+              type="button"
+              onClick={() => setShowDetail((v) => !v)}
+              className="rounded-md border border-line px-2.5 py-1.5 text-[12px] font-medium text-ink-muted transition-colors hover:border-line-strong hover:text-ink"
+            >
+              {showDetail ? "Hide cost detail" : "Show cost detail"}
+            </button>
+          )}
           {editHeads && (
             <label className="flex items-center gap-1.5 text-[12px] text-ink-muted">
               <input
@@ -108,9 +117,11 @@ export function VerticalCostApportionmentTable({
       </div>
 
       <p className="px-3 pb-3 text-[11.5px] text-ink-muted">
-        {show(data.poolTotal)} of common cost spread over {data.label}, on head count only, across
-        the six verticals below. Cost already tagged to a vertical is its own and is never
-        re-spread; any other vertical&rsquo;s activity plays no part in this card.
+        {show(data.poolTotal)} of common cost and {show(data.accHrcmPoolTotal)} of ACC and HRCM
+        cost spread over {data.label}, on head count only, across the six verticals below. Cost
+        already tagged to a vertical is its own and is never re-spread; only Common&rsquo;s and ACC
+        and HRCM&rsquo;s activity is pooled and spread this way — any other vertical&rsquo;s
+        activity plays no part in this card.
         {scale !== "abs" && ` All figures ${scaleLabel[scale].toLowerCase()}.`}
       </p>
 
@@ -203,6 +214,15 @@ export function VerticalCostApportionmentTable({
               pick={(v) => v.commonApportioned}
               lines={data.commonCostLines}
             />
+            <ExpandableRow
+              verticals={data.verticals}
+              showTotal={showTotal}
+              show={show}
+              showDetail={showDetail}
+              label="ACC and HRCM cost — apportioned"
+              pick={(v) => v.accHrcmApportioned}
+              lines={data.accHrcmCostLines}
+            />
 
             <Row verticals={data.verticals} showTotal={showTotal} show={show} label="Total cost" pick={(v) => v.totalCost} tone="strong" rule />
             <Row verticals={data.verticals} showTotal={showTotal} show={show} label="Contribution" pick={(v) => v.contribution} tone="result" />
@@ -214,15 +234,16 @@ export function VerticalCostApportionmentTable({
         {showTotal ? (
           <>
             Total contribution of {show(contribution)} across these six verticals — the figure VPP
-            is struck on. Common cost is spread on head count alone, in proportion to each
-            vertical&rsquo;s own head count over {data.totalHeads.toFixed(2)} total.
+            is struck on. Common&rsquo;s cost and ACC and HRCM&rsquo;s cost are each spread on head
+            count alone, in proportion to each vertical&rsquo;s own head count over{" "}
+            {data.totalHeads.toFixed(2)} total.
           </>
         ) : (
           <>
             Contribution of {show(contribution)} is this vertical&rsquo;s share, after its own
-            direct cost and its head-count share of Common&rsquo;s cost — the figure VPP is struck
-            on. The spread was struck across all six verticals and then narrowed to this one; the
-            share does not change with the filter.
+            direct cost and its head-count share of Common&rsquo;s cost and of ACC and
+            HRCM&rsquo;s cost — the figure VPP is struck on. The spread was struck across all six
+            verticals and then narrowed to this one; the share does not change with the filter.
           </>
         )}
       </p>
@@ -231,7 +252,7 @@ export function VerticalCostApportionmentTable({
 }
 
 /** One row: a label, a value per vertical, and the total across them. */
-function Row({
+export function Row({
   verticals,
   showTotal,
   show,
@@ -299,7 +320,7 @@ function Row({
 }
 
 /** A summary row that expands to the accounts behind it, indented beneath. */
-function ExpandableRow({
+export function ExpandableRow({
   verticals,
   showTotal,
   show,
@@ -345,7 +366,7 @@ function ExpandableRow({
 }
 
 /** A whole-number field for a vertical's head count in the chosen month. */
-function HeadInput({
+export function HeadInput({
   value,
   disabled,
   onSave,

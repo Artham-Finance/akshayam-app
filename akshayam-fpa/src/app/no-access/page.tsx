@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth/dal";
 import { ROLE_LABEL } from "@/lib/auth/permissions";
+import { isReportCode, REPORT_LABEL } from "@/lib/auth/reports";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +28,13 @@ export default async function NoAccessPage({
   const params = await searchParams;
   const raw = params.need;
   const need = Array.isArray(raw) ? raw[0] : raw;
-  const what = need ? NEEDED[need] : undefined;
+  const reportCode = need?.startsWith("report:") ? need.slice("report:".length) : null;
+  const what =
+    reportCode && isReportCode(reportCode)
+      ? `see ${REPORT_LABEL[reportCode]}`
+      : need
+        ? NEEDED[need]
+        : undefined;
 
   return (
     <div className="mx-auto max-w-md py-16 text-center">

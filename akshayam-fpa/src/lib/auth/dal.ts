@@ -11,6 +11,7 @@ import {
   type Permission,
   type Role,
 } from "@/lib/auth/permissions";
+import { isReportCode, type ReportCode } from "@/lib/auth/reports";
 
 /**
  * The Data Access Layer.
@@ -40,6 +41,12 @@ export interface CurrentUser {
   /** Entity ids this person may see. Empty means they have been granted none. */
   entityIds: number[];
   permissions: Permission[];
+  /**
+   * Which of the five nav tabs backed by a per-user grant - Profit & Loss,
+   * Revenue, Receivables, Collections, the Scorecard - this person may see,
+   * on top of whichever companies entityIds already lets them into.
+   */
+  reportAccess: ReportCode[];
 }
 
 interface UserRow {
@@ -50,6 +57,7 @@ interface UserRow {
   must_change_password: boolean;
   is_active: boolean;
   entity_ids: number[] | null;
+  report_codes: string[] | null;
 }
 
 /**
@@ -65,9 +73,11 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
 
   const row = await queryOne<UserRow>(
     `select u.id, u.email, u.name, u.role, u.must_change_password, u.is_active,
-            array_remove(array_agg(ue.entity_id), null) as entity_ids
+            array_remove(array_agg(distinct ue.entity_id), null) as entity_ids,
+            array_remove(array_agg(distinct ura.report_code), null) as report_codes
        from users u
        left join user_entities ue on ue.user_id = u.id
+       left join user_report_access ura on ura.user_id = u.id
       where u.id = $1
       group by u.id`,
     [session.user_id],
@@ -87,6 +97,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     mustChangePassword: row.must_change_password,
     entityIds: row.entity_ids ?? [],
     permissions: permissionsFor(role),
+    reportAccess: (row.report_codes ?? []).filter(isReportCode),
   };
 });
 
@@ -139,6 +150,25 @@ export async function requireEntityAccess(): Promise<CurrentUser> {
 export async function can(permission: Permission): Promise<boolean> {
   const user = await getCurrentUser();
   return user ? roleCan(user.role, permission) : false;
+}
+
+/**
+ * Assert a per-user report grant for a page render, redirecting like
+ * `requirePermission` does. Called after `requireEntityAccess`, since having
+ * no company at all is the more useful thing to tell someone first.
+ */
+export async function requireReportAccess(code: ReportCode): Promise<CurrentUser> {
+  const user = await requireUser();
+  if (!user.reportAccess.includes(code)) {
+    redirect(`/no-access?need=${encodeURIComponent(`report:${code}`)}`);
+  }
+  return user;
+}
+
+/** Non-throwing check, for deciding whether to render a nav tab or a section. */
+export async function canSeeReport(code: ReportCode): Promise<boolean> {
+  const user = await getCurrentUser();
+  return user ? user.reportAccess.includes(code) : false;
 }
 
 /**

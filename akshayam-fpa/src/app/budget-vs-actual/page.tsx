@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BvaStatement } from "@/components/BvaTable";
+import { BvaStatement, type StatementDetailLine } from "@/components/BvaTable";
 import { EstablishmentCostTable } from "@/components/EstablishmentCostTable";
 import { ExpenseDetailTable } from "@/components/ExpenseDetailTable";
 import { TeamCostTable } from "@/components/TeamCostTable";
@@ -26,7 +26,7 @@ import {
   ledgerAsOfLabel,
   ledgerWrittenTo,
 } from "@/lib/reporting-period";
-import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
+import { buildBudgetVsActualPnl, type BvaCode } from "@/lib/reports/budget-pnl";
 import { buildEstablishmentDetail } from "@/lib/reports/establishment-detail";
 import { buildExpenseDetail } from "@/lib/reports/expense-detail";
 import {
@@ -39,7 +39,7 @@ import {
   hasReimbursementBillLines,
 } from "@/lib/reports/reimbursement-reco";
 import { buildTeamCost } from "@/lib/reports/team-cost";
-import { requireEntityAccess } from "@/lib/auth/dal";
+import { can, requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -220,6 +220,70 @@ export default async function BudgetVsActualPage({
         : null,
     ]);
 
+    /**
+     * Akshayam's statement carries its own cost lines' breakdown in place,
+     * behind the "Show cost detail" toggle, rather than as separate cards -
+     * Team cost, Establishment cost and Other expenses would otherwise say
+     * the same thing twice. Common cost apportionment has no natural
+     * sub-line of its own (its actual is one keyed-in figure, not postings
+     * to itemise), so it carries no entry here.
+     */
+    const canEditActuals = await can("expenses.record");
+    const editableMonthKey = periodMonths.length === 1 ? periodMonths[0].key : null;
+    const detail: Partial<Record<BvaCode, StatementDetailLine[]>> | undefined = isAkshayam
+      ? {
+          direct_cost: teamCost.company.roles.map((r) => ({
+            label: r.label,
+            hint: r.hint,
+            periodBudget: r.periodBudget,
+            periodActual: r.periodActual,
+            ytdBudget: r.ytdBudget,
+            ytdActual: r.ytdActual,
+            // Always the year to date's own postings, regardless of the
+            // page's own period picker - a drill-down answers "what made up
+            // this line so far", not just whatever narrower month is shown.
+            entries: r.ytdEntries.map((e) => ({
+              date: e.date,
+              primary: e.description,
+              secondary: e.reference,
+              amount: e.amount,
+            })),
+          })),
+          establishment_cost: (akshayamEstablishment?.lines ?? []).map((l) => ({
+            label: l.label,
+            periodBudget: l.periodBudget,
+            periodActual: l.periodActual,
+            ytdBudget: l.ytdBudget,
+            ytdActual: l.ytdActual,
+            entries: l.ytdEntries.map((e) => ({
+              date: e.date,
+              primary: e.particulars,
+              secondary: e.description,
+              amount: e.amount,
+            })),
+          })),
+          overheads: (akshayamOtherExpenses?.lines ?? []).map((l) => ({
+            label: l.label,
+            periodBudget: l.periodBudget,
+            periodActual: l.periodActual,
+            ytdBudget: l.ytdBudget,
+            ytdActual: l.ytdActual,
+            entries: l.ytdEntries.map((e) => ({
+              date: e.date,
+              primary: e.particulars,
+              secondary: e.description,
+              amount: e.amount,
+            })),
+          })),
+        }
+      : undefined;
+    // Every other company's budget never carries this group code, so the row
+    // would only ever read nil - left off their statement rather than shown
+    // empty.
+    const statementLines = isAkshayam
+      ? statement?.lines
+      : statement?.lines.filter((l) => l.code !== "common_cost_apportionment");
+
     // Lines the budget carries but the ledger has not yet posted - only the
     // ones where that is expected and explained by audit timing: depreciation
     // and tax land once a year at audit, and drawings may be booked to the
@@ -300,16 +364,32 @@ export default async function BudgetVsActualPage({
                 <CardTitle hint={periodLabel}>Budget vs actual</CardTitle>
               </div>
               <BvaStatement
-                lines={statement.lines}
+                lines={statementLines ?? statement.lines}
                 periodMonths={periodMonths}
                 ytdMonths={ytdMonths}
                 periodLabel={periodColumnLabel}
                 ytdLabel={ytdLabel}
+                detail={detail}
+                commonCostEdit={
+                  isAkshayam
+                    ? {
+                        entityId: entity.id,
+                        fyStartYear: fy,
+                        month: editableMonthKey,
+                        canEdit: canEditActuals,
+                      }
+                    : undefined
+                }
               />
             </Card>
           )}
 
-          {teamCost.hasData && (
+          {/*
+            Akshayam's Team cost, Establishment cost and Other expenses each
+            show in place on the statement above, behind "Show cost detail" -
+            a separate card per line would say the same thing twice.
+          */}
+          {!isAkshayam && teamCost.hasData && (
             <Card padded={false}>
               <div className="px-4 pt-4 sm:px-5">
                 <CardTitle hint={periodLabel}>Team cost — budget vs actual</CardTitle>
@@ -335,59 +415,33 @@ export default async function BudgetVsActualPage({
             </Card>
           )}
 
-          {akshayamEstablishment?.hasData && (
+          {isAkshayam && reimbursementReco && (
             <Card padded={false}>
               <div className="px-4 pt-4 sm:px-5">
-                <CardTitle hint={periodLabel}>Establishment cost — budget vs actual</CardTitle>
+                <CardTitle hint={periodLabel}>RE / RI reconciliation</CardTitle>
               </div>
-              <EstablishmentCostTable
-                result={akshayamEstablishment}
-                periodLabel={periodColumnLabel}
-                ytdLabel={ytdLabel}
-                caption="Budget is the office schedule from the planning workbook, spread evenly. Actual is the named ledger accounts behind each line — rent and its maintenance combined, per the plan. Open a line for the postings behind it."
-              />
-            </Card>
-          )}
-
-          {akshayamOtherExpenses?.hasData && (
-            <Card padded={false}>
-              <div className="px-4 pt-4 sm:px-5">
-                <CardTitle hint={periodLabel}>Other expenses — budget vs actual</CardTitle>
+              <div className="px-4 pb-4 sm:px-5">
+                <p className="text-[12.5px] text-ink-muted">
+                  <span className="font-medium text-caution">
+                    {reimbursementReco.totals.reNeedsRiCount} RI still need raising
+                  </span>{" "}
+                  ({money(reimbursementReco.totals.reNeedsRiAmount)}) ·{" "}
+                  <span className="font-medium text-caution">
+                    {reimbursementReco.totals.riOnlyCount} RI raised, RE not accounted
+                  </span>{" "}
+                  ({money(reimbursementReco.totals.riOnlyAmount)}) ·{" "}
+                  <span className="font-medium text-positive">
+                    {reimbursementReco.totals.matchedCount} matched
+                  </span>{" "}
+                  ({money(reimbursementReco.totals.matchedAmount)})
+                </p>
+                <Link
+                  href="/reimbursements"
+                  className="mt-2 inline-block text-[12.5px] font-medium text-navy hover:underline"
+                >
+                  View full reconciliation →
+                </Link>
               </div>
-              <EstablishmentCostTable
-                result={akshayamOtherExpenses}
-                periodLabel={periodColumnLabel}
-                ytdLabel={ytdLabel}
-                caption="Budget is from the planning workbook, spread evenly. Actual is the named ledger accounts behind each line. Open a line for the postings behind it."
-                totalLabel="Other expenses"
-              />
-              {reimbursementReco && (
-                <div className="border-t border-line px-4 py-4 sm:px-5">
-                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-faint">
-                    RE / RI Reconciliation
-                  </p>
-                  <p className="text-[12.5px] text-ink-muted">
-                    <span className="font-medium text-caution">
-                      {reimbursementReco.totals.reNeedsRiCount} RI still need raising
-                    </span>{" "}
-                    ({money(reimbursementReco.totals.reNeedsRiAmount)}) ·{" "}
-                    <span className="font-medium text-caution">
-                      {reimbursementReco.totals.riOnlyCount} RI raised, RE not accounted
-                    </span>{" "}
-                    ({money(reimbursementReco.totals.riOnlyAmount)}) ·{" "}
-                    <span className="font-medium text-positive">
-                      {reimbursementReco.totals.matchedCount} matched
-                    </span>{" "}
-                    ({money(reimbursementReco.totals.matchedAmount)})
-                  </p>
-                  <Link
-                    href="/reimbursements"
-                    className="mt-2 inline-block text-[12.5px] font-medium text-navy hover:underline"
-                  >
-                    View full reconciliation →
-                  </Link>
-                </div>
-              )}
             </Card>
           )}
 

@@ -114,6 +114,7 @@ export async function buildLineItemBudget(opts: {
       ytdVariance,
       ytdVariancePct: ytdBudget ? (ytdVariance / ytdBudget) * 100 : null,
       entries: matched.filter((r) => periodKeys.has(r.month_key)).map(toEntry),
+      ytdEntries: matched.filter((r) => ytdKeys.has(r.month_key)).map(toEntry),
     };
   });
 

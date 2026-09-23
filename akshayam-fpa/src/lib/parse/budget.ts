@@ -27,6 +27,7 @@ type Line =
   | "direct_cost"
   | "establishment_cost"
   | "overheads"
+  | "common_cost_apportionment"
   | "depreciation"
   | "finance_cost"
   | "tax"
@@ -138,15 +139,27 @@ const SHEETS: SheetSpec[] = [
     sheet: "4 - Akshayam Monthly",
     lines: {
       "total revenue": "revenue",
+      // V6 carried the team lead's fee bundled into one salary row; V7 split
+      // it into its own "Professional fee" row and renamed the rest to
+      // "Salaries and Stipend" - both a version's own names are matched so
+      // a re-upload of either still lands on Team cost.
       "salaries — gift & reg vertical": "direct_cost",
+      "salaries and stipend": "direct_cost",
+      "professional fee": "direct_cost",
       vpp: "direct_cost",
       "branch office rent — gift city": "establishment_cost",
       "flat rent & maintenance": "establishment_cost",
       "accounting support": "overheads",
       "other expenses (travel)": "overheads",
-      "on revenue basis": "overheads",
-      "on head count": "overheads",
-      "equal distribution": "overheads",
+      "other expenses": "overheads",
+      // The three bases the "Common Cost Allocation" block spreads RBJV's
+      // common cost onto Akshayam by - kept apart from Other expenses so the
+      // statement can show what the founder actually reads as a distinct
+      // cost, not folded into "everything that is neither establishment nor
+      // team".
+      "on revenue basis": "common_cost_apportionment",
+      "on head count": "common_cost_apportionment",
+      "equal distribution": "common_cost_apportionment",
       "tax expense (@25%)": "tax",
     },
     ignore: [...COMMON_IGNORE, /^common cost allocation$/i],

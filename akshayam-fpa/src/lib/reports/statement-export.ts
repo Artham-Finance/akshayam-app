@@ -199,6 +199,13 @@ export async function buildStatementWorkbook(opts: {
 
   if (!isSlice) {
     const statement = await buildBudgetVsActualPnl({ entity, fyStartYear, verticalId, window });
+    // Every other company's budget never carries this group code, so the row
+    // would only ever read nil - left off their sheet the same way the page
+    // leaves it off their statement card.
+    const statementLines =
+      entity.slug === "akshayam"
+        ? statement.lines
+        : statement.lines.filter((l) => l.code !== "common_cost_apportionment");
 
     addSheet(workbook, {
       name: "Budget vs Actual",
@@ -215,7 +222,7 @@ export async function buildStatementWorkbook(opts: {
         { header: "Variance", type: "money" },
         { header: "% Achievement", type: "percent" },
       ],
-      rows: statement.lines.map((line) => {
+      rows: statementLines.map((line) => {
         const budget = months.reduce((s, m) => s + line.budget[m.key], 0);
         const actual = months.reduce((s, m) => s + line.actual[m.key], 0);
         return [
@@ -229,7 +236,7 @@ export async function buildStatementWorkbook(opts: {
           budget === 0 ? null : (actual / budget) * 100,
         ];
       }),
-      emphasise: statement.lines.map((l, i) => (l.isSubtotal ? i : -1)).filter((i) => i >= 0),
+      emphasise: statementLines.map((l, i) => (l.isSubtotal ? i : -1)).filter((i) => i >= 0),
       freezeColumns: 1,
     });
 
@@ -247,7 +254,7 @@ export async function buildStatementWorkbook(opts: {
         { header: "Year to date", type: "percent", strong: true },
         { header: "Budget FY", type: "percent" },
       ],
-      rows: statement.lines.map((line) => [
+      rows: statementLines.map((line) => [
         line.name,
         ...shown.map((m) => share(line.actual[m.key], revenue.actual[m.key])),
         share(
@@ -259,7 +266,7 @@ export async function buildStatementWorkbook(opts: {
           months.reduce((s, m) => s + revenue.budget[m.key], 0),
         ),
       ]),
-      emphasise: statement.lines.map((l, i) => (l.isSubtotal ? i : -1)).filter((i) => i >= 0),
+      emphasise: statementLines.map((l, i) => (l.isSubtotal ? i : -1)).filter((i) => i >= 0),
       freezeColumns: 1,
     });
 
@@ -300,6 +307,14 @@ export async function buildStatementWorkbook(opts: {
       ]);
       rows.push(...lineRows(a.commonCostLines));
 
+      emphasise.push(rows.length);
+      rows.push([
+        "ACC and HRCM cost — apportioned",
+        ...a.verticals.map((v) => v.accHrcmApportioned),
+        total((v) => v.accHrcmApportioned),
+      ]);
+      rows.push(...lineRows(a.accHrcmCostLines));
+
       rule.push(rows.length);
       emphasise.push(rows.length);
       rows.push(["Total cost", ...a.verticals.map((v) => v.totalCost), total((v) => v.totalCost)]);
@@ -312,7 +327,7 @@ export async function buildStatementWorkbook(opts: {
         context: [
           ...context,
           `${a.start} to ${a.end}`,
-          "on head count only, across the six verticals · contribution is the VPP line",
+          "Common's cost and ACC and HRCM's cost spread on head count only, across the six verticals · contribution is the VPP line",
         ],
         columns: [
           { header: "Particulars", type: "text" },

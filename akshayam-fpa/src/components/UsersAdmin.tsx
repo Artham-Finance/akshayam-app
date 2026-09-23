@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import clsx from "clsx";
 import { ROLES, ROLE_DESCRIPTION, ROLE_LABEL, type Role } from "@/lib/auth/permissions";
+import { REPORT_CODES, REPORT_LABEL, type ReportCode } from "@/lib/auth/reports";
 
 export interface AdminUser {
   id: number;
@@ -14,6 +15,7 @@ export interface AdminUser {
   mustChangePassword: boolean;
   lastLoginAt: string | null;
   entityIds: number[];
+  reportAccess: ReportCode[];
 }
 
 interface EntityOption {
@@ -278,6 +280,56 @@ function EntityChecklist({
   );
 }
 
+/**
+ * Which of the five per-user-gated nav tabs someone may see - a finer grant
+ * than "Companies", for a team lead who should not see every one of them.
+ * Grouped the way the nav itself groups them, so the checkbox layout reads
+ * the same as the tabs it controls.
+ */
+function ReportChecklist({
+  selected,
+  onChange,
+  disabled,
+}: {
+  selected: ReportCode[];
+  onChange: (codes: ReportCode[]) => void;
+  disabled: boolean;
+}) {
+  const toggle = (code: ReportCode, checked: boolean) =>
+    onChange(checked ? [...selected, code] : selected.filter((c) => c !== code));
+
+  const checkbox = (code: ReportCode) => (
+    <label key={code} className="flex items-center gap-1.5 text-[12px] text-ink">
+      <input
+        type="checkbox"
+        disabled={disabled}
+        checked={selected.includes(code)}
+        onChange={(e) => toggle(code, e.target.checked)}
+      />
+      {REPORT_LABEL[code]}
+    </label>
+  );
+
+  return (
+    <div className="space-y-2">
+      <div>
+        <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-ink-faint">
+          Core Financials
+        </p>
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5">{checkbox("pnl")}</div>
+      </div>
+      <div>
+        <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-ink-faint">
+          Vertical Performance
+        </p>
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+          {REPORT_CODES.filter((c) => c !== "pnl").map(checkbox)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function NewUserForm({
   entities,
   busy,
@@ -291,6 +343,7 @@ function NewUserForm({
     role: Role;
     password: string;
     entityIds: number[];
+    reportAccess: ReportCode[];
   }) => void;
 }) {
   const [email, setEmail] = useState("");
@@ -298,6 +351,9 @@ function NewUserForm({
   const [role, setRole] = useState<Role>("viewer");
   const [password, setPassword] = useState("");
   const [entityIds, setEntityIds] = useState<number[]>([]);
+  // A new account starts with every report visible, the same as everyone
+  // signed in today - an admin narrows it afterwards, for whoever needs less.
+  const [reportAccess, setReportAccess] = useState<ReportCode[]>([...REPORT_CODES]);
 
   return (
     <div className="rounded-lg border border-line bg-surface p-4">
@@ -360,11 +416,18 @@ function NewUserForm({
         />
       </div>
 
+      <div className="mt-3">
+        <label className="mb-1.5 block text-[11px] font-medium text-ink-muted">
+          Reports they may see
+        </label>
+        <ReportChecklist selected={reportAccess} onChange={setReportAccess} disabled={busy} />
+      </div>
+
       <div className="mt-4 flex justify-end">
         <button
           type="button"
           disabled={busy}
-          onClick={() => onSubmit({ email, name, role, password, entityIds })}
+          onClick={() => onSubmit({ email, name, role, password, entityIds, reportAccess })}
           className="rounded-md bg-navy px-3 py-1.5 text-[12px] font-semibold text-ink-invert hover:bg-navy-deep disabled:opacity-60"
         >
           Create account
@@ -389,12 +452,14 @@ function EditPanel({
     role: Role;
     isActive: boolean;
     entityIds: number[];
+    reportAccess: ReportCode[];
     password?: string;
   }) => void;
 }) {
   const [role, setRole] = useState<Role>(user.role);
   const [isActive, setIsActive] = useState(user.isActive);
   const [entityIds, setEntityIds] = useState<number[]>(user.entityIds);
+  const [reportAccess, setReportAccess] = useState<ReportCode[]>(user.reportAccess);
   const [password, setPassword] = useState("");
 
   return (
@@ -452,6 +517,13 @@ function EditPanel({
       </div>
 
       <div>
+        <label className="mb-1.5 block text-[11px] font-medium text-ink-muted">
+          Reports they may see
+        </label>
+        <ReportChecklist selected={reportAccess} onChange={setReportAccess} disabled={busy} />
+      </div>
+
+      <div>
         <label className="mb-1 block text-[11px] font-medium text-ink-muted">
           New password <span className="text-ink-faint">(leave blank to keep the current one)</span>
         </label>
@@ -479,6 +551,7 @@ function EditPanel({
               role,
               isActive,
               entityIds,
+              reportAccess,
               ...(password ? { password } : {}),
             });
             setPassword("");

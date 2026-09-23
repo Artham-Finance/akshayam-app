@@ -83,6 +83,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             periodFyBounds={periodFyBounds}
             ledgerWrittenTo={writtenTo}
             isSlice={isSlice}
+            reportAccess={user.reportAccess}
             user={{
               name: user.name,
               email: user.email,

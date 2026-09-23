@@ -65,6 +65,8 @@ export interface EstablishmentLine {
    * postings are ever shown here regardless of how the YTD columns read.
    */
   entries: EstablishmentEntry[];
+  /** The ledger postings behind ytdActual, newest first - the year to date's own postings, always. */
+  ytdEntries: EstablishmentEntry[];
 }
 
 export interface EstablishmentResult {
@@ -173,6 +175,7 @@ export async function buildEstablishmentDetail(opts: {
       ytdVariance,
       ytdVariancePct: ytdBudget ? (ytdVariance / ytdBudget) * 100 : null,
       entries: matched.filter((r) => periodKeys.has(r.month_key)).map(toEntry),
+      ytdEntries: matched.filter((r) => ytdKeys.has(r.month_key)).map(toEntry),
     };
   });
 
@@ -194,6 +197,7 @@ export async function buildEstablishmentDetail(opts: {
       ytdVariancePct: null,
       isActualOnly: true,
       entries: otherRows.filter((r) => periodKeys.has(r.month_key)).map(toEntry),
+      ytdEntries: otherRows.filter((r) => ytdKeys.has(r.month_key)).map(toEntry),
     });
   }
 

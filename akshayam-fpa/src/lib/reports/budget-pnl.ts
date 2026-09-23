@@ -25,6 +25,7 @@ export type BvaCode =
   | "direct_cost"
   | "establishment_cost"
   | "overheads"
+  | "common_cost_apportionment"
   | "ebitda"
   | "depreciation"
   | "finance_cost"
@@ -64,11 +65,18 @@ const LAYOUT: {
   { code: "direct_cost", name: "Team cost", sign: -1 },
   { code: "establishment_cost", name: "Establishment cost", sign: -1 },
   { code: "overheads", name: "Other expenses", sign: -1 },
+  { code: "common_cost_apportionment", name: "Common cost apportionment", sign: -1 },
   {
     code: "ebitda",
     name: "EBITDA",
     sign: 1,
-    subtotalOf: ["revenue", "direct_cost", "establishment_cost", "overheads"],
+    subtotalOf: [
+      "revenue",
+      "direct_cost",
+      "establishment_cost",
+      "overheads",
+      "common_cost_apportionment",
+    ],
   },
   { code: "depreciation", name: "Depreciation", sign: -1 },
   { code: "finance_cost", name: "Interest expenses", sign: -1 },
@@ -94,6 +102,7 @@ const GROUP_TO_LINE: Record<string, BvaCode> = {
   direct_cost: "direct_cost",
   establishment_cost: "establishment_cost",
   overheads: "overheads",
+  common_cost_apportionment: "common_cost_apportionment",
   depreciation: "depreciation",
   finance_cost: "finance_cost",
   tax: "tax",
@@ -119,7 +128,7 @@ export async function buildBudgetVsActualPnl(opts: {
   const start = window?.start ?? fyRange.start;
   const end = window?.end ?? fyRange.end;
 
-  const [glRows, osbRows, budgetRows] = await Promise.all([
+  const [glRows, osbRows, budgetRows, commonCostActualRows] = await Promise.all([
     query<{ month_key: string; group_code: string | null; amount: number }>(
       // credit - debit, so income is positive and a cost negative: the same
       // convention the P&L page uses, which is what lets the two agree.
@@ -169,6 +178,24 @@ export async function buildBudgetVsActualPnl(opts: {
         group by 1, 2`,
       [entity.id, fyStartYear],
     ),
+    /**
+     * "Common cost apportionment" has no ledger posting of its own - Zoho
+     * never books it - so its actual is keyed in by hand instead, month by
+     * month, the same annual-baseline-or-monthly shape company_headcount and
+     * vertical_headcount use. Read for the whole year, same as the budget
+     * beside it; a month nobody has keyed in yet simply reads nil.
+     */
+    query<{ month_key: string; amount: number }>(
+      `select to_char(wm.month, 'YYYY-MM') as month_key,
+              coalesce(mh.amount, ah.amount) as amount
+         from unnest($3::date[]) as wm(month)
+         left join common_cost_apportionment_actual mh
+           on mh.entity_id = $1 and mh.fy_start_year = $2 and mh.month = wm.month
+         left join common_cost_apportionment_actual ah
+           on ah.entity_id = $1 and ah.fy_start_year = $2 and ah.month is null
+        where coalesce(mh.amount, ah.amount) is not null`,
+      [entity.id, fyStartYear, months.map((m) => m.start)],
+    ),
   ]);
 
   const lines: BvaLine[] = LAYOUT.map((l) => ({
@@ -211,6 +238,12 @@ export async function buildBudgetVsActualPnl(opts: {
    */
   const drawings = byCode.get("partner_drawings")!;
   for (const m of months) drawings.actual[m.key] = drawings.budget[m.key];
+
+  const commonCostApportionment = byCode.get("common_cost_apportionment")!;
+  for (const row of commonCostActualRows) {
+    if (!valid.has(row.month_key)) continue;
+    commonCostApportionment.actual[row.month_key] += Number(row.amount);
+  }
 
   // Recomputes one subtotal from the lines under it. Pulled out so the tax
   // line below can be filled in after the fact and PAT/retained struck again

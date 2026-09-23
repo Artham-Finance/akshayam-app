@@ -28,7 +28,7 @@ import {
 import { buildBudgetVsActual } from "@/lib/reports/budget";
 import { isDrill, runDrill, UNTRACEABLE_RECEIPT } from "@/lib/reports/drilldowns";
 import { listCustomers } from "@/lib/reports/customer-statement";
-import { requireEntityAccess } from "@/lib/auth/dal";
+import { requireEntityAccess, requireReportAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +48,7 @@ export default async function CollectionsPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   await requireEntityAccess();
+  await requireReportAccess("collections");
   const params = await searchParams;
 
   try {
