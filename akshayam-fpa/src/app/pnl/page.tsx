@@ -6,6 +6,7 @@ import { SetupRequired } from "@/components/SetupRequired";
 import { StatementTable, type ClientLine } from "@/components/StatementTable";
 import { VerticalContributionCard } from "@/components/VerticalContributionCard";
 import { VerticalCostApportionmentTable } from "@/components/VerticalCostApportionmentTable";
+import { VerticalCostApportionmentWideTable } from "@/components/VerticalCostApportionmentWideTable";
 import {
   Card,
   CardTitle,
@@ -402,6 +403,17 @@ export default async function ProfitAndLossPage({
                 />
               </div>
               <VerticalCostApportionmentTable data={shownCostApportionment} canEditHeads={canEditHeads} />
+            </Card>
+          )}
+
+          {shownCostApportionment?.applicable && shownCostApportionment.verticals.length > 0 && (
+            <Card padded={false}>
+              <div className="px-4 pt-4 sm:px-5">
+                <CardTitle hint={`${shownCostApportionment.label} · comparison only`}>
+                  Vertical-wise P&amp;L, apportioned on company-wide head count
+                </CardTitle>
+              </div>
+              <VerticalCostApportionmentWideTable data={shownCostApportionment} canEditHeads={canEditHeads} />
             </Card>
           )}
         </div>

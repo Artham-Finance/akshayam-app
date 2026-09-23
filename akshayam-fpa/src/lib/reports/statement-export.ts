@@ -307,6 +307,14 @@ export async function buildStatementWorkbook(opts: {
       ]);
       rows.push(...lineRows(a.commonCostLines));
 
+      emphasise.push(rows.length);
+      rows.push([
+        "ACC and HRCM cost — apportioned",
+        ...a.verticals.map((v) => v.accHrcmApportioned),
+        total((v) => v.accHrcmApportioned),
+      ]);
+      rows.push(...lineRows(a.accHrcmCostLines));
+
       rule.push(rows.length);
       emphasise.push(rows.length);
       rows.push(["Total cost", ...a.verticals.map((v) => v.totalCost), total((v) => v.totalCost)]);
@@ -319,7 +327,7 @@ export async function buildStatementWorkbook(opts: {
         context: [
           ...context,
           `${a.start} to ${a.end}`,
-          "on head count only, across the six verticals · contribution is the VPP line",
+          "Common's cost and ACC and HRCM's cost spread on head count only, across the six verticals · contribution is the VPP line",
         ],
         columns: [
           { header: "Particulars", type: "text" },
