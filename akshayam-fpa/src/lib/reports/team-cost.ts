@@ -99,9 +99,11 @@ const FALLBACK_ROLE: TeamRole = "external_consultant";
  * was rounded from the workbook's paise-level values.
  *
  * The RBJV columns come to 2,57,91,406 - the figure budget_pnl holds for RBJV's
- * direct_cost for FY 2026-27. GIFT (Akshayam) adds 28,31,931 on top, which is
- * also what budget_pnl holds for Akshayam, so the Group ties to 2,86,23,337.
- * AIF is deliberately nil - the workbook carries a zero column for it.
+ * direct_cost for FY 2026-27. GIFT (Akshayam) adds 25,81,931 on top - Professional
+ * fee 8,31,600 + Salaries and Stipend 9,27,240 + VPP 8,23,091, "4 - Akshayam
+ * Monthly"'s own figures - which is also what budget_pnl holds for Akshayam, so
+ * the Group ties to 2,83,73,337. AIF is deliberately nil - the workbook carries a
+ * zero column for it.
  */
 export const TEAM_COST_ANNUAL_BUDGET: Record<
   string,
@@ -124,11 +126,12 @@ export const TEAM_COST_ANNUAL_BUDGET: Record<
     vpp: 120000,
     employee: 432000,
   },
-  // Akshayam Corporate Advisors. From the plan: Raja Krishnan as team lead
-  // (8,31,600); Abhinaya, Gowtham, Riya and Ankith together on salary & stipend
-  // (9,27,240); VPP 10,73,091; no external consultant. Totals 28,31,931 - the
-  // figure budget_pnl holds for Akshayam's direct_cost.
-  GIFT: { team_lead: 831600, employee: 927240, vpp: 1073091 },
+  // Akshayam Corporate Advisors, from "4 - Akshayam Monthly" directly (V7):
+  // Raja Krishnan as team lead, the "Professional fee" row (8,31,600);
+  // Abhinaya, Gowtham, Riya and Ankith together on the "Salaries and Stipend"
+  // row (9,27,240); "VPP" row 8,23,091; no external consultant. Totals
+  // 25,81,931 - the figure budget_pnl holds for Akshayam's direct_cost.
+  GIFT: { team_lead: 831600, employee: 927240, vpp: 823091 },
 };
 
 /** One ledger posting behind a line's actual - what a drill-down shows. */
@@ -171,6 +174,8 @@ export interface TeamCostRoleLine {
   ytdVariancePct: number | null;
   /** the ledger postings behind periodActual, newest first */
   entries: TeamCostEntry[];
+  /** the ledger postings behind ytdActual, newest first - the year to date's own postings, always */
+  ytdEntries: TeamCostEntry[];
 }
 
 export interface TeamCostScope {
@@ -222,6 +227,7 @@ const emptyScope = (
     ytdVariance: 0,
     ytdVariancePct: null,
     entries: [],
+    ytdEntries: [],
   })),
   annualBudget: 0,
   periodBudget: 0,
@@ -346,27 +352,37 @@ export async function buildTeamCost(opts: {
   const periodActualBy = new Map<string, number>();
   const ytdActualBy = new Map<string, number>();
   const entriesBy = new Map<string, TeamCostEntry[]>();
+  const ytdEntriesBy = new Map<string, TeamCostEntry[]>();
   for (const r of entryRows) {
     if (r.vertical_id == null) continue;
     const role = ACCOUNT_ROLE[r.account_name] ?? FALLBACK_ROLE;
     const key = `${r.vertical_id}|${role}`;
     const amount = Number(r.amount);
     const inPeriod = periodKeys.has(r.month_key);
+    const inYtd = ytdKeys.has(r.month_key);
     if (inPeriod) periodActualBy.set(key, (periodActualBy.get(key) ?? 0) + amount);
-    if (ytdKeys.has(r.month_key)) ytdActualBy.set(key, (ytdActualBy.get(key) ?? 0) + amount);
-    // Only the period's own postings are ever shown behind a drill-down,
-    // regardless of how the YTD columns read.
-    if (!inPeriod) continue;
-    const list = entriesBy.get(key) ?? [];
-    list.push({
+    if (inYtd) ytdActualBy.set(key, (ytdActualBy.get(key) ?? 0) + amount);
+    const entry: TeamCostEntry = {
       date: r.txn_date,
       description: r.description ?? r.txn_type ?? "—",
       reference: r.reference ?? "",
       verticalCode: r.vertical_code ?? "—",
       account: usualAccounts.get(role)?.includes(r.account_name) ? "" : r.account_name,
       amount,
-    });
-    entriesBy.set(key, list);
+    };
+    // The period's own postings are always shown behind a drill-down; the
+    // year to date's own postings are kept separately, so a drill-down that
+    // wants the whole year's story so far never loses it to a narrower filter.
+    if (inPeriod) {
+      const list = entriesBy.get(key) ?? [];
+      list.push(entry);
+      entriesBy.set(key, list);
+    }
+    if (inYtd) {
+      const list = ytdEntriesBy.get(key) ?? [];
+      list.push(entry);
+      ytdEntriesBy.set(key, list);
+    }
   }
 
   // A vertical earns a block if it carries a budget or has a ledger actual in
@@ -400,6 +416,7 @@ export async function buildTeamCost(opts: {
         ytdVariance,
         ytdVariancePct: pct(ytdVariance, ytdBudget),
         entries: entriesBy.get(`${v.id}|${key}`) ?? [],
+        ytdEntries: ytdEntriesBy.get(`${v.id}|${key}`) ?? [],
       };
     });
     return rollUp(v.id, v.code, v.name, roles);
@@ -417,6 +434,9 @@ export async function buildTeamCost(opts: {
     const entries = verticalScopes
       .flatMap((sc) => sc.roles[i].entries)
       .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    const ytdEntries = verticalScopes
+      .flatMap((sc) => sc.roles[i].ytdEntries)
+      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
     return {
       role: key,
       label,
@@ -429,6 +449,7 @@ export async function buildTeamCost(opts: {
       ytdVariance,
       ytdVariancePct: pct(ytdVariance, ytdBudget),
       entries,
+      ytdEntries,
     };
   });
 
