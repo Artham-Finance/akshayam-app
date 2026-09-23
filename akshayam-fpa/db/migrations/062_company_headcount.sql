@@ -17,6 +17,17 @@ create table company_headcount (
   entity_id     int  not null references entities(id) on delete cascade,
   fy_start_year int  not null,
   month         date,
-  heads         int  not null default 0,
-  unique nulls not distinct (entity_id, fy_start_year, month)
+  heads         int  not null default 0
 );
+
+-- One row per company per month, and one annual baseline per company.
+-- `unique nulls not distinct` would say this in one constraint, but that is
+-- PostgreSQL 15 and production is on 14 - so two partial indexes, as in
+-- 054_monthly_headcount.
+create unique index company_headcount_entity_fy_month_key
+  on company_headcount (entity_id, fy_start_year, month)
+  where month is not null;
+
+create unique index company_headcount_entity_fy_annual_key
+  on company_headcount (entity_id, fy_start_year)
+  where month is null;

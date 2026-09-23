@@ -53,7 +53,7 @@ export async function POST(request: Request) {
     await query(
       `insert into common_cost_apportionment_actual (entity_id, fy_start_year, month, amount)
        select $1, $2, m::date, $4 from unnest($3::date[]) as m
-       on conflict on constraint common_cost_apportionment_act_entity_id_fy_start_year_month_key
+       on conflict (entity_id, fy_start_year, month) where month is not null
          do update set amount = excluded.amount`,
       [body.entityId, body.fyStartYear, months, body.amount],
     );

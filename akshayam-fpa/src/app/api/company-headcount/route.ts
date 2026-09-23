@@ -50,7 +50,7 @@ export async function POST(request: Request) {
     await query(
       `insert into company_headcount (entity_id, fy_start_year, month, heads)
        select $1, $2, m::date, $4 from unnest($3::date[]) as m
-       on conflict on constraint company_headcount_entity_id_fy_start_year_month_key
+       on conflict (entity_id, fy_start_year, month) where month is not null
          do update set heads = excluded.heads`,
       [body.entityId, body.fyStartYear, months, body.heads],
     );
