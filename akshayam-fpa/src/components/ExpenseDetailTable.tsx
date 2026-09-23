@@ -204,7 +204,7 @@ export function ExpenseDetailTable({
         <tfoot>
           <tr className="bg-surface-sunk font-semibold">
             <th scope="row" className="border-y border-line-strong px-3 py-2 text-left">
-              Other expenses{monthLabel ? ` — ${monthLabel}` : ""}
+              Overheads{monthLabel ? ` — ${monthLabel}` : ""}
             </th>
             <td className="num border-y border-line-strong px-3 py-2 text-right">
               {money(totals.periodBudget)}

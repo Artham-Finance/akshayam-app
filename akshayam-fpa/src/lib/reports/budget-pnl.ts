@@ -64,7 +64,10 @@ const LAYOUT: {
   { code: "revenue", name: "Revenue", sign: 1 },
   { code: "direct_cost", name: "Team cost", sign: -1 },
   { code: "establishment_cost", name: "Establishment cost", sign: -1 },
-  { code: "overheads", name: "Other expenses", sign: -1 },
+  // Named to match the account-mapping screen's own P&L group - there is no
+  // separate "Other expenses" group to map a ledger account to, so a label
+  // that agreed with neither would only ever be explained away.
+  { code: "overheads", name: "Overheads", sign: -1 },
   { code: "common_cost_apportionment", name: "Common cost apportionment", sign: -1 },
   {
     code: "ebitda",

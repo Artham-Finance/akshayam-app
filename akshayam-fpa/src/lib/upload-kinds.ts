@@ -34,7 +34,7 @@ export const UPLOAD_KINDS: Omit<UploadKindInfo, "lastUpload">[] = [
     title: "Budget — planning workbook",
     zohoPath: "Not a Zoho report — the firm's own planning workbook",
     blurb:
-      "The budgeted P&L, month by month, and the breakdown behind Other expenses. Without it every page shows actuals with nothing to compare them against. One file covers the group and both companies — it loads all three whichever view you drop it on, and replaces the whole year rather than adding to it. Vertical revenue and collection targets are separate and already set up.",
+      "The budgeted P&L, month by month, and the breakdown behind Overheads. Without it every page shows actuals with nothing to compare them against. One file covers the group and both companies — it loads all three whichever view you drop it on, and replaces the whole year rather than adding to it. Vertical revenue and collection targets are separate and already set up.",
     cadence: "Once a year",
     needsAsOf: false,
   },

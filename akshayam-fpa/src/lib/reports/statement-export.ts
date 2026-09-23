@@ -564,7 +564,7 @@ function otherExpensesSheet(
   emphasise.push(rows.length);
   rule.push(rows.length);
   rows.push([
-    "Other expenses",
+    "Overheads",
     totals.periodBudget,
     totals.periodActual,
     totals.ytdBudget,
@@ -574,8 +574,8 @@ function otherExpensesSheet(
   ]);
 
   return {
-    name: "Other expenses",
-    title: "Other expenses — what it is made of",
+    name: "Overheads",
+    title: "Overheads — what it is made of",
     context: [...context, "grouped by head; YTD is always 1 April to the ledger's latest month"],
     columns: [
       { header: "Particulars", type: "text" },
