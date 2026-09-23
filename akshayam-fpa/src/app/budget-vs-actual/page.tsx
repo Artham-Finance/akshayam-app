@@ -208,6 +208,18 @@ export default async function BudgetVsActualPage({
             periodMonths,
             ytdMonths,
             schedule: AKSHAYAM_OTHER_EXPENSES_SCHEDULE,
+            // The workbook only budgets Accounting support and Other Expenses
+            // by name; the ledger carries several more real accounts that
+            // fold into the same Overheads statement line (Dues and
+            // Subscriptions chief among them, plus other_income and
+            // reimbursements - see GROUP_TO_LINE in budget-pnl.ts) and would
+            // otherwise never appear in the breakdown at all. Flat
+            // Maintanance is left out - it is already read into
+            // Establishment cost's own line.
+            catchAll: {
+              groupCodes: ["overheads", "other_income", "reimbursements"],
+              exclude: ["Flat Maintanance"],
+            },
           })
         : null,
       isAkshayam && (await hasReimbursementBillLines(entity.memberIds, entity.verticalIds))
@@ -446,10 +458,10 @@ export default async function BudgetVsActualPage({
           )}
 
           {/*
-            Akshayam has its own "Other expenses - budget vs actual" card
-            above, read from "4 - Akshayam Monthly"'s own named accounts -
-            this generic keyed-entry breakdown would just duplicate it with a
-            different definition of the same line.
+            Akshayam's Overheads breakdown lives inline on the statement
+            above, behind "Show cost detail" - this generic keyed-entry
+            breakdown would just duplicate it with a different definition of
+            the same line.
           */}
           {!isSlice && !isAkshayam && expenseDetail?.hasDetail && (
             <Card padded={false}>
@@ -461,7 +473,7 @@ export default async function BudgetVsActualPage({
                       : `${periodLabel} · pick a month to edit`
                   }
                 >
-                  Other expenses — what it is made of
+                  Overheads — what it is made of
                 </CardTitle>
               </div>
               <ExpenseDetailTable

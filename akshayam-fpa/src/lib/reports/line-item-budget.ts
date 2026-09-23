@@ -1,7 +1,7 @@
 import { query } from "@/lib/db";
 import type { Entity } from "@/lib/entity";
 import { fyBounds, type FyMonth } from "@/lib/period";
-import type { EstablishmentResult } from "@/lib/reports/establishment-detail";
+import type { EstablishmentLine, EstablishmentResult } from "@/lib/reports/establishment-detail";
 
 /**
  * A hand-scheduled budget-vs-actual breakdown, read straight from named
@@ -39,14 +39,34 @@ export async function buildLineItemBudget(opts: {
   periodMonths: FyMonth[];
   ytdMonths: FyMonth[];
   schedule: LineItemSchedule[];
+  /**
+   * Sweep up whatever the ledger posts to this group that no schedule line
+   * claims, one line per account rather than a single opaque remainder - a
+   * schedule written from the budget file only ever names the accounts the
+   * file itself budgets, and a real ledger always carries a few more
+   * (write-offs, bank charges, a one-off) that are still real cost and would
+   * otherwise vanish from the breakdown while still counting toward the
+   * statement line above it.
+   */
+  catchAll?: {
+    /**
+     * Every group_code that folds into this schedule's statement line - for
+     * Overheads that is 'overheads' itself, plus 'other_income' and
+     * 'reimbursements' (see GROUP_TO_LINE in budget-pnl.ts), or the sweep
+     * only ever reconciles to a line the statement does not actually strike.
+     */
+    groupCodes: string[];
+    /** an account already read into a *different* schedule (Flat Maintanance under Establishment cost, say) - not repeated here */
+    exclude?: string[];
+  };
 }): Promise<EstablishmentResult> {
-  const { entity, fyStartYear, periodMonths, ytdMonths, schedule } = opts;
+  const { entity, fyStartYear, periodMonths, ytdMonths, schedule, catchAll } = opts;
   const empty: EstablishmentResult = {
     hasData: false,
     lines: [],
     totals: { periodBudget: 0, periodActual: 0, ytdBudget: 0, ytdActual: 0, ytdVariance: 0, ytdVariancePct: null },
   };
-  if (schedule.length === 0 || periodMonths.length === 0) return empty;
+  if ((schedule.length === 0 && !catchAll) || periodMonths.length === 0) return empty;
 
   const periodFraction = periodMonths.length / 12;
   const ytdFraction = ytdMonths.length / 12;
@@ -56,30 +76,66 @@ export async function buildLineItemBudget(opts: {
 
   const allAccountNames = schedule.flatMap((s) => s.accountNames);
 
-  const rows = await query<{
-    name: string;
-    month_key: string;
-    txn_date: string;
-    particulars: string | null;
-    reference: string | null;
-    txn_type: string | null;
-    amount: number;
-  }>(
-    `select a.name,
-            to_char(g.txn_date, 'YYYY-MM') as month_key,
-            to_char(g.txn_date, 'YYYY-MM-DD') as txn_date,
-            nullif(btrim(g.description), '') as particulars,
-            nullif(btrim(g.reference), '')  as reference,
-            g.txn_type,
-            (g.debit - g.credit) as amount
-       from gl_entries g
-       join accounts a on a.id = g.account_id
-      where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
-        and a.statement = 'pnl' and a.name = any($4::text[])
-        and not ($5::boolean and a.is_intercompany)
-      order by g.txn_date desc, g.id desc`,
-    [entity.memberIds, fyStart, fyEnd, allAccountNames, entity.consolidates],
-  );
+  const [rows, catchAllRows] = await Promise.all([
+    query<{
+      name: string;
+      month_key: string;
+      txn_date: string;
+      particulars: string | null;
+      reference: string | null;
+      txn_type: string | null;
+      amount: number;
+    }>(
+      `select a.name,
+              to_char(g.txn_date, 'YYYY-MM') as month_key,
+              to_char(g.txn_date, 'YYYY-MM-DD') as txn_date,
+              nullif(btrim(g.description), '') as particulars,
+              nullif(btrim(g.reference), '')  as reference,
+              g.txn_type,
+              (g.debit - g.credit) as amount
+         from gl_entries g
+         join accounts a on a.id = g.account_id
+        where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
+          and a.statement = 'pnl' and a.name = any($4::text[])
+          and not ($5::boolean and a.is_intercompany)
+        order by g.txn_date desc, g.id desc`,
+      [entity.memberIds, fyStart, fyEnd, allAccountNames, entity.consolidates],
+    ),
+    catchAll
+      ? query<{
+          name: string;
+          month_key: string;
+          txn_date: string;
+          particulars: string | null;
+          reference: string | null;
+          txn_type: string | null;
+          amount: number;
+        }>(
+          `select a.name,
+                  to_char(g.txn_date, 'YYYY-MM') as month_key,
+                  to_char(g.txn_date, 'YYYY-MM-DD') as txn_date,
+                  nullif(btrim(g.description), '') as particulars,
+                  nullif(btrim(g.reference), '')  as reference,
+                  g.txn_type,
+                  (g.debit - g.credit) as amount
+             from gl_entries g
+             join accounts a on a.id = g.account_id
+            where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
+              and a.statement = 'pnl' and a.group_code = any($4::text[])
+              and not (a.name = any($5::text[]))
+              and not ($6::boolean and a.is_intercompany)
+            order by a.name, g.txn_date desc, g.id desc`,
+          [
+            entity.memberIds,
+            fyStart,
+            fyEnd,
+            catchAll.groupCodes,
+            [...allAccountNames, ...(catchAll.exclude ?? [])],
+            entity.consolidates,
+          ],
+        )
+      : Promise.resolve([]),
+  ]);
 
   const toEntry = (r: (typeof rows)[number]) => ({
     date: r.txn_date,
@@ -97,7 +153,7 @@ export async function buildLineItemBudget(opts: {
     return total;
   };
 
-  const lines = schedule.map((s) => {
+  const lines: EstablishmentLine[] = schedule.map((s) => {
     const matched = rows.filter((r) => s.accountNames.includes(r.name));
     const periodActual = sumRows(matched, periodKeys);
     const ytdActual = sumRows(matched, ytdKeys);
@@ -117,6 +173,30 @@ export async function buildLineItemBudget(opts: {
       ytdEntries: matched.filter((r) => ytdKeys.has(r.month_key)).map(toEntry),
     };
   });
+
+  // One line per account the ledger carries under this group that no
+  // schedule line named - budget nil, since the file never budgeted it, but
+  // shown by its own real name rather than folded into a total nobody can
+  // trace back to a posting.
+  for (const name of [...new Set(catchAllRows.map((r) => r.name))]) {
+    const matched = catchAllRows.filter((r) => r.name === name);
+    const periodActual = sumRows(matched, periodKeys);
+    const ytdActual = sumRows(matched, ytdKeys);
+    if (Math.abs(periodActual) < 0.5 && Math.abs(ytdActual) < 0.5) continue;
+    lines.push({
+      label: name,
+      annualBudget: 0,
+      periodBudget: 0,
+      periodActual,
+      ytdBudget: 0,
+      ytdActual,
+      ytdVariance: -ytdActual,
+      ytdVariancePct: null,
+      isActualOnly: true,
+      entries: matched.filter((r) => periodKeys.has(r.month_key)).map(toEntry),
+      ytdEntries: matched.filter((r) => ytdKeys.has(r.month_key)).map(toEntry),
+    });
+  }
 
   const totals = lines.reduce(
     (t, l) => ({
