@@ -25,6 +25,7 @@ export type BvaCode =
   | "direct_cost"
   | "establishment_cost"
   | "overheads"
+  | "reimbursements"
   | "common_cost_apportionment"
   | "ebitda"
   | "depreciation"
@@ -68,6 +69,11 @@ const LAYOUT: {
   // separate "Other expenses" group to map a ledger account to, so a label
   // that agreed with neither would only ever be explained away.
   { code: "overheads", name: "Overheads", sign: -1 },
+  // Its own line, matching the main P&L statement's own group - for Akshayam
+  // the two accounts nowhere near net to nothing (Reimbursement Income and
+  // RI Expense Reimbursement both run into the lakhs), so folding it into
+  // Overheads was hiding a real recovery position, not tidying a rounding.
+  { code: "reimbursements", name: "Reimbursable Costs Recovered (net)", sign: 1 },
   { code: "common_cost_apportionment", name: "Common cost apportionment", sign: -1 },
   {
     code: "ebitda",
@@ -78,6 +84,7 @@ const LAYOUT: {
       "direct_cost",
       "establishment_cost",
       "overheads",
+      "reimbursements",
       "common_cost_apportionment",
     ],
   },
@@ -93,15 +100,15 @@ const LAYOUT: {
 /**
  * Where each P&L group lands on this statement.
  *
- * Reimbursements and other income join "Other expenses" rather than getting
- * lines of their own: reimbursement is a recharge that nets to almost nothing,
- * and both are small enough that a line each would lengthen the statement
- * without telling anyone something they act on. They still reach EBITDA.
+ * Other income joins Overheads rather than getting a line of its own - small
+ * enough that a line for it would lengthen the statement without telling
+ * anyone something they act on. Reimbursements gets its own line instead,
+ * the same group the main P&L statement already carries separately.
  */
 const GROUP_TO_LINE: Record<string, BvaCode> = {
   revenue: "revenue",
   other_income: "overheads",
-  reimbursements: "overheads",
+  reimbursements: "reimbursements",
   direct_cost: "direct_cost",
   establishment_cost: "establishment_cost",
   overheads: "overheads",

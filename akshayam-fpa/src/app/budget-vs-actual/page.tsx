@@ -211,13 +211,14 @@ export default async function BudgetVsActualPage({
             // The workbook only budgets Accounting support and Other Expenses
             // by name; the ledger carries several more real accounts that
             // fold into the same Overheads statement line (Dues and
-            // Subscriptions chief among them, plus other_income and
-            // reimbursements - see GROUP_TO_LINE in budget-pnl.ts) and would
-            // otherwise never appear in the breakdown at all. Flat
-            // Maintanance is left out - it is already read into
-            // Establishment cost's own line.
+            // Subscriptions chief among them, plus other_income - see
+            // GROUP_TO_LINE in budget-pnl.ts) and would otherwise never
+            // appear in the breakdown at all. Flat Maintanance is left out -
+            // it is already read into Establishment cost's own line.
+            // Reimbursements is not swept here - it has its own statement
+            // line now, not folded into Overheads.
             catchAll: {
-              groupCodes: ["overheads", "other_income", "reimbursements"],
+              groupCodes: ["overheads", "other_income"],
               exclude: ["Flat Maintanance"],
             },
           })
