@@ -582,6 +582,7 @@ export default async function RevenuePage({
               tone="positive"
               active={drill === "fee"}
               href={withParams("/revenue", params, { drill: drill === "fee" ? null : "fee" })}
+              exportable
               cumulative={
                 period.cumulative
                   ? { label: period.shortLabel, value: compactINR(budget.total.period.actual) }
@@ -628,6 +629,7 @@ export default async function RevenuePage({
                       drill: drill === "retainers" ? null : "retainers",
                     })
               }
+              exportable
             />
             <KpiTile
               label="Credit notes raised"
@@ -645,6 +647,7 @@ export default async function RevenuePage({
               href={withParams("/revenue", params, {
                 drill: drill === "credit_notes" ? null : "credit_notes",
               })}
+              exportable
               cumulative={
                 period.cumulative
                   ? { label: period.shortLabel, value: compactINR(cnFee + cnRi) }
@@ -660,6 +663,7 @@ export default async function RevenuePage({
               href={withParams("/revenue", params, {
                 drill: drill === "ri" ? null : "ri",
               })}
+              exportable
               cumulative={
                 period.cumulative
                   ? { label: period.shortLabel, value: compactINR(ri) }
