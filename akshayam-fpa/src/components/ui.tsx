@@ -174,6 +174,21 @@ const TILE_TONES = {
  * tile is marked, because otherwise a table appearing below a row of six
  * numbers gives no clue which one it belongs to.
  */
+
+/** A small spreadsheet glyph, for a tile that opens onto an Excel download - not Microsoft's mark, just the shorthand everyone already reads it as. */
+function ExcelIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden className={className}>
+      <rect x="1" y="1.5" width="14" height="13" rx="1.5" fill="#1B7B43" />
+      <rect x="3" y="3.5" width="10" height="9" rx="0.5" fill="white" fillOpacity="0.14" />
+      <path
+        d="M5.2 5.6 7.5 8l-2.3 2.4h1.5L8 8.9l1.3 1.5h1.5L8.5 8l2.3-2.4H9.3L8 6.9 6.7 5.6H5.2Z"
+        fill="white"
+      />
+    </svg>
+  );
+}
+
 export function KpiTile({
   label,
   value,
@@ -182,6 +197,10 @@ export function KpiTile({
   href,
   active = false,
   cumulative,
+  /** this tile's href opens a drill panel with an Excel download, not just another page - so the affordance is a standing Excel icon, not a hover-only "View" */
+  exportable = false,
+  /** href is a file, not a page - a plain anchor and a standing icon, never "Close" (there is no state to close) */
+  download = false,
 }: {
   label: string;
   value: ReactNode;
@@ -191,6 +210,8 @@ export function KpiTile({
   active?: boolean;
   /** the year-to-date figure behind a single week or month */
   cumulative?: { label: string; value: ReactNode };
+  exportable?: boolean;
+  download?: boolean;
 }) {
   const skin = TILE_TONES[tone];
 
@@ -208,7 +229,21 @@ export function KpiTile({
         <p className={clsx("text-[11px] font-medium uppercase tracking-[0.1em]", skin.label)}>
           {label}
         </p>
-        {href && (
+        {href && download && (
+          <span title="Download as Excel">
+            <ExcelIcon className="h-[15px] w-[15px] shrink-0" />
+          </span>
+        )}
+        {href && exportable && !download && (
+          <span title={active ? "Close" : "Open — download as Excel"}>
+            {active ? (
+              <span className="text-[10.5px] font-medium text-navy">Close</span>
+            ) : (
+              <ExcelIcon className="h-[15px] w-[15px] shrink-0" />
+            )}
+          </span>
+        )}
+        {href && !exportable && !download && (
           <span className="text-[10.5px] font-medium text-navy opacity-0 transition-opacity group-hover:opacity-100">
             {active ? "Close" : "View"}
           </span>
@@ -238,6 +273,15 @@ export function KpiTile({
   );
 
   if (!href) return body;
+  if (download) {
+    // A plain anchor, not next/link: this is a file, and the client router
+    // would try to navigate to it.
+    return (
+      <a href={href} className="group block">
+        {body}
+      </a>
+    );
+  }
   return (
     <Link href={href} scroll={false} className="group block">
       {body}

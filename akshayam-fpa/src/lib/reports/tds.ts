@@ -578,6 +578,147 @@ export async function buildTdsReco({
 }
 
 /* ============================================================
+   The whole reconciliation, invoice by invoice - for the download
+   ============================================================ */
+
+export interface TdsExportBooksRow {
+  segment: TdsSegment;
+  customer: string;
+  verticalCode: string | null;
+  invoiceNumber: string | null;
+  invoiceDate: string | null;
+  amount: number;
+}
+
+export interface TdsExportEntryRow {
+  segment: TdsSegment;
+  customer: string;
+  deductorName: string | null;
+  tan: string | null;
+  section: string | null;
+  transactionDate: string | null;
+  amountCredited: number;
+  taxDeducted: number;
+}
+
+export interface TdsRecoExport {
+  quarterLabel: string;
+  period: { start: string; end: string };
+  /** the same customer-level reconciliation the card shows, for the summary sheet */
+  summary: TdsRecoRow[];
+  /** every books-side invoice for the quarter, not just one segment's */
+  books: TdsExportBooksRow[];
+  /** every Form 26AS entry for the quarter, not just one segment's */
+  form26as: TdsExportEntryRow[];
+}
+
+/**
+ * The whole reconciliation at invoice grain, for the Excel download - every
+ * customer's books invoices and 26AS entries, each tagged with the segment
+ * its customer falls into, so the workbook can be read the same way the
+ * card is: matched, needs chasing, or the other way round.
+ *
+ * `booksOnlyInvoices` on `TdsReco` only ever covered one segment, because
+ * that is the only invoice list the card itself opens. The download is a
+ * different reader's need - not "what's still open" but "show me
+ * everything", so it re-reads both sides for every customer instead.
+ */
+export async function buildTdsRecoExport(
+  scope: Scope,
+  opts: { segment?: TdsSegment | null } = {},
+): Promise<TdsRecoExport> {
+  const { entity, verticalId } = scope;
+  const onlySegment = opts.segment ?? null;
+  const reco = await buildTdsReco(scope);
+  const { period } = reco;
+  const segmentByCustomer = new Map(reco.byCustomer.map((r) => [r.label, r.segment]));
+  const segmentFor = (customer: string | null) =>
+    segmentByCustomer.get(customer ?? "Not attributed to a customer") ?? "books_only";
+
+  const booksRows = await query<{
+    customer: string | null;
+    vertical_code: string | null;
+    invoice_number: string | null;
+    invoice_date: string | null;
+    amount: number;
+  }>(
+    `select ${BOOKS_CUSTOMER} as customer,
+            v.code as vertical_code,
+            g.txn_number as invoice_number,
+            inv.invoice_date::text as invoice_date,
+            sum(g.debit - g.credit)::numeric as amount
+       from gl_entries g
+       join accounts a on a.id = g.account_id
+       left join lateral (
+         select i.customer_name, i.vertical_id, i.invoice_date
+           from invoice_lines i
+          where i.entity_id = g.entity_id and i.invoice_number = g.txn_number
+          limit 1
+       ) inv on true
+       left join verticals v on v.id = coalesce(inv.vertical_id, g.vertical_id)
+      where g.entity_id = any($1::int[])
+        and g.txn_date between $2 and $3
+        and ${TDS_ACCOUNTS}
+        and ($4::int is null or coalesce(inv.vertical_id, g.vertical_id) = $4)
+        ${verticalScope("$5", "coalesce(inv.vertical_id, g.vertical_id)")}
+      group by 1, 2, g.txn_number, inv.invoice_date
+     having abs(sum(g.debit - g.credit)) > 0.005
+     order by 1, inv.invoice_date`,
+    [entity.memberIds, period.start, period.end, verticalId, entity.verticalIds],
+  );
+
+  const entryRows = await query<{
+    customer_name: string | null;
+    deductor_name: string | null;
+    tan: string | null;
+    section: string | null;
+    transaction_date: string | null;
+    amount_credited: number;
+    tax_deducted: number;
+  }>(
+    `select t.customer_name, t.deductor_name, t.tan, t.section,
+            t.transaction_date::text as transaction_date,
+            t.amount_credited::numeric as amount_credited,
+            t.tax_deducted::numeric as tax_deducted
+       from tds_entries t
+      where t.entity_id = any($1::int[])
+        and t.transaction_date between $2 and $3
+        and ($4::int is null or t.vertical_id = $4)
+        ${verticalScope("$5", "t.vertical_id")}
+      order by t.customer_name nulls last, t.transaction_date`,
+    [entity.memberIds, period.start, period.end, verticalId, entity.verticalIds],
+  );
+
+  const summary = onlySegment
+    ? reco.byCustomer.filter((r) => r.segment === onlySegment)
+    : reco.byCustomer;
+  const books = booksRows
+    .map((r) => ({
+      segment: segmentFor(r.customer),
+      customer: r.customer ?? "Not attributed to a customer",
+      verticalCode: r.vertical_code,
+      invoiceNumber: r.invoice_number,
+      invoiceDate: r.invoice_date,
+      amount: Number(r.amount),
+    }))
+    .filter((r) => !onlySegment || r.segment === onlySegment);
+  const form26as = entryRows
+    .map((r) => ({
+      segment: segmentFor(r.customer_name),
+      customer: r.customer_name ?? "Not attributed to a customer",
+      deductorName: r.deductor_name,
+      tan: r.tan,
+      section: r.section,
+      transactionDate: r.transaction_date,
+      amountCredited: Number(r.amount_credited),
+      taxDeducted: Number(r.tax_deducted),
+    }))
+    .filter((r) => !onlySegment || r.segment === onlySegment);
+
+  return { quarterLabel: reco.quarterLabel, period, summary, books, form26as };
+}
+
+/* ============================================================
    Workings behind a figure
    ============================================================ */
 

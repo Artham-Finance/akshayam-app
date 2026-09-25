@@ -1,7 +1,7 @@
 import Link from "next/link";
 import clsx from "clsx";
 import { DataTable, drillColumns, renderDrillRow } from "@/components/DataTable";
-import { Card, CardTitle, DrillPanel, KpiTile, Notice } from "@/components/ui";
+import { Card, CardTitle, DownloadExcel, DrillPanel, KpiTile, Notice } from "@/components/ui";
 import { TdsRemarkCell } from "@/components/TdsRemarkCell";
 import { compactINR, dateLabel, money, moneySigned } from "@/lib/format";
 import { withParams, type Params } from "@/lib/href";
@@ -120,13 +120,6 @@ export async function TdsRecoSection({
     );
   }
 
-  const segParam = typeof params.tdsSeg === "string" ? params.tdsSeg : null;
-  const segment: TdsSegment | null =
-    segParam === "matched" || segParam === "difference" ||
-    segParam === "books_only" || segParam === "ret_only"
-      ? segParam
-      : null;
-
   /* The Unallocated vertical has no id to filter the page by, so it opens
      its own panel instead of behaving like the other vertical links. */
   const showUnallocated = params.tdsVert === "unallocated";
@@ -147,44 +140,19 @@ export async function TdsRecoSection({
 
   const unmatchedValue = reco.unmatchedDeductors.reduce((s, d) => s + d.taxDeducted, 0);
 
-  const shownCustomers = segment
-    ? reco.byCustomer.filter((r) => r.segment === segment)
-    : reco.byCustomer;
-
-  const shownTotals = shownCustomers.reduce(
-    (t, r) => ({
-      books: t.books + r.books,
-      form26as: t.form26as + r.form26as,
-      difference: t.difference + r.difference,
-    }),
-    { books: 0, form26as: 0, difference: 0 },
-  );
+  const exportParams = (segment?: TdsSegment) => {
+    const p = new URLSearchParams({ fy: String(fyStartYear), q: String(quarter) });
+    if (verticalId) p.set("vertical", String(verticalId));
+    if (customer) p.set("customer", customer);
+    if (segment) p.set("segment", segment);
+    return `/api/export/tds-reco?${p.toString()}`;
+  };
+  const exportHref = exportParams();
 
   const linkFor = (row: { label: string }, s: TdsDrillSide) =>
     withParams("/receivables", params, { tds: row.label, tdsSide: s });
 
   // Shared by each table's pinned copy above the rows and the plain one below them.
-  const segmentTotalsRow = [
-    "Total",
-    reco.byCustomer.length,
-    money(reco.totals.books),
-    money(reco.totals.form26as),
-    moneySigned(reco.totals.difference),
-  ];
-  const booksOnlyTotalsRow = [
-    `Total — ${reco.booksOnlyInvoices.length} invoice${reco.booksOnlyInvoices.length === 1 ? "" : "s"}`,
-    "",
-    "",
-    "",
-    money(reco.booksOnlyInvoices.reduce((s, r) => s + r.amount, 0)),
-  ];
-  const retOnlyCustomers = reco.byCustomer.filter((r) => r.segment === "ret_only");
-  const retOnlyTotalsRow = [
-    `Total — ${retOnlyCustomers.length} customer${retOnlyCustomers.length === 1 ? "" : "s"}`,
-    "",
-    money(retOnlyCustomers.reduce((s, r) => s + r.form26as, 0)),
-    "",
-  ];
   const byVerticalTotalsRow = [
     "Total",
     money(reco.totals.books),
@@ -198,13 +166,14 @@ export async function TdsRecoSection({
     moneySigned(reco.unallocated.reduce((s, r) => s + r.difference, 0)),
   ];
   const byCustomerTotalsRow = [
-    shownCustomers.length > 60
-      ? `Total — all ${shownCustomers.length} customers`
-      : `Total — ${shownCustomers.length} customer${shownCustomers.length === 1 ? "" : "s"}`,
+    reco.byCustomer.length > 60
+      ? `Total — all ${reco.byCustomer.length} customers`
+      : `Total — ${reco.byCustomer.length} customer${reco.byCustomer.length === 1 ? "" : "s"}`,
     "",
-    money(shownTotals.books),
-    money(shownTotals.form26as),
-    moneySigned(shownTotals.difference),
+    money(reco.totals.books),
+    money(reco.totals.form26as),
+    moneySigned(reco.totals.difference),
+    "",
   ];
   const unmatchedDeductorsTotalsRow = ["Total", "", "", money(unmatchedValue)];
 
@@ -219,7 +188,10 @@ export async function TdsRecoSection({
           >
             TDS receivable reconciliation
           </CardTitle>
-          <QuarterTabs quarter={quarter} params={params} />
+          <div className="flex flex-wrap items-center gap-2">
+            <DownloadExcel href={exportHref} label="Download invoice breakup" />
+            <QuarterTabs quarter={quarter} params={params} />
+          </div>
         </div>
         <p className="-mt-1 mb-4 text-[12.5px] text-ink-muted">
           Books against Form 26AS for {reco.quarterLabel} — {dateLabel(reco.period.start)} to{" "}
@@ -315,7 +287,7 @@ export async function TdsRecoSection({
       */}
       <div className="border-t border-line">
         <div className="p-4 sm:p-5">
-          <CardTitle hint="click a segment to list its customers below">
+          <CardTitle hint="click a card to download its own invoice breakup">
             Customers by reconciliation status
           </CardTitle>
           <p className="-mt-1 text-[12.5px] leading-relaxed text-ink-muted">
@@ -324,122 +296,34 @@ export async function TdsRecoSection({
             has no record of, or a deduction the books never raised.
           </p>
         </div>
-        <DataTable
-          columns={[
-            { header: "Segment" },
-            { header: "Customers", numeric: true },
-            { header: "Per books", numeric: true },
-            { header: "Per 26AS", numeric: true },
-            { header: "Difference", numeric: true, strong: true },
-          ]}
-          rows={reco.segments.map((s) => [
-            s.customers ? (
-              <Link
+        <div className="grid grid-cols-1 gap-3 px-4 pb-4 sm:grid-cols-2 sm:px-5 lg:grid-cols-4">
+          {reco.segments.map((s) => {
+            const amount =
+              s.segment === "difference" ? s.difference : s.segment === "ret_only" ? s.form26as : s.books;
+            const invoiceCount =
+              s.segment === "books_only" ? reco.booksOnlyInvoices.length : null;
+            return (
+              <KpiTile
                 key={s.segment}
-                href={withParams("/receivables", params, {
-                  tdsSeg: segment === s.segment ? null : s.segment,
-                  tds: null,
-                  tdsSide: null,
-                })}
-                className={clsx(
-                  "hover:underline",
-                  segment === s.segment ? "font-semibold text-navy" : "text-ink",
-                )}
-              >
-                {SEGMENT_TITLE[s.segment]}
-              </Link>
-            ) : (
-              <span key={s.segment} className="text-ink-faint">
-                {SEGMENT_TITLE[s.segment]}
-              </span>
-            ),
-            s.customers || "—",
-            s.books ? money(s.books) : "—",
-            s.form26as ? money(s.form26as) : "—",
-            <DiffCell key={`d-${s.segment}`} value={s.difference} />,
-          ])}
-          topTotals={segmentTotalsRow}
-        />
-        {segment && (
-          <p className="px-4 py-3 text-[11.5px] text-ink-faint sm:px-5">
-            The customer table below is filtered to{" "}
-            <span className="text-ink-muted">{SEGMENT_TITLE[segment]}</span>.{" "}
-            <Link
-              href={withParams("/receivables", params, { tdsSeg: null })}
-              className="text-navy hover:underline"
-            >
-              Show all customers
-            </Link>
-          </p>
-        )}
+                label={SEGMENT_TITLE[s.segment]}
+                value={
+                  s.segment === "difference" && Math.abs(amount) >= MATERIAL
+                    ? moneySigned(amount)
+                    : compactINR(amount)
+                }
+                note={
+                  invoiceCount !== null
+                    ? `${invoiceCount} invoice${invoiceCount === 1 ? "" : "s"}`
+                    : `${s.customers} customer${s.customers === 1 ? "" : "s"}`
+                }
+                tone={s.segment === "matched" ? "positive" : s.customers > 0 ? "caution" : "ink"}
+                href={s.customers > 0 ? exportParams(s.segment) : undefined}
+                download
+              />
+            );
+          })}
+        </div>
       </div>
-
-      {segment === "books_only" && reco.booksOnlyInvoices.length > 0 && (
-        <div className="border-t border-line">
-          <div className="p-4 sm:p-5">
-            <CardTitle hint={`${reco.booksOnlyInvoices.length} invoices · every vertical`}>
-              Invoices in books, not in Form 26AS
-            </CardTitle>
-            <p className="-mt-1 text-[12.5px] leading-relaxed text-ink-muted">
-              The invoice and date behind every customer above — a customer with more than
-              one unmatched invoice in {reco.quarterLabel} gets a row each.
-            </p>
-          </div>
-          <DataTable
-            columns={[
-              { header: "Customer" },
-              { header: "Vertical" },
-              { header: "Invoice" },
-              { header: "Date" },
-              { header: "TDS booked", numeric: true, strong: true },
-            ]}
-            rows={reco.booksOnlyInvoices.map((r) => [
-              r.customer,
-              r.verticalCode ?? "—",
-              r.invoiceNumber ?? "—",
-              r.invoiceDate ? dateLabel(r.invoiceDate) : "—",
-              money(r.amount),
-            ])}
-            topTotals={booksOnlyTotalsRow}
-          />
-        </div>
-      )}
-
-      {segment === "ret_only" && retOnlyCustomers.length > 0 && (
-        <div className="border-t border-line">
-          <div className="p-4 sm:p-5">
-            <CardTitle hint={`${retOnlyCustomers.length} customer${retOnlyCustomers.length === 1 ? "" : "s"} · every vertical`}>
-              Form 26AS entries not in Zoho
-            </CardTitle>
-            <p className="-mt-1 text-[12.5px] leading-relaxed text-ink-muted">
-              The department recorded a deduction against these customers, but no bill raises a
-              matching TDS receivable in the books — there is no invoice to point at, so the
-              reason is whatever is written down here.
-            </p>
-          </div>
-          <DataTable
-            columns={[
-              { header: "Customer" },
-              { header: "Vertical" },
-              { header: "Per 26AS", numeric: true, strong: true },
-              { header: "Remarks" },
-            ]}
-            rows={retOnlyCustomers.map((r) => [
-              r.label,
-              r.verticalCode ?? "—",
-              money(r.form26as),
-              <TdsRemarkCell
-                key="r"
-                fyStartYear={fyStartYear}
-                quarter={quarter}
-                customer={r.label}
-                initialValue={r.remark}
-              />,
-            ])}
-            topTotals={retOnlyTotalsRow}
-          />
-        </div>
-      )}
 
       {drill && (
         <div className="px-4 pb-4 sm:px-5">
@@ -589,8 +473,9 @@ export async function TdsRecoSection({
             { header: "Per books", numeric: true },
             { header: "Per 26AS", numeric: true },
             { header: "Difference", numeric: true, strong: true },
+            { header: "Remarks" },
           ]}
-          rows={shownCustomers.slice(0, 60).map((row) => [
+          rows={reco.byCustomer.slice(0, 60).map((row) => [
             // The name opens the invoice-by-invoice workings; the two figures
             // beside it open the ledger lines and the 26AS lines respectively.
             <Link
@@ -629,19 +514,26 @@ export async function TdsRecoSection({
               "—"
             ),
             <DiffCell key="d" value={row.difference} />,
+            <TdsRemarkCell
+              key="r"
+              fyStartYear={fyStartYear}
+              quarter={quarter}
+              customer={row.label}
+              initialValue={row.remark}
+            />,
           ])}
           /*
-            The total covers every customer in the current selection, not just
-            the 60 rows drawn. A footer that added up only what is visible would
-            disagree with the tiles above and with the segment table, which is
-            worse than a footer that needs one line of explanation.
+            The total covers every customer, not just the 60 rows drawn. A
+            footer that added up only what is visible would disagree with the
+            tiles above, which is worse than a footer that needs one line of
+            explanation.
           */
           topTotals={byCustomerTotalsRow}
         />
-        {shownCustomers.length > 60 && (
+        {reco.byCustomer.length > 60 && (
           <p className="px-4 py-3 text-[11.5px] text-ink-faint sm:px-5">
             The 60 largest differences are listed; the total above is all{" "}
-            {shownCustomers.length} customers in this selection.
+            {reco.byCustomer.length} customers.
           </p>
         )}
       </div>

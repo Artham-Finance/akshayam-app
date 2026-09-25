@@ -431,6 +431,7 @@ export default async function CollectionsPage({
                 href={withParams("/collections", params, {
                   drill: drill === tile.key ? null : tile.key,
                 })}
+                exportable
                 cumulative={
                   period.cumulative
                     ? { label: period.shortLabel, value: compactINR(tile.value) }

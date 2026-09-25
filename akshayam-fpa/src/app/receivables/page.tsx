@@ -370,6 +370,7 @@ export default async function ReceivablesPage({
                 href={withParams("/receivables", params, {
                   drill: drill === t.key ? null : t.key,
                 })}
+                exportable
               />
             ))}
           </div>
