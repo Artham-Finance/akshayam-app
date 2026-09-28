@@ -1,5 +1,6 @@
 import { query, queryOne } from "@/lib/db";
 import { verticalScope, type Entity } from "@/lib/entity";
+import { buildUnadjustedCreditDetail } from "@/lib/reports/unadjusted-credit";
 
 /**
  * The documents behind a headline figure.
@@ -92,6 +93,7 @@ const TITLES: Record<DrillKind, Record<string, string>> = {
     top10: "Top 10 customers by balance",
     customer: "Outstanding invoices for one customer",
     unattributed: "Open items with no vertical",
+    unadjustedCredit: "Unadjusted credit, by customer",
   },
   revenue: {
     all: "All invoices",
@@ -346,6 +348,37 @@ export async function runDrill(req: DrillRequest): Promise<DrillResult | null> {
       // The list is the top ten by definition - there is no larger set being
       // capped, so the count shown is the count returned.
       total: rows.length,
+    };
+  }
+
+  if (req.kind === "receivables" && req.drill === "unadjustedCredit") {
+    // Cumulative from the ledger, not the AR snapshot - this money sits
+    // against a customer, not an invoice, so it never appears in ar_open_items
+    // at all. The same builder feeds the card's headline and its on-screen
+    // expand table, so the sheet downloaded here can never disagree with
+    // either.
+    const detail = await buildUnadjustedCreditDetail({
+      entity: req.entity,
+      asOf: req.end,
+      verticalId: req.verticalId,
+    });
+
+    return {
+      title,
+      columns: [
+        { header: "Party", type: "text" },
+        { header: "Postings", type: "text" },
+        { header: "Latest", type: "date" },
+        { header: "Unadjusted credit (INR)", type: "money", strong: true },
+      ],
+      rows: detail.parties.map((p) => [
+        p.party,
+        p.postings.length,
+        p.postings[0]?.txnDate ?? null,
+        p.total,
+      ]),
+      total: detail.parties.length,
+      totalsRow: ["Total", null, null, detail.total],
     };
   }
 

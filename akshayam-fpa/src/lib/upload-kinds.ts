@@ -100,6 +100,19 @@ export const UPLOAD_KINDS: Omit<UploadKindInfo, "lastUpload">[] = [
     asOfLabel: "Snapshot date",
   },
   {
+    kind: "reimbursement_expense_txns",
+    title: "Account Transactions — reimbursement expense (for RE / RI reconciliation)",
+    zohoPath: "Reports → Accountant → Account Transactions, filtered to the reimbursement expense account",
+    blurb:
+      "Only the bank-paid (net banking) lines feed the RE / RI Reconciliation view: a bill's own RI " +
+      "number already comes from the item-wise Bills upload and a petty-cash entry's from the General " +
+      "Ledger directly, but a reimbursement paid straight from the bank carries no RI number in either " +
+      "of those - only this report's own Reference Number column has it. A file replaces exactly the " +
+      "dates it covers.",
+    cadence: "Weekly",
+    needsAsOf: false,
+  },
+  {
     kind: "osb_entries",
     title: "OSB Entries — Revenue transfer to RBJV",
     zohoPath: "Not a Zoho report — a hand-maintained list of the invoices transferred",

@@ -16,6 +16,7 @@ import type {
 import type { BudgetParseResult } from "@/lib/parse/budget";
 import type { RetainerParseResult } from "@/lib/parse/retainers";
 import type { ReimbursementBillsParseResult } from "@/lib/parse/reimbursement-bills";
+import type { ReimbursementExpenseParseResult } from "@/lib/parse/reimbursement-expense";
 import type { RevenueTransferParseResult } from "@/lib/parse/revenue-transfer";
 
 /**
@@ -718,6 +719,43 @@ export async function commitReimbursementBills(
     );
 
     return { uploadId, rowsInserted, newAccounts: [], newVerticals, needsReview: [] };
+  });
+}
+
+/* ============================================================
+   Reimbursement expense - bank-paid lines (RE / RI reconciliation)
+   ============================================================ */
+
+export async function commitReimbursementExpense(
+  entityId: number,
+  parsed: ReimbursementExpenseParseResult,
+  meta: FileMeta,
+): Promise<CommitResult> {
+  return transaction(async (client) => {
+    const uploadId = await createUpload(
+      client, entityId, "reimbursement_expense_txns", meta, parsed.periodStart, parsed.periodEnd,
+      parsed.rows.length, { detected: parsed.detected, warnings: parsed.warnings },
+    );
+
+    // Replace the period wholesale, the same rule every other date-keyed
+    // upload follows: a re-export of a range replaces exactly that range.
+    if (parsed.periodStart && parsed.periodEnd) {
+      await client.query(
+        "delete from reimbursement_expense_lines where entity_id = $1 and txn_date between $2 and $3",
+        [entityId, parsed.periodStart, parsed.periodEnd],
+      );
+    }
+
+    const rowsInserted = await bulkInsert(
+      client,
+      "reimbursement_expense_lines",
+      ["entity_id", "upload_id", "txn_date", "description", "reference", "amount", "ri_references"],
+      parsed.rows.map((row) => [
+        entityId, uploadId, row.txnDate, row.description, row.reference, row.amount, row.riReferences,
+      ]),
+    );
+
+    return { uploadId, rowsInserted, newAccounts: [], newVerticals: [], needsReview: [] };
   });
 }
 
