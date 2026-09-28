@@ -19,19 +19,24 @@ import { extractRiRefs, normaliseRiRef } from "@/lib/parse/reimbursement-bills";
  * txn_number starts "RICN") is not a fresh RI raised, so it is left out of
  * the RI side entirely rather than read as a second, contradictory invoice.
  *
- * RE has two sources, not one: most of it is credit-card bill lines (the
- * item-wise Bills upload), but petty cash is reimbursed by posting a journal
+ * RE has three sources, not one. Most of it is credit-card bill lines (the
+ * item-wise Bills upload). Petty cash is reimbursed by posting a journal
  * entry straight to the same expense account, with the RI number typed into
  * *that* entry's own description instead ("PETTY_APRIL-011 stamp paper
  * RI-2627-0028") - confirmed against RBJV's ledger, where 36 of 38 such
- * journal entries carry one. Reading only the Bills upload left every one of
- * those permanently unmatched, which is a real gap, not a card that will
- * eventually clear. The other GL side of this account, ordinary card
- * "expense" postings with no invoice or journal behind them, carries no
- * narrative at all (just the bank account's own name) and so has nothing to
- * extract - those stay unrepresented on the RE side, a genuine hole no text
- * matching can close, until they are booked through the bill or a journal
- * that names the RI.
+ * journal entries carry one; read directly off gl_entries, no upload needed.
+ * The third is a reimbursement paid straight from the bank ("expense" in
+ * Zoho's own Transaction Type) - the General Ledger's description for one of
+ * these is just the bank account's own name, nothing to extract, so it sat
+ * unrepresented until the Account Transactions upload (reimbursement_expense_lines)
+ * started carrying the RI number from that report's own Reference Number
+ * column instead - confirmed against a real posting. This source carries no
+ * vertical of its own, so a vertical-slice login is shown a bank-paid line
+ * only once it is matched, borrowing the vertical the matching RI is itself
+ * tagged with - the only place that information exists. An unmatched
+ * bank-paid line has no RI to borrow a vertical from at all, so it cannot be
+ * placed in any one slice's worklist and is left out of it entirely; it still
+ * appears in the company-wide view.
  *
  * One RE line can name more than one RI ("CDSL- RI-2627-0013, RI-2627-0042"
  * is a real one) and is shown once per reference it matches; an RI matched by
@@ -123,6 +128,16 @@ interface PettyCashRow {
   amount: string;
 }
 
+interface BankPaidRow {
+  entity_id: number;
+  entity_name: string;
+  txn_date: string;
+  description: string | null;
+  reference: string | null;
+  amount: string;
+  ri_references: string[];
+}
+
 /** A reimbursable expense from either source, in the one shape the matching loop reads. */
 interface ReCandidate {
   entity_id: number;
@@ -142,6 +157,7 @@ interface RiRow {
   txn_number: string | null;
   description: string | null;
   amount: string;
+  vertical_id: number | null;
 }
 
 export async function buildReimbursementReco(opts: {
@@ -153,7 +169,7 @@ export async function buildReimbursementReco(opts: {
   const { entity, start, end, fyStartYear } = opts;
   const thisFyCode = currentFyCode(fyStartYear);
 
-  const [reRows, pettyCashRows, riRows] = await Promise.all([
+  const [reRows, pettyCashRows, bankPaidRows, riRows] = await Promise.all([
     query<ReRow>(
       `select r.entity_id, e.name as entity_name, to_char(r.bill_date, 'YYYY-MM-DD') as bill_date,
               r.vendor_name, r.bill_number, r.description, r.customer_name, r.amount, r.ri_references
@@ -181,19 +197,44 @@ export async function buildReimbursementReco(opts: {
         order by g.txn_date`,
       [entity.memberIds, start, end, entity.verticalIds],
     ),
+    // Bank-paid reimbursement, from the Account Transactions upload - see the
+    // module docstring. The source ledger carries no vertical tag of its own,
+    // so this is read for every vertical regardless of who is asking; which
+    // of it a vertical-slice login actually gets shown is decided after
+    // matching, against the vertical the matching RI carries.
+    query<BankPaidRow>(
+      `select r.entity_id, e.name as entity_name, to_char(r.txn_date, 'YYYY-MM-DD') as txn_date,
+              r.description, r.reference, r.amount, r.ri_references
+         from reimbursement_expense_lines r
+         join entities e on e.id = r.entity_id
+        where r.entity_id = any($1::int[]) and r.txn_date between $2 and $3
+        order by r.txn_date`,
+      [entity.memberIds, start, end],
+    ),
+    // Read for every vertical, unfiltered, for the same reason: a bank-paid
+    // line has to be matched against RIs outside its own (non-existent)
+    // vertical scope before that scope can even be known. Every other use of
+    // this pool - matching a bill or petty-cash line, and the RI-only list -
+    // is brought back into scope afterward by inScope() below.
     query<RiRow>(
       `select g.entity_id, e.name as entity_name, to_char(g.txn_date, 'YYYY-MM-DD') as txn_date,
-              g.txn_number, g.description, g.credit as amount
+              g.txn_number, g.description, g.credit as amount, g.vertical_id
          from gl_entries g
          join accounts a on a.id = g.account_id
          join entities e on e.id = g.entity_id
         where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
           and a.group_code = 'reimbursements' and a.name ilike '%income%' and g.txn_type = 'invoice'
-          ${verticalScope("$4", "g.vertical_id")}
         order by g.txn_date`,
-      [entity.memberIds, start, end, entity.verticalIds],
+      [entity.memberIds, start, end],
     ),
   ]);
+
+  // True once a row's vertical is known to be one this login can see -
+  // always true for a company-wide login, since entity.verticalIds is then
+  // null itself.
+  const inScope = (verticalId: number | null): boolean =>
+    entity.verticalIds === null ||
+    (verticalId !== null && entity.verticalIds.includes(verticalId));
 
   const reCandidates: ReCandidate[] = [
     ...reRows.map((r) => ({
@@ -216,6 +257,16 @@ export async function buildReimbursementReco(opts: {
       amount: Number(r.amount),
       ri_references: extractRiRefs(r.description),
     })),
+    ...bankPaidRows.map((r) => ({
+      entity_id: r.entity_id,
+      entity_name: r.entity_name,
+      date: r.txn_date,
+      vendor: "Bank payment",
+      customer: null,
+      description: r.description ?? r.reference,
+      amount: Number(r.amount),
+      ri_references: r.ri_references ?? [],
+    })),
   ];
 
   interface RiEntry {
@@ -225,6 +276,7 @@ export async function buildReimbursementReco(opts: {
     txnNumber: string;
     amount: number;
     customer: string | null;
+    verticalId: number | null;
     matched: boolean;
   }
   const riPool = new Map<string, RiEntry>();
@@ -246,6 +298,7 @@ export async function buildReimbursementReco(opts: {
       txnNumber: raw,
       amount: Number(r.amount),
       customer: r.description,
+      verticalId: r.vertical_id,
       matched: false,
     });
   }
@@ -257,11 +310,15 @@ export async function buildReimbursementReco(opts: {
 
   for (const re of reCandidates) {
     const refs = re.ri_references;
+    const isBankPaid = re.vendor === "Bank payment";
     let anyMatched = false;
 
     for (const ref of refs) {
       const ri = riPool.get(`${re.entity_id}|${normaliseRiRef(ref)}`);
-      if (!ri) continue;
+      // Out of scope for this login is treated the same as no match at all -
+      // this is what keeps a bill mistakenly naming another vertical's RI
+      // from leaking that RI's date and amount into a slice login's view.
+      if (!ri || !inScope(ri.verticalId)) continue;
       ri.matched = true;
       anyMatched = true;
       matched.push({
@@ -280,6 +337,12 @@ export async function buildReimbursementReco(opts: {
     }
 
     if (anyMatched) continue;
+
+    // A bank-paid line that matched nothing in scope has no vertical of its
+    // own to fall back on - unlike a bill or petty-cash line, which is
+    // already known to belong to this slice from its own source record - so
+    // it is left off this login's worklist entirely rather than guessed at.
+    if (isBankPaid && entity.verticalIds !== null) continue;
 
     const row: RecoRow = {
       status: "re_needs_ri",
@@ -308,7 +371,7 @@ export async function buildReimbursementReco(opts: {
   }
 
   const riOnly: RecoRow[] = [...riPool.values()]
-    .filter((r) => !r.matched)
+    .filter((r) => !r.matched && inScope(r.verticalId))
     .map((r) => ({
       status: "ri_only",
       entityName: r.entityName,

@@ -12,6 +12,7 @@ import {
   commitInvoices,
   commitPayments,
   commitReimbursementBills,
+  commitReimbursementExpense,
   commitRetainers,
   commitRevenueTransferEntries,
   commitTrialBalance,
@@ -20,6 +21,7 @@ import {
 import { parseBudgetWorkbook } from "@/lib/parse/budget";
 import { parseGeneralLedger } from "@/lib/parse/gl";
 import { parseReimbursementBills } from "@/lib/parse/reimbursement-bills";
+import { parseReimbursementExpense } from "@/lib/parse/reimbursement-expense";
 import { parseRetainers } from "@/lib/parse/retainers";
 import { parseRevenueTransfer } from "@/lib/parse/revenue-transfer";
 import { parseArAging, parseCreditNotes, parseInvoices, parsePayments } from "@/lib/parse/sales";
@@ -33,7 +35,7 @@ export const maxDuration = 300;
 
 const KINDS = [
   "gl", "opening_tb", "invoices", "payments", "ar_aging", "credit_notes", "retainers",
-  "budget", "tds_26as", "reimbursement_bills", "osb_entries",
+  "budget", "tds_26as", "reimbursement_bills", "reimbursement_expense_txns", "osb_entries",
 ] as const;
 type Kind = (typeof KINDS)[number];
 
@@ -264,6 +266,18 @@ export async function POST(request: Request) {
       case "reimbursement_bills": {
         const parsed = await parseReimbursementBills(bytes);
         result = await commitReimbursementBills(entity.id, parsed, meta);
+        warnings = parsed.warnings;
+        detected = parsed.detected;
+        summary = {
+          period: [parsed.periodStart, parsed.periodEnd],
+          reimbursementLines: parsed.rows.length,
+          untagged: parsed.untaggedCount,
+        };
+        break;
+      }
+      case "reimbursement_expense_txns": {
+        const parsed = await parseReimbursementExpense(bytes);
+        result = await commitReimbursementExpense(entity.id, parsed, meta);
         warnings = parsed.warnings;
         detected = parsed.detected;
         summary = {
