@@ -6,6 +6,7 @@ import { DscTokenCard } from "@/components/DscTokenCard";
 import { TdsRecoSection } from "@/components/TdsRecoSection";
 import { PeriodControls } from "@/components/PeriodControls";
 import { SetupRequired } from "@/components/SetupRequired";
+import { UnadjustedCreditTable } from "@/components/UnadjustedCreditTable";
 import {
   Card,
   CardTitle,
@@ -37,6 +38,7 @@ import {
 } from "@/lib/reports/drilldowns";
 import { buildCustomerStatement, listCustomers } from "@/lib/reports/customer-statement";
 import { buildDscToken } from "@/lib/reports/dsc-token";
+import { buildUnadjustedCreditDetail } from "@/lib/reports/unadjusted-credit";
 import { fyBounds, fyLabel, fyMonths, fyStartYearOf, type QuarterNo } from "@/lib/period";
 import { requireEntityAccess, requireReportAccess } from "@/lib/auth/dal";
 
@@ -145,7 +147,7 @@ export default async function ReceivablesPage({
       scope,
     );
 
-    const [totals, byVertical, topTen, unmatched, byCurrency] = await Promise.all([
+    const [totals, byVertical, topTen, unmatched, unadjustedCredit, byCurrency] = await Promise.all([
       queryOne<Record<string, number>>(
         `select ${bucketSelect},
                 coalesce(sum(balance_base),0)::numeric total, count(*)::int n
@@ -188,6 +190,13 @@ export default async function ReceivablesPage({
              ${verticalScope("$3")}`,
         [entity.memberIds, verticalId, entity.verticalIds],
       ),
+      /**
+       * Money received from customers and parked on the ledger rather than
+       * matched to an invoice - read from the GL (not the AR snapshot, which
+       * has no concept of it), cumulative to the snapshot date. The same
+       * builder also feeds the expand table below when "Show them" is clicked.
+       */
+      buildUnadjustedCreditDetail({ entity, asOf, verticalId }),
       byCurrencyQuery,
     ]);
 
@@ -287,8 +296,10 @@ export default async function ReceivablesPage({
       : null;
 
     // The invoices behind a tile, from the same definition the Excel export uses.
+    // Unadjusted credit gets its own expand-per-party table below instead of
+    // this generic panel, so it is excluded here.
     const drill = typeof params.drill === "string" ? params.drill : null;
-    const chosen = isDrill("receivables", drill)
+    const chosen = isDrill("receivables", drill) && drill !== "unadjustedCredit"
       ? await runDrill({
           kind: "receivables",
           drill,
@@ -520,6 +531,52 @@ export default async function ReceivablesPage({
                 emptyMessage="No open invoices in this bucket."
               />
             </DrillPanel>
+          )}
+
+          {drill === "unadjustedCredit" && (
+            <DrillPanel
+              title="Unadjusted credit, by customer"
+              subtitle={
+                <>
+                  As at {dateLabel(asOf)}
+                  {verticalName ? ` · ${verticalName}` : ""} · largest balance first
+                </>
+              }
+              closeHref={withParams("/receivables", params, { drill: null })}
+              downloadHref={withParams("/api/export", params, {
+                kind: "receivables",
+                drill: "unadjustedCredit",
+                vertical: verticalId,
+              })}
+              shown={unadjustedCredit.parties.length}
+              total={unadjustedCredit.parties.length}
+            >
+              <UnadjustedCreditTable parties={unadjustedCredit.parties} />
+            </DrillPanel>
+          )}
+
+          {unadjustedCredit.total > 0 && (
+            <Notice
+              tone="info"
+              title={`${compactINR(unadjustedCredit.total)} unadjusted credit`}
+              action={
+                <Link
+                  href={withParams("/receivables", params, {
+                    vertical: null,
+                    drill: drill === "unadjustedCredit" ? null : "unadjustedCredit",
+                    customer: null,
+                  })}
+                  scroll={false}
+                  className="whitespace-nowrap rounded-md border border-navy/25 px-2.5 py-1.5 text-[12px] font-medium hover:bg-navy/5"
+                >
+                  {drill === "unadjustedCredit" ? "Close" : "Show them"}
+                </Link>
+              }
+            >
+              These are amounts received from customers that have not been adjusted against any
+              invoice, spread across {unadjustedCredit.parties.length} customer ledger(s). They
+              are not included in the outstanding totals above.
+            </Notice>
           )}
 
           {(unmatched?.n ?? 0) > 0 && (
