@@ -124,6 +124,12 @@ export function VerticalCostApportionmentTable({
         activity plays no part in this card.
         {scale !== "abs" && ` All figures ${scaleLabel[scale].toLowerCase()}.`}
       </p>
+      <p className="px-3 pb-3 text-[11.5px] text-ink-faint">
+        Reimbursement income and expense are left out of every figure here — a client cost
+        recovered from the client is not overhead spend, so it is not counted toward a
+        vertical&rsquo;s direct overheads, nor pooled into Common&rsquo;s or ACC and HRCM&rsquo;s
+        apportioned cost. If these figures look different from an earlier view, this is why.
+      </p>
 
       <div className="overflow-x-auto">
         <table
