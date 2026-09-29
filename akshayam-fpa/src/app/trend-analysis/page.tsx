@@ -1,8 +1,13 @@
 import { CustomerTrendTable } from "@/components/CustomerTrendTable";
+import { NewCustomersTable } from "@/components/NewCustomersTable";
 import { SetupRequired } from "@/components/SetupRequired";
 import { Card, CardTitle, DownloadExcel, Notice, PageHeader } from "@/components/ui";
 import { getEntity } from "@/lib/entity";
-import { buildCustomerRevenueTrend } from "@/lib/reports/customer-trend";
+import { compactINR } from "@/lib/format";
+import {
+  buildCustomerInvoiceDetailBatch,
+  buildCustomerRevenueTrend,
+} from "@/lib/reports/customer-trend";
 import { requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
@@ -13,16 +18,29 @@ const SHOWN_ON_SCREEN = 100;
 /**
  * Trend Analysis.
  *
- * Customer-wise revenue, year on year - the one place in the app that reads
- * the invoice register directly rather than the ledger-derived figure
- * everything else is struck on, because its whole purpose is years the
- * ledger was never uploaded for at all. See customer-trend.ts for why.
+ * Customer-wise revenue, year on year, and which of this year's customers
+ * were not billed in any earlier year on the table. See customer-trend.ts
+ * for how a year picks between the ledger and the raw invoice register.
  */
 export default async function TrendAnalysisPage() {
   await requireEntityAccess();
   try {
     const entity = await getEntity();
     const trend = await buildCustomerRevenueTrend(entity);
+
+    // Every customer whose row could be expanded on screen - the invoices
+    // behind them are fetched once, up front, so the arrow is instant.
+    const expandable = new Set<string>();
+    for (const r of trend.rows.slice(0, SHOWN_ON_SCREEN)) expandable.add(r.customer);
+    for (const r of trend.newCustomers) expandable.add(r.customer);
+    const invoicesByCustomerMap = await buildCustomerInvoiceDetailBatch(
+      entity,
+      [...expandable],
+    );
+    const invoicesByCustomer = Object.fromEntries(invoicesByCustomerMap);
+
+    const currentYear = trend.years.find((y) => y.isCurrent);
+    const currentTotal = currentYear ? (trend.totalByYear[currentYear.fy] ?? 0) : 0;
 
     return (
       <>
@@ -45,12 +63,40 @@ export default async function TrendAnalysisPage() {
 
           <Card padded={false}>
             <div className="flex flex-wrap items-center justify-between gap-3 px-3 pt-3">
-              <CardTitle hint={`${trend.rows.length} customer(s) across ${trend.years.length} year(s)`}>
+              <CardTitle hint={`${trend.rows.length} customer(s) across ${trend.years.length} year(s) · the arrow opens their invoices`}>
                 Revenue by customer, by year
               </CardTitle>
               <DownloadExcel href="/api/export/customer-trend" />
             </div>
-            <CustomerTrendTable trend={trend} limit={SHOWN_ON_SCREEN} />
+            <CustomerTrendTable
+              trend={trend}
+              limit={SHOWN_ON_SCREEN}
+              invoicesByCustomer={invoicesByCustomer}
+            />
+          </Card>
+
+          <Card padded={false}>
+            <div className="px-3 pt-3">
+              <CardTitle
+                hint={
+                  currentYear
+                    ? `${trend.newCustomers.length} customer(s) · ${compactINR(trend.newCustomersTotal)}`
+                    : undefined
+                }
+              >
+                New customers{currentYear ? ` in ${currentYear.label}` : ""}
+              </CardTitle>
+              <p className="mb-1 text-[11.5px] text-ink-muted">
+                Billed for the first time this year - no revenue in any earlier year on the table
+                above. The arrow opens their invoices.
+              </p>
+            </div>
+            <NewCustomersTable
+              customers={trend.newCustomers}
+              total={trend.newCustomersTotal}
+              currentTotal={currentTotal}
+              invoicesByCustomer={invoicesByCustomer}
+            />
           </Card>
         </div>
       </>

@@ -37,11 +37,20 @@ export interface CustomerTrendRow {
   total: number;
 }
 
+export interface NewCustomerRow {
+  customer: string;
+  /** the current year's revenue - the only year this customer has any */
+  amount: number;
+}
+
 export interface CustomerRevenueTrend {
   years: CustomerTrendYear[];
   rows: CustomerTrendRow[];
   totalByYear: Record<number, number>;
   grandTotal: number;
+  /** billed for the first time this year - no revenue in any earlier year on the table */
+  newCustomers: NewCustomerRow[];
+  newCustomersTotal: number;
 }
 
 const EXCLUDED_STATUS = ["void", "rejected", "draft"];
@@ -114,5 +123,116 @@ export async function buildCustomerRevenueTrend(entity: Entity): Promise<Custome
   }
   const grandTotal = sortedRows.reduce((s, r) => s + r.total, 0);
 
-  return { years, rows: sortedRows, totalByYear, grandTotal };
+  // First billed this year: no positive revenue in any earlier year the
+  // table carries. A customer new to a prior year already reads as one
+  // there; this list is only ever struck against the current year.
+  const currentYear = years.find((y) => y.isCurrent);
+  const priorYears = years.filter((y) => !y.isCurrent);
+  const newCustomers: NewCustomerRow[] = currentYear
+    ? sortedRows
+        .filter(
+          (r) =>
+            (r.byYear[currentYear.fy] ?? 0) > 0 &&
+            priorYears.every((y) => !((r.byYear[y.fy] ?? 0) > 0)),
+        )
+        .map((r) => ({ customer: r.customer, amount: r.byYear[currentYear.fy] }))
+        .sort((a, b) => b.amount - a.amount)
+    : [];
+  const newCustomersTotal = newCustomers.reduce((s, r) => s + r.amount, 0);
+
+  return { years, rows: sortedRows, totalByYear, grandTotal, newCustomers, newCustomersTotal };
+}
+
+export interface CustomerInvoiceRow {
+  invoiceNumber: string;
+  invoiceDate: string;
+  fy: number;
+  amount: number;
+  status: string | null;
+  /** which table this row was read from, since the two years use different sources */
+  source: "ledger" | "register";
+}
+
+/**
+ * Every invoice behind the year-on-year rows above, for a batch of
+ * customers at once - one pair of queries rather than one per customer, so
+ * expanding a row on screen is free: the detail is already in hand, not a
+ * fetch away. The same two sources, split by the same rule: a year the
+ * ledger covers reads invoice_lines, one it does not reads the register.
+ * Grouped back to one row per invoice number on the ledger side, since a
+ * single invoice split across verticals would otherwise repeat under the
+ * same number at a different amount, which reads as a mistake rather than
+ * what it is.
+ */
+export async function buildCustomerInvoiceDetailBatch(
+  entity: Entity,
+  customers: string[],
+): Promise<Map<string, CustomerInvoiceRow[]>> {
+  const byCustomer = new Map<string, CustomerInvoiceRow[]>();
+  if (customers.length === 0) return byCustomer;
+
+  const glYears = new Set(await getAvailableFinancialYears(entity.memberIds));
+
+  const [registerRows, ledgerRows] = await Promise.all([
+    query<{
+      customer_name: string; invoice_number: string; invoice_date: string;
+      amount: number; status: string | null;
+    }>(
+      `select customer_name, invoice_number, invoice_date::text,
+              sum(amount_base)::numeric as amount, max(status) as status
+         from invoice_register
+        where entity_id = any($1::int[]) and customer_name = any($2::text[])
+          and not (coalesce(status, '') = any($3))
+          and invoice_number not ilike 'RI-%'
+        group by customer_name, invoice_number, invoice_date
+        order by invoice_date`,
+      [entity.memberIds, customers, EXCLUDED_STATUS],
+    ),
+    query<{
+      customer_name: string; invoice_number: string; invoice_date: string;
+      amount: number; status: string | null;
+    }>(
+      `select customer_name, invoice_number, invoice_date::text,
+              sum(amount_base)::numeric as amount, max(status) as status
+         from invoice_lines
+        where entity_id = any($1::int[]) and customer_name = any($2::text[]) and not is_reimbursement
+        group by customer_name, invoice_number, invoice_date
+        order by invoice_date`,
+      [entity.memberIds, customers],
+    ),
+  ]);
+
+  const fyOf = (isoDate: string): number => {
+    const [y, m] = isoDate.split("-").map(Number);
+    return m >= 4 ? y : y - 1;
+  };
+
+  const add = (
+    r: { customer_name: string; invoice_number: string; invoice_date: string; amount: number; status: string | null },
+    source: "ledger" | "register",
+  ) => {
+    const fy = fyOf(r.invoice_date);
+    if (source === "register" ? glYears.has(fy) : !glYears.has(fy)) return;
+    const amount = Number(r.amount);
+    if (amount === 0) return;
+    const list = byCustomer.get(r.customer_name) ?? [];
+    list.push({
+      invoiceNumber: r.invoice_number,
+      invoiceDate: r.invoice_date,
+      fy,
+      amount,
+      status: r.status,
+      source,
+    });
+    byCustomer.set(r.customer_name, list);
+  };
+
+  for (const r of registerRows) add(r, "register");
+  for (const r of ledgerRows) add(r, "ledger");
+
+  for (const list of byCustomer.values()) {
+    list.sort((a, b) => (a.invoiceDate < b.invoiceDate ? -1 : a.invoiceDate > b.invoiceDate ? 1 : 0));
+  }
+
+  return byCustomer;
 }
