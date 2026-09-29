@@ -155,8 +155,13 @@ export async function buildVerticalCostApportionment(opts: {
          left join verticals v on v.id = g.vertical_id
         where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
           and a.statement = 'pnl'
+          -- Reimbursement income and expense are a pass-through of the
+          -- client's own cost, not overhead spend, so they play no part in
+          -- this card at all - neither swelling a vertical's own "direct
+          -- overheads" nor diluting Common's or ACC and HRCM's pool with
+          -- their own reimbursement activity.
           and a.group_code in ('revenue','direct_cost','establishment_cost','overheads',
-                               'other_income','reimbursements')
+                               'other_income')
         group by v.code, a.group_code, a.name`,
       [entity.memberIds, start, end],
     ),

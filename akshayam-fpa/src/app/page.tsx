@@ -1,4 +1,7 @@
 import Link from "next/link";
+import { Fragment } from "react";
+import { BudgetTrendTable } from "@/components/BudgetTrendTable";
+import { PeriodControls } from "@/components/PeriodControls";
 import { SetupRequired } from "@/components/SetupRequired";
 import { Card, CardTitle, EmptyState, KpiTile, Notice, PageHeader } from "@/components/ui";
 import { queryOne } from "@/lib/db";
@@ -6,6 +9,7 @@ import {
   countUnmappedAccounts,
   getAvailableFinancialYears,
   getEntity,
+  getVerticals,
   verticalScope,
 } from "@/lib/entity";
 import { compactINR, dateLabel, percent, share } from "@/lib/format";
@@ -16,13 +20,19 @@ import {
   ledgerWrittenTo,
 } from "@/lib/reporting-period";
 import { buildBudgetVsActual } from "@/lib/reports/budget";
+import { buildBudgetTrend } from "@/lib/reports/budget-trend";
 import { buildProfitAndLoss } from "@/lib/reports/statements";
 import { requireEntityAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
 
-export default async function OverviewPage() {
+export default async function OverviewPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   await requireEntityAccess();
+  const params = await searchParams;
   try {
     const entity = await getEntity();
     const [availableYears, unmapped, uploadCount] = await Promise.all([
@@ -56,7 +66,15 @@ export default async function OverviewPage() {
     const fy = period.fyStartYear;
     const { start, end } = period;
 
-    const [statement, arSnapshot, topTen, revenueBudget, collectionBudget] =
+    // Narrows the two trend tables only - every other card on this page
+    // stays company-wide, the same as it always has.
+    const verticals = await getVerticals(entity);
+    const requestedVertical = Number(params.vertical);
+    const trendVerticalId = verticals.some((v) => v.id === requestedVertical)
+      ? requestedVertical
+      : null;
+
+    const [statement, arSnapshot, topTen, revenueBudget, collectionBudget, revenueTrend, collectionTrend] =
       await Promise.all([
       availableYears.length
         ? buildProfitAndLoss({
@@ -121,6 +139,20 @@ export default async function OverviewPage() {
         fyStartYear: fy,
         measure: "collection",
         period: { start, end, fraction: period.fraction, monthAligned: period.monthAligned },
+      }),
+      buildBudgetTrend({
+        entity,
+        fyStartYear: fy,
+        measure: "revenue",
+        verticalId: trendVerticalId,
+        asOf: end,
+      }),
+      buildBudgetTrend({
+        entity,
+        fyStartYear: fy,
+        measure: "collection",
+        verticalId: trendVerticalId,
+        asOf: end,
       }),
     ]);
 
@@ -303,32 +335,51 @@ export default async function OverviewPage() {
           )}
 
           {rows.map((row) => (
-            <section key={row.title}>
-              <div className="mb-2 flex items-baseline justify-between gap-3">
-                <h2 className="text-[13px] font-semibold uppercase tracking-[0.1em] text-ink-muted">
-                  {row.title}
-                </h2>
-                <span className="text-[11px] text-ink-faint">{row.hint}</span>
-              </div>
-              <div
-                className={
-                  row.tiles.length === 2
-                    ? "grid grid-cols-1 gap-3 sm:grid-cols-2"
-                    : "grid grid-cols-1 gap-3 sm:grid-cols-3"
-                }
-              >
-                {row.tiles.map((tile) => (
-                  <KpiTile
-                    key={tile.label}
-                    label={tile.label}
-                    value={tile.value ?? "—"}
-                    note={tile.note}
-                    tone={tile.tone ?? "ink"}
-                    href={tile.href}
-                  />
-                ))}
-              </div>
-            </section>
+            <Fragment key={row.title}>
+              <section>
+                <div className="mb-2 flex items-baseline justify-between gap-3">
+                  <h2 className="text-[13px] font-semibold uppercase tracking-[0.1em] text-ink-muted">
+                    {row.title}
+                  </h2>
+                  <span className="text-[11px] text-ink-faint">{row.hint}</span>
+                </div>
+                <div
+                  className={
+                    row.tiles.length === 2
+                      ? "grid grid-cols-1 gap-3 sm:grid-cols-2"
+                      : "grid grid-cols-1 gap-3 sm:grid-cols-3"
+                  }
+                >
+                  {row.tiles.map((tile) => (
+                    <KpiTile
+                      key={tile.label}
+                      label={tile.label}
+                      value={tile.value ?? "—"}
+                      note={tile.note}
+                      tone={tile.tone ?? "ink"}
+                      href={tile.href}
+                    />
+                  ))}
+                </div>
+              </section>
+
+              {(row.title === "Revenue" || row.title === "Collections") && (
+                <Card padded={false}>
+                  <div className="flex flex-wrap items-center justify-between gap-3 px-3 pt-3">
+                    <CardTitle hint="the company as a whole, unless a vertical is picked">
+                      {row.title} — budget vs actual, by quarter
+                    </CardTitle>
+                    <PeriodControls
+                      financialYears={[]}
+                      currentFy={0}
+                      verticals={verticals.map((v) => ({ id: v.id, name: v.name }))}
+                      currentVerticalId={trendVerticalId}
+                    />
+                  </div>
+                  <BudgetTrendTable trend={row.title === "Revenue" ? revenueTrend : collectionTrend} />
+                </Card>
+              )}
+            </Fragment>
           ))}
 
           <Card>

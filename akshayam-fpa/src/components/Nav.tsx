@@ -38,6 +38,7 @@ const GROUPS: { title: string; items: { href: string; label: string }[] }[] = [
     items: [
       { href: "/budget-vs-actual", label: "Budget vs Actual" },
       { href: "/dupont", label: "DuPont Analysis" },
+      { href: "/trend-analysis", label: "Trend Analysis" },
     ],
   },
   {
