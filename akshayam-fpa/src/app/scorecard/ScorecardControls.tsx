@@ -4,6 +4,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
 import clsx from "clsx";
 import { QuarterTabs } from "@/components/QuarterTabs";
+import type { Scale } from "@/lib/format";
 import { withParams, type Params } from "@/lib/href";
 import type { FyMonth, QuarterNo } from "@/lib/period";
 
@@ -23,6 +24,7 @@ export function ScorecardControls({
   params,
   verticalOptions,
   currentVertical,
+  currentScale,
   alwaysShowMonths = false,
 }: {
   financialYears: number[];
@@ -46,6 +48,8 @@ export function ScorecardControls({
   verticalOptions: { code: string; label: string }[];
   /** the vertical currently picked, or null for the whole scorecard */
   currentVertical: string | null;
+  /** the unit every money figure on the page is shown in */
+  currentScale: Scale;
   /** show every reached month, not just the active quarter's */
   alwaysShowMonths?: boolean;
 }) {
@@ -133,6 +137,19 @@ export function ScorecardControls({
           </select>
         </label>
       )}
+      <label className="flex items-center gap-2 text-[12px] text-ink-muted">
+        <span className="sr-only sm:not-sr-only">Figures</span>
+        <select
+          value={currentScale}
+          onChange={(e) => set({ scale: e.target.value })}
+          className={cls}
+        >
+          <option value="abs">in rupees</option>
+          <option value="thousands">in thousands</option>
+          <option value="lakhs">in lakhs</option>
+          <option value="crores">in crores</option>
+        </select>
+      </label>
       <QuarterTabs
         current={currentQuarter}
         currentMonth={currentMonth}

@@ -5,17 +5,18 @@ import { fyMonths, type QuarterNo } from "@/lib/period";
 /**
  * Vertical-wise P&L after cost apportionment, for VPP.
  *
- * A narrower, simpler cousin of `buildApportionment` (which the Vertical
- * Performance Scorecard still uses, unchanged, across all nine verticals and
- * the budget's own multi-basis rules). This one is struck for exactly six
- * verticals, on one rule only - head count - over two pools: actual cost
- * booked under "Common incl partners contribution", and actual cost booked
- * under ACC and HRCM (both their direct team cost and their overheads,
- * combined into one pool). A cost already tagged to one of the six is that
- * vertical's own and is never re-spread; cost under any other vertical
- * (GIFT/AIF, DSC) or left untagged is outside this card's arrangement
- * entirely, not shown and not pooled. ACC's and HRCM's own revenue plays no
- * part here either - only their cost is spread, the same as Common's.
+ * The one apportionment method in the app: the P&L's cost apportionment card
+ * and the Vertical Performance Scorecard both read it, so the two always
+ * agree. It is struck for exactly six verticals, on one rule only - head
+ * count - over two pools: actual cost booked under "Common incl partners
+ * contribution", and actual cost booked under ACC and HRCM (both their direct
+ * team cost and their overheads, combined into one pool). A cost already
+ * tagged to one of the six is that vertical's own and is never re-spread;
+ * cost under any other vertical (GIFT/AIF, DSC) or left untagged is outside
+ * this card's arrangement entirely, not shown here and not pooled (`outside`
+ * hands it back for a caller that rates those verticals itself). ACC's and
+ * HRCM's own revenue plays no part here either - only their cost is spread,
+ * the same as Common's.
  *
  * `wide` alongside carries the same two pools spread on the same head-count
  * rule but over the company's whole head count instead - a comparison, not
@@ -96,6 +97,14 @@ export interface VerticalCostApportionmentResult {
   poolTotal: number;
   /** total cost booked under ACC and HRCM combined, before spreading */
   accHrcmPoolTotal: number;
+  /**
+   * Every vertical outside the six, by ledger code: its own ledger revenue and
+   * its own directly-tagged cost. Not part of this card's figures and never
+   * spread - handed back for a caller that rates those verticals itself (the
+   * scorecard), so it reads them off the same ledger query and the two agree.
+   * Common, ACC and HRCM carry revenue only: their cost is the pool above.
+   */
+  outside: Record<string, { revenue: number; directCost: number }>;
   totalHeads: number;
   /**
    * Comparison only - the same two pools spread on head count across every
@@ -165,9 +174,9 @@ export async function buildVerticalCostApportionment(opts: {
         group by v.code, a.group_code, a.name`,
       [entity.memberIds, start, end],
     ),
-    // Same averaging rule as buildApportionment: each month in the window
-    // takes that month's own head count where one is recorded, the annual
-    // baseline otherwise, and the window's figure is their average.
+    // Each month in the window takes that month's own head count where one
+    // is recorded, the annual baseline otherwise, and the window's figure is
+    // their average.
     query<{ code: string; heads: number }>(
       `select v.code, avg(coalesce(mh.heads, ah.heads))::numeric as heads
          from verticals v
@@ -243,6 +252,7 @@ export async function buildVerticalCostApportionment(opts: {
   const commonPool = new Map<string, number>();
   // account name -> pooled amount, ACC's and HRCM's own cost combined, before spreading.
   const accHrcmPool = new Map<string, number>();
+  const outside: Record<string, { revenue: number; directCost: number }> = {};
 
   const addTo = (map: Map<string, Map<string, number>>, account: string, key: string, amount: number) => {
     const byVertical = map.get(account) ?? new Map<string, number>();
@@ -266,6 +276,15 @@ export async function buildVerticalCostApportionment(opts: {
         if (cost !== 0) addTo(directOverheadByAccount, row.name, receiver.key, cost);
       }
       continue;
+    }
+
+    if (row.code) {
+      const o = outside[row.code] ?? { revenue: 0, directCost: 0 };
+      o.revenue += revenue;
+      // Common's, ACC's and HRCM's cost is a pool, spread above - counting it
+      // as their own as well would charge it twice.
+      if (row.code !== "COMMON" && row.code !== "ACC" && row.code !== "HRCM") o.directCost += cost;
+      outside[row.code] = o;
     }
 
     // Only Common's own booked cost is one pool, and ACC's and HRCM's own
@@ -377,6 +396,7 @@ export async function buildVerticalCostApportionment(opts: {
     accHrcmCostLines,
     poolTotal,
     accHrcmPoolTotal,
+    outside,
     totalHeads,
     wide: {
       totalCompanyHeads,

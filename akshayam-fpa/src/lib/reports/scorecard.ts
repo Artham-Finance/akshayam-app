@@ -1,8 +1,8 @@
 import { query } from "@/lib/db";
 import { getVerticals, listAllEntities, type Entity } from "@/lib/entity";
 import { fyMonths, type QuarterNo } from "@/lib/period";
-import { buildApportionment } from "@/lib/reports/apportionment";
 import { buildBudgetVsActual } from "@/lib/reports/budget";
+import { buildVerticalCostApportionment } from "@/lib/reports/vertical-cost-apportionment";
 import {
   MGMT_APPRAISAL_DEFAULT,
   rateAgeingDays,
@@ -41,22 +41,32 @@ const AGE_BUCKETS = [
 
 /**
  * The scorecard rows, in the order the workbook lists them. `apportKey` is the
- * key `buildApportionment` uses for the vertical's cost (AIF and GIFT share
- * Raja's pool column). `codes` is every ledger code that rolls into the row -
- * "Raja - AIF & GIFT" is one row across both companies, as in the workbook.
+ * column the P&L's cost apportionment card uses for the vertical - the six it
+ * spreads Common's and ACC and HRCM's cost over on head count; the scorecard
+ * reads cost off that same engine so the two always agree. `ownCost` marks a
+ * row outside the six that is charged its own directly-tagged cost and no
+ * share of the pool (Raja). Common, ACC and HRCM carry none: their cost is the
+ * pool. `codes` is every ledger code that rolls into the row - "Raja - AIF &
+ * GIFT" is one row across both companies, as in the workbook.
  */
-export const ROWS: { code: string; label: string; codes: string[]; apportKey: string | null }[] = [
+export const ROWS: {
+  code: string;
+  label: string;
+  codes: string[];
+  apportKey: string | null;
+  ownCost?: boolean;
+}[] = [
   { code: "DLR", label: "Vijay - DLR", codes: ["DLR"], apportKey: "DLR" },
   { code: "CMRGA", label: "Gayathri - CMRGA", codes: ["CMRGA"], apportKey: "CMRGA" },
   { code: "CFC", label: "Rekha - CFC", codes: ["CFC"], apportKey: "CFC" },
   { code: "RRG", label: "Dharshan - RRG", codes: ["RRG"], apportKey: "RRG" },
   { code: "ECM", label: "Vasudharini - ECM", codes: ["ECM"], apportKey: "ECM" },
   { code: "GADD", label: "Ekta - GADD", codes: ["GADD"], apportKey: "GADD" },
-  { code: "ACC", label: "Meenakshi - ACC", codes: ["ACC"], apportKey: "ACC" },
-  { code: "COMMON", label: "Common incl partners contribution", codes: ["COMMON"], apportKey: "COMMON" },
-  { code: "AIF_GIFT", label: "Raja - AIF & GIFT", codes: ["AIF", "GIFT"], apportKey: "GIFT" },
+  { code: "ACC", label: "Meenakshi - ACC", codes: ["ACC"], apportKey: null },
+  { code: "COMMON", label: "Common incl partners contribution", codes: ["COMMON"], apportKey: null },
+  { code: "AIF_GIFT", label: "Raja - AIF & GIFT", codes: ["AIF", "GIFT"], apportKey: null, ownCost: true },
   { code: "JIPO", label: "Jayanth - IPO", codes: ["JIPO"], apportKey: null },
-  { code: "HRCM", label: "Mahalakshmi - HRCM", codes: ["HRCM"], apportKey: "HRCM" },
+  { code: "HRCM", label: "Mahalakshmi - HRCM", codes: ["HRCM"], apportKey: null },
 ];
 
 /**
@@ -215,7 +225,12 @@ export async function buildScorecard(opts: {
     }),
     Promise.all(
       quartersInRange.map((q) =>
-        buildApportionment({ entity, fyStartYear, quarter: q, month: pickedMonth?.key ?? null }),
+        buildVerticalCostApportionment({
+          entity,
+          fyStartYear,
+          quarter: q,
+          month: pickedMonth?.key ?? null,
+        }),
       ),
     ),
     query<{
@@ -256,6 +271,8 @@ export async function buildScorecard(opts: {
     string,
     { revenue: number; cost: number; directCost: number; apportionedCost: number; contribution: number }
   >();
+  // The verticals outside the six, by ledger code, folded the same way.
+  const outside = new Map<string, { revenue: number; directCost: number }>();
   for (const ap of apportionments) {
     for (const v of ap.verticals) {
       const cur =
@@ -263,10 +280,16 @@ export async function buildScorecard(opts: {
         { revenue: 0, cost: 0, directCost: 0, apportionedCost: 0, contribution: 0 };
       cur.revenue += v.revenue;
       cur.cost += v.totalCost;
-      cur.directCost += v.directCost;
-      cur.apportionedCost += v.apportionedTotal;
+      cur.directCost += v.directTeamCost + v.directOverheads;
+      cur.apportionedCost += v.commonApportioned + v.accHrcmApportioned;
       cur.contribution += v.contribution;
       apport.set(v.key, cur);
+    }
+    for (const [code, o] of Object.entries(ap.outside)) {
+      const cur = outside.get(code) ?? { revenue: 0, directCost: 0 };
+      cur.revenue += o.revenue;
+      cur.directCost += o.directCost;
+      outside.set(code, cur);
     }
   }
 
@@ -283,15 +306,32 @@ export async function buildScorecard(opts: {
     const coll = def.codes.reduce((s, c) => s + (collByCode.get(c)?.period.actual ?? 0), 0);
     const collBud = def.codes.reduce((s, c) => s + (collByCode.get(c)?.period.periodBudget ?? 0), 0);
 
-    // Cost = the vertical's direct + apportioned-common cost, from the
-    // apportionment engine. A vertical it does not model (JIPO) carries no
-    // apportioned cost here, so its contribution is revenue less nil.
+    // Cost = the vertical's direct + apportioned cost, from the same engine as
+    // the P&L's cost apportionment card. One of the six reads its row there;
+    // Raja is charged his own directly-tagged cost and no share of the pool;
+    // Common, ACC, HRCM (whose cost is the pool) and JIPO (which the engine
+    // does not model) carry none, so their contribution is revenue less nil.
     const ap = def.apportKey ? apport.get(def.apportKey) : undefined;
-    const directCost = ap?.directCost ?? 0;
+    const own = def.ownCost
+      ? def.codes.reduce(
+          (s, c) => ({
+            revenue: s.revenue + (outside.get(c)?.revenue ?? 0),
+            directCost: s.directCost + (outside.get(c)?.directCost ?? 0),
+          }),
+          { revenue: 0, directCost: 0 },
+        )
+      : undefined;
+    const directCost = ap?.directCost ?? own?.directCost ?? 0;
     const apportionedCost = ap?.apportionedCost ?? 0;
-    const cost = ap?.cost ?? 0;
-    const contributionRevenue = ap?.revenue ?? rev;
-    const revContribution = ap?.contribution ?? rev - cost;
+    const cost = ap?.cost ?? own?.directCost ?? 0;
+    // Ledger revenue, as the cost beneath it is: out-of-books billing is rated
+    // against budget but has no cost line, so contribution leaves it out. A
+    // vertical with no ledger activity at all falls back to the budget figure.
+    const ledgerRevenue = def.codes.some((c) => outside.has(c))
+      ? def.codes.reduce((s, c) => s + (outside.get(c)?.revenue ?? 0), 0)
+      : rev;
+    const contributionRevenue = ap?.revenue ?? ledgerRevenue;
+    const revContribution = ap?.contribution ?? contributionRevenue - cost;
     const collContribution = coll - cost;
 
     // AIF_GIFT sums its two codes' buckets elementwise; everything else is one code.
