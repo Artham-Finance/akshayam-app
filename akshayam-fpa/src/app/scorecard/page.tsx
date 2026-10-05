@@ -4,7 +4,7 @@ import { SetupRequired } from "@/components/SetupRequired";
 import { Card, CardTitle, EmptyState, Notice, PageHeader } from "@/components/ui";
 import { RatingScaleCard } from "@/components/RatingScaleCard";
 import { getAvailableFinancialYears, getEntity } from "@/lib/entity";
-import { compactINR, money, percent } from "@/lib/format";
+import { moneySigned, percent, scaled, scaleLabel, type Scale } from "@/lib/format";
 import { fyBounds, fyLabel, fyMonths, fyStartYearOf, type QuarterNo } from "@/lib/period";
 import { ledgerAsOfLabel, ledgerWrittenTo } from "@/lib/reporting-period";
 import {
@@ -22,6 +22,8 @@ export const dynamic = "force-dynamic";
 
 const BUCKET_LABELS = ["< 30d", "31–60d", "61–90d", "91–180d", "181–365d", "> 1yr"];
 
+const SCALES: Scale[] = ["abs", "thousands", "lakhs", "crores"];
+
 /**
  * Vertical Performance Scorecard — the partners' quarterly TL rating, struck
  * from the app's own GL, collections, cost pool and AR snapshot.
@@ -34,6 +36,18 @@ export default async function ScorecardPage({
   await requireEntityAccess();
   await requireReportAccess("scorecard");
   const params = await searchParams;
+
+  // Every money figure on the page reads in the one unit the partners pick -
+  // lakhs to two places by default, the way the cost apportionment card does.
+  const scale: Scale = SCALES.includes(params.scale as Scale) ? (params.scale as Scale) : "lakhs";
+  const decimals = scale === "abs" || scale === "thousands" ? 0 : 2;
+  const fig = (value: number): string => {
+    const shown = scaled(value, scale);
+    // A figure that rounds to nothing must not print as "-0.00".
+    const rounded = Number(shown.toFixed(decimals));
+    return moneySigned(rounded === 0 ? 0 : shown, decimals);
+  };
+  const unitHint = `figures ${scaleLabel[scale]}`;
 
   try {
     const entity = await getEntity();
@@ -304,6 +318,7 @@ export default async function ScorecardPage({
               params={params}
               verticalOptions={isSlice ? [] : ROWS.map((r) => ({ code: r.code, label: r.label }))}
               currentVertical={pickedCode}
+              currentScale={scale}
               alwaysShowMonths={singleVertical}
             />
           }
@@ -408,13 +423,14 @@ export default async function ScorecardPage({
           {/* ---------- Workings ---------- */}
           <WorkingCard
             title="Revenue — budget vs actual"
+            hint={unitHint}
             accent="border-navy"
             head={[firstColHead, "Period budget", "Actual", "Achievement", "Rating"]}
             rows={rowSource.map(({ label, row }) => ({
               cells: [
                 label,
-                compactINR(row.revenueBudget),
-                compactINR(row.revenueActual),
+                fig(row.revenueBudget),
+                fig(row.revenueActual),
                 row.revenueAchievement === null ? "–" : percent(row.revenueAchievement * 100, 1),
               ],
               rating: row.ratings.revenue,
@@ -424,8 +440,8 @@ export default async function ScorecardPage({
                 ? [
                     [
                       "Vertical total",
-                      compactINR(vertRevBudTot),
-                      compactINR(vertRevActTot),
+                      fig(vertRevBudTot),
+                      fig(vertRevActTot),
                       pctOf(vertRevActTot, vertRevBudTot),
                       "",
                     ],
@@ -441,21 +457,22 @@ export default async function ScorecardPage({
             }
             foot={[
               singleVertical ? "Firm total" : "Total",
-              compactINR(revBudTot),
-              compactINR(revActTot),
+              fig(revBudTot),
+              fig(revActTot),
               revBudTot > 0 ? percent((revActTot / revBudTot) * 100, 1) : "–",
               "",
             ]}
           />
           <WorkingCard
             title="Collection — budget vs actual"
+            hint={unitHint}
             accent="border-navy"
             head={[firstColHead, "Period budget", "Actual", "Achievement", "Rating"]}
             rows={rowSource.map(({ label, row }) => ({
               cells: [
                 label,
-                compactINR(row.collectionBudget),
-                compactINR(row.collectionActual),
+                fig(row.collectionBudget),
+                fig(row.collectionActual),
                 row.collectionAchievement === null ? "–" : percent(row.collectionAchievement * 100, 1),
               ],
               rating: row.ratings.collection,
@@ -465,8 +482,8 @@ export default async function ScorecardPage({
                 ? [
                     [
                       "Vertical total",
-                      compactINR(vertCollBudTot),
-                      compactINR(vertCollActTot),
+                      fig(vertCollBudTot),
+                      fig(vertCollActTot),
                       pctOf(vertCollActTot, vertCollBudTot),
                       "",
                     ],
@@ -482,14 +499,15 @@ export default async function ScorecardPage({
             }
             foot={[
               singleVertical ? "Firm total" : "Total",
-              compactINR(collBudTot),
-              compactINR(collActTot),
+              fig(collBudTot),
+              fig(collActTot),
               collBudTot > 0 ? percent((collActTot / collBudTot) * 100, 1) : "–",
               "",
             ]}
           />
           <WorkingCard
             title="Net revenue contribution"
+            hint={unitHint}
             accent="border-positive"
             head={[
               firstColHead,
@@ -503,10 +521,10 @@ export default async function ScorecardPage({
             rows={rowSource.map(({ label, row }) => ({
               cells: [
                 label,
-                compactINR(row.contributionRevenue),
-                compactINR(row.directCost),
-                compactINR(row.apportionedCost),
-                compactINR(row.revenueContribution),
+                fig(row.contributionRevenue),
+                fig(row.directCost),
+                fig(row.apportionedCost),
+                fig(row.revenueContribution),
                 row.revenueContributionShare === null ? "–" : percent(row.revenueContributionShare * 100, 1),
               ],
               rating: row.ratings.netRevContrib,
@@ -516,10 +534,10 @@ export default async function ScorecardPage({
                 ? [
                     [
                       "Vertical total",
-                      compactINR(vertContribRevTot),
-                      compactINR(vertDirectCostTot),
-                      compactINR(vertApportCostTot),
-                      compactINR(vertRevContribTot),
+                      fig(vertContribRevTot),
+                      fig(vertDirectCostTot),
+                      fig(vertApportCostTot),
+                      fig(vertRevContribTot),
                       pctOf(vertRevContribTot, revContribTot),
                       "",
                     ],
@@ -537,10 +555,10 @@ export default async function ScorecardPage({
             }
             foot={[
               singleVertical ? "Firm total" : "Total",
-              compactINR(contribRevTot),
-              compactINR(directCostTot),
-              compactINR(apportCostTot),
-              compactINR(revContribTot),
+              fig(contribRevTot),
+              fig(directCostTot),
+              fig(apportCostTot),
+              fig(revContribTot),
               percent(100, 0),
               "",
             ]}
@@ -548,18 +566,19 @@ export default async function ScorecardPage({
               osbTotal > 0.5 ? (
                 <>
                   Revenue here is the ledger&rsquo;s. A further{" "}
-                  <span className="num font-medium">{compactINR(osbTotal)}</span> of
+                  <span className="num font-medium">{fig(osbTotal)}</span> of
                   out-of-books billing ({osbRows.map((x) => x.code).join(", ")}) is rated
                   against budget in the Revenue card above but left out here — it carries
                   no cost, so counting it would overstate contribution. That is the whole
                   of the difference between the two firm-total revenue figures{" "}
-                  ({compactINR(revActTot)} vs {compactINR(contribRevTot)}).
+                  ({fig(revActTot)} vs {fig(contribRevTot)}).
                 </>
               ) : undefined
             }
           />
           <WorkingCard
             title="Net collection contribution"
+            hint={unitHint}
             accent="border-positive"
             head={[
               firstColHead,
@@ -573,10 +592,10 @@ export default async function ScorecardPage({
             rows={rowSource.map(({ label, row }) => ({
               cells: [
                 label,
-                compactINR(row.collectionActual),
-                compactINR(row.directCost),
-                compactINR(row.apportionedCost),
-                compactINR(row.collectionContribution),
+                fig(row.collectionActual),
+                fig(row.directCost),
+                fig(row.apportionedCost),
+                fig(row.collectionContribution),
                 row.collectionContributionShare === null ? "–" : percent(row.collectionContributionShare * 100, 1),
               ],
               rating: row.ratings.netCollContrib,
@@ -586,10 +605,10 @@ export default async function ScorecardPage({
                 ? [
                     [
                       "Vertical total",
-                      compactINR(vertCollActTot),
-                      compactINR(vertDirectCostTot),
-                      compactINR(vertApportCostTot),
-                      compactINR(vertCollContribTot),
+                      fig(vertCollActTot),
+                      fig(vertDirectCostTot),
+                      fig(vertApportCostTot),
+                      fig(vertCollContribTot),
                       pctOf(vertCollContribTot, collContribTot),
                       "",
                     ],
@@ -607,23 +626,24 @@ export default async function ScorecardPage({
             }
             foot={[
               singleVertical ? "Firm total" : "Total",
-              compactINR(collActTot),
-              compactINR(directCostTot),
-              compactINR(apportCostTot),
-              compactINR(collContribTot),
+              fig(collActTot),
+              fig(directCostTot),
+              fig(apportCostTot),
+              fig(collContribTot),
               percent(100, 0),
               "",
             ]}
           />
           <WorkingCard
             title={`Receivables ageing${data.arAsOf ? ` — as at ${data.arAsOf}` : ""}`}
+            hint={unitHint}
             accent="border-caution"
             head={[firstColHead, ...BUCKET_LABELS, "Total", "Wtd avg days", "Rating"]}
             rows={ageingRowSource.map(({ label, row }) => ({
               cells: [
                 label,
-                ...row.ageingBuckets.map((b) => (b ? money(b) : "–")),
-                money(row.ageingTotal),
+                ...row.ageingBuckets.map((b) => (b ? fig(b) : "–")),
+                fig(row.ageingTotal),
                 row.ageingDays === null ? "–" : row.ageingDays.toFixed(0),
               ],
               rating: row.ratings.ageing,
@@ -643,8 +663,8 @@ export default async function ScorecardPage({
             }
             foot={[
               singleVertical ? "Firm total" : "Total",
-              ...ageBucketTot.map((b) => (b ? money(b) : "–")),
-              money(ageGrandTot),
+              ...ageBucketTot.map((b) => (b ? fig(b) : "–")),
+              fig(ageGrandTot),
               ageBlendedDays === null ? "–" : ageBlendedDays.toFixed(0),
               "",
             ]}
@@ -659,10 +679,18 @@ export default async function ScorecardPage({
               <li>
                 Budgets are the annual figure × {data.window.months}/12; revenue and collection
                 actuals are the ledger&rsquo;s, net of credit notes. Cost is shown in two parts —
-                the vertical&rsquo;s own directly-tagged cost, and its apportioned share of the
-                common pool — and contribution is struck after both. The revenue on the
+                the vertical&rsquo;s own directly-tagged cost, and its apportioned share of
+                Common&rsquo;s cost and of ACC and HRCM&rsquo;s cost, spread on head count across
+                the six verticals exactly as in the P&amp;L&rsquo;s cost apportionment card, so
+                the two always agree. Raja carries his own directly-tagged cost and no share of
+                the pool. Contribution is struck after both. The revenue on the
                 contribution card is ledger revenue only; any out-of-books billing is rated
                 against budget above but has no cost beneath it, so it is left off here.
+              </li>
+              <li>
+                Reimbursement income and expense are left out of every cost figure here — a
+                client cost recovered from the client is a pass-through, not overhead spend, so
+                it is neither a vertical&rsquo;s own cost nor part of the common pool.
               </li>
               <li>
                 Management appraisal is fixed at {MGMT_APPRAISAL_DEFAULT} for every vertical — it
@@ -703,6 +731,7 @@ function ratePill(v: number | null) {
 
 function WorkingCard({
   title,
+  hint,
   accent,
   head,
   rows,
@@ -711,6 +740,8 @@ function WorkingCard({
   note,
 }: {
   title: string;
+  /** the unit the figures are in, shown beside the title */
+  hint?: string;
   /** border-* colour token for the card's top accent */
   accent: string;
   head: string[];
@@ -724,7 +755,7 @@ function WorkingCard({
   return (
     <Card padded={false} className={clsx("border-t-2", accent)}>
       <div className="p-4 sm:p-5">
-        <CardTitle>{title}</CardTitle>
+        <CardTitle hint={hint}>{title}</CardTitle>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[640px] border-t border-line">
