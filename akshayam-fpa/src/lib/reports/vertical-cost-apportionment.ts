@@ -62,6 +62,13 @@ export interface ApportionedVerticalCost {
   revenue: number;
   directTeamCost: number;
   directOverheads: number;
+  /**
+   * Other income booked to this vertical, as a negative cost: it is credited,
+   * so it reduces the total here as it adds to EBITDA on the P&L. Its own row,
+   * not netted inside direct overheads, so the card reads line for line against
+   * the P&L's Overheads and Other Income.
+   */
+  otherIncome: number;
   commonApportioned: number;
   /** ACC's and HRCM's own direct team cost and overheads, combined into one pool and spread the same way as Common's */
   accHrcmApportioned: number;
@@ -89,6 +96,7 @@ export interface VerticalCostApportionmentResult {
   verticals: ApportionedVerticalCost[];
   directTeamCostLines: CostAccountLine[];
   directOverheadLines: CostAccountLine[];
+  otherIncomeLines: CostAccountLine[];
   /** Common's own cost, by account - spread across the six by head-count share */
   commonCostLines: CostAccountLine[];
   /** ACC's and HRCM's own cost, combined by account - spread across the six by head-count share */
@@ -254,6 +262,7 @@ export async function buildVerticalCostApportionment(opts: {
     revenue: 0,
     directTeamCost: 0,
     directOverheads: 0,
+    otherIncome: 0,
     commonApportioned: 0,
     accHrcmApportioned: 0,
     totalCost: 0,
@@ -268,6 +277,7 @@ export async function buildVerticalCostApportionment(opts: {
   // account name -> vertical key -> amount, for the two direct-cost lines.
   const directTeamByAccount = new Map<string, Map<string, number>>();
   const directOverheadByAccount = new Map<string, Map<string, number>>();
+  const otherIncomeByAccount = new Map<string, Map<string, number>>();
   // account name -> pooled amount, Common's own cost before spreading.
   const commonPool = new Map<string, number>();
   // account name -> pooled amount, ACC's and HRCM's own cost combined, before spreading.
@@ -291,6 +301,9 @@ export async function buildVerticalCostApportionment(opts: {
       if (row.group_code === "direct_cost") {
         v.directTeamCost += cost;
         if (cost !== 0) addTo(directTeamByAccount, row.name, receiver.key, cost);
+      } else if (row.group_code === "other_income") {
+        v.otherIncome += cost;
+        if (cost !== 0) addTo(otherIncomeByAccount, row.name, receiver.key, cost);
       } else {
         v.directOverheads += cost;
         if (cost !== 0) addTo(directOverheadByAccount, row.name, receiver.key, cost);
@@ -387,9 +400,11 @@ export async function buildVerticalCostApportionment(opts: {
   });
 
   for (const v of verticals) {
-    v.totalCost = v.directTeamCost + v.directOverheads + v.commonApportioned + v.accHrcmApportioned;
+    v.totalCost =
+      v.directTeamCost + v.directOverheads + v.otherIncome + v.commonApportioned + v.accHrcmApportioned;
     v.contribution = v.revenue - v.totalCost;
-    v.totalCostWide = v.directTeamCost + v.directOverheads + v.commonApportionedWide + v.accHrcmApportionedWide;
+    v.totalCostWide =
+      v.directTeamCost + v.directOverheads + v.otherIncome + v.commonApportionedWide + v.accHrcmApportionedWide;
     v.contributionWide = v.revenue - v.totalCostWide;
   }
 
@@ -412,6 +427,7 @@ export async function buildVerticalCostApportionment(opts: {
     verticals,
     directTeamCostLines: toLines(directTeamByAccount),
     directOverheadLines: toLines(directOverheadByAccount),
+    otherIncomeLines: toLines(otherIncomeByAccount),
     commonCostLines,
     accHrcmCostLines,
     poolTotal,

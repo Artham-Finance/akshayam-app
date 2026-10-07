@@ -75,7 +75,9 @@ const LAYOUT: {
   // the two accounts nowhere near net to nothing (Reimbursement Income and
   // RI Expense Reimbursement both run into the lakhs), so folding it into
   // Overheads was hiding a real recovery position, not tidying a rounding.
-  { code: "reimbursements", name: "Reimbursable Costs Recovered (net)", sign: 1 },
+  // Shown as a cost, like the lines around it: reimbursement expense less
+  // reimbursement income, in brackets when income is the larger.
+  { code: "reimbursements", name: "Net reimbursable cost (RE − RI)", sign: -1 },
   // Costs paid outside the books (an event, an outing), keyed from the OSB
   // expenses sheet. Nothing is planned for it, so the budget side is nil and
   // the whole figure reads as variance - the point is to show it, not to plan it.
@@ -265,8 +267,10 @@ export async function buildBudgetVsActualPnl(opts: {
     if (!valid.has(row.month_key)) continue;
     const line = byCode.get(row.group_code as BvaCode);
     if (!line) continue;
-    // The budget stores costs as positive magnitudes already.
-    line.budget[row.month_key] += Number(row.amount);
+    // The budget stores costs as positive magnitudes already - except this
+    // group, which it holds as the recovery (income less expense) the line was
+    // once shown as, so it is turned round into the cost it is now shown as.
+    line.budget[row.month_key] += Number(row.amount) * (row.group_code === "reimbursements" ? -1 : 1);
   }
 
   /**
