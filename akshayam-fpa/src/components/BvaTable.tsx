@@ -133,7 +133,7 @@ export function BvaStatement({
           )}
         </div>
       )}
-      <div className="overflow-x-auto">
+      <div className="table-frame">
         <table className="w-full min-w-max border-collapse text-[13px]">
           <caption className="px-4 pb-3 text-left text-[11.5px] text-ink-muted">
             A favourable variance is more revenue, or less cost, than budget.
@@ -458,7 +458,7 @@ export function CommonSize({
     Math.abs(base) < 0.5 ? "—" : percent((value / base) * 100, 1);
 
   return (
-    <div className="overflow-x-auto">
+    <div className="table-frame">
       <table className="w-full min-w-max border-collapse text-[13px]">
         <caption className="px-4 pb-3 text-left text-[11.5px] text-ink-muted">
           Each line as a percentage of the same month&rsquo;s revenue. Months with no revenue

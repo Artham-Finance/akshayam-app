@@ -128,7 +128,7 @@ export function VerticalCostApportionmentWideTable({
         {scale !== "abs" && ` All figures ${scaleLabel[scale].toLowerCase()}.`}
       </p>
 
-      <div className="overflow-x-auto">
+      <div className="table-frame">
         <table className="min-w-max border-collapse text-[13px] w-full">
           <thead>
             <tr>

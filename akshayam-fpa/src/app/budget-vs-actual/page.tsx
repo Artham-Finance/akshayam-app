@@ -2,6 +2,7 @@ import Link from "next/link";
 import { BvaStatement, type StatementDetailLine } from "@/components/BvaTable";
 import { EstablishmentCostTable } from "@/components/EstablishmentCostTable";
 import { ExpenseDetailTable } from "@/components/ExpenseDetailTable";
+import { ReimbursementsTable } from "@/components/ReimbursementsTable";
 import { TeamCostTable } from "@/components/TeamCostTable";
 import { SetupRequired } from "@/components/SetupRequired";
 import {
@@ -486,26 +487,59 @@ export default async function BudgetVsActualPage({
                 periodLabel={periodColumnLabel}
                 ytdLabel={ytdLabel}
               />
-              {Math.abs(
+              {(Math.abs(
                 expenseDetail.statement.period.ledger - expenseDetail.totals.periodActual,
-              ) > 0.5 && (
+              ) > 0.5 ||
+                Math.abs(expenseDetail.statement.ytd.ledger - expenseDetail.totals.ytdActual) >
+                  0.5) && (
                 <div className="px-4 pb-4 sm:px-5">
                   <Notice tone="caution" title="Entries do not agree with the ledger">
                     The ledger posted{" "}
                     <span className="num font-medium">
                       {Math.round(expenseDetail.statement.period.ledger).toLocaleString("en-IN")}
                     </span>{" "}
-                    of other expenses for this period; the entries above come to{" "}
+                    of overheads for this period (
+                    <span className="num font-medium">
+                      {Math.round(expenseDetail.statement.ytd.ledger).toLocaleString("en-IN")}
+                    </span>{" "}
+                    year to date); the entries above come to{" "}
                     <span className="num font-medium">
                       {Math.round(expenseDetail.totals.periodActual).toLocaleString("en-IN")}
+                    </span>{" "}
+                    (
+                    <span className="num font-medium">
+                      {Math.round(expenseDetail.totals.ytdActual).toLocaleString("en-IN")}
                     </span>
-                    . The statement above stays the ledger&rsquo;s — entries here are the
+                    ). The statement above stays the ledger&rsquo;s — entries here are the
                     breakdown, and this is the check that the two have not drifted apart.
                   </Notice>
                 </div>
               )}
             </Card>
           )}
+
+          {/*
+            The statement carries reimbursements as their own line, so they sit
+            here rather than inside the Overheads breakup above - which keeps
+            that breakup equal to the statement's Overheads.
+          */}
+          {!isSlice &&
+            !isAkshayam &&
+            expenseDetail &&
+            (expenseDetail.reimbursements.ytd.expense !== 0 ||
+              expenseDetail.reimbursements.ytd.income !== 0 ||
+              expenseDetail.reimbursements.ytd.budget !== 0) && (
+              <Card padded={false}>
+                <div className="px-4 pt-4 sm:px-5">
+                  <CardTitle hint={periodLabel}>Reimbursements — expense and income</CardTitle>
+                </div>
+                <ReimbursementsTable
+                  data={expenseDetail.reimbursements}
+                  periodLabel={periodColumnLabel}
+                  ytdLabel={ytdLabel}
+                />
+              </Card>
+            )}
 
           {!isSlice && verticals.length > 0 && (
             <Notice tone="info">

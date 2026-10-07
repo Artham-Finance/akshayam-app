@@ -46,7 +46,7 @@ export function TeamCostTable({
   const subhead = "mt-0.5 block text-[10px] font-normal normal-case tracking-normal text-ink-faint";
 
   return (
-    <div className="overflow-x-auto">
+    <div className="table-frame">
       <div className="flex flex-wrap items-center gap-2 px-4 pb-3 sm:px-5">
         {/* A picker with one real vertical to choose from decides nothing -
             "Whole company" and that vertical are the same figures - so it is
@@ -177,7 +177,7 @@ function RoleRow({
   onToggle: () => void;
 }) {
   const cell = "border-b border-line px-3 py-2";
-  const canOpen = line.entries.length > 0;
+  const canOpen = line.ytdEntries.length > 0;
 
   return (
     <>
@@ -206,7 +206,7 @@ function RoleRow({
               {line.label}
               {canOpen && (
                 <span className="ml-2 text-[11px] font-normal text-ink-faint">
-                  {line.entries.length} posting{line.entries.length === 1 ? "" : "s"}
+                  {line.ytdEntries.length} posting{line.ytdEntries.length === 1 ? "" : "s"}
                 </span>
               )}
               {line.hint && (
@@ -283,7 +283,7 @@ function DrillTable({
         </tr>
       </thead>
       <tbody>
-        {line.entries.map((e, i) => (
+        {line.ytdEntries.map((e, i) => (
           <tr key={i} className="text-ink">
             <td className={clsx(cell, "num whitespace-nowrap text-ink-muted")}>
               {dateLabel(e.date)}
@@ -305,10 +305,10 @@ function DrillTable({
       <tfoot>
         <tr className="font-semibold text-ink">
           <td className={clsx(cell, "border-t-line-strong")} colSpan={showVertical ? 4 : 3}>
-            {line.entries.length} posting{line.entries.length === 1 ? "" : "s"}
+            {line.ytdEntries.length} posting{line.ytdEntries.length === 1 ? "" : "s"}
           </td>
           <td className={clsx(cell, "num border-t-line-strong text-right")}>
-            {money(line.periodActual)}
+            {money(line.ytdActual)}
           </td>
         </tr>
       </tfoot>

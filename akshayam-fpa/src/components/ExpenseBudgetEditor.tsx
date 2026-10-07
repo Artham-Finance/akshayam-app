@@ -54,7 +54,7 @@ export function ExpenseBudgetEditor({
   const head = "border-y border-line px-2 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint";
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-line bg-surface">
+    <div className="table-frame rounded-xl border border-line bg-surface">
       <table className="w-full min-w-max border-collapse text-[13px]">
         <thead>
           <tr>

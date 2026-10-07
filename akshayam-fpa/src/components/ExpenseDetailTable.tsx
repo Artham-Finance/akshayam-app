@@ -104,7 +104,7 @@ export function ExpenseDetailTable({
     });
 
   return (
-    <div className="overflow-x-auto">
+    <div className="table-frame">
       {/* One list for the whole table: the same vendors are offered on every line. */}
       <datalist id={vendorListId}>
         {vendors.map((v) => (

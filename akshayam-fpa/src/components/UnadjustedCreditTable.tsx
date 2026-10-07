@@ -37,7 +37,7 @@ export function UnadjustedCreditTable({ parties }: { parties: UnadjustedCreditPa
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="table-frame">
       <div className="flex justify-end gap-2 px-4 pb-1 pt-4 text-[11.5px] sm:px-5">
         <button
           type="button"

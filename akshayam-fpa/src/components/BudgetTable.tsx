@@ -161,7 +161,7 @@ export function BudgetTable({
   );
 
   return (
-    <div className="overflow-x-auto">
+    <div className="table-frame">
       <table className="w-full min-w-max border-collapse text-[13px]">
         <caption className="px-4 pb-3 text-left text-[11.5px] text-ink-muted">
           Period budget is the annual budget × {twin ? cumulativeBasis : periodBasis}

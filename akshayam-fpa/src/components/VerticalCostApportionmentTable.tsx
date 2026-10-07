@@ -131,7 +131,7 @@ export function VerticalCostApportionmentTable({
         apportioned cost. If these figures look different from an earlier view, this is why.
       </p>
 
-      <div className="overflow-x-auto">
+      <div className="table-frame">
         <table
           className={clsx("min-w-max border-collapse text-[13px]", showTotal ? "w-full" : "w-auto")}
         >
