@@ -98,7 +98,7 @@ export interface ExpenseDetailResult {
   /** vendors already used on this entity's entries, plus the ledger's own */
   vendors: string[];
   /**
-   * The statement's "Reimbursable Costs Recovered (net)" line, split into the
+   * The statement's "Net Reimbursable Cost (RE − RI)" line, split into the
    * two sides it is made of. Kept apart from the Overheads breakup above so
    * that breakup agrees with the statement's Overheads line.
    */
@@ -124,7 +124,7 @@ export interface ReimbursementSummary {
 /**
  * The group behind the statement's "Overheads" line. Reimbursements and Other
  * income are deliberately not here: the statement carries each as its own line
- * ("Reimbursable Costs Recovered (net)", "Other Income"), so the breakup stops
+ * ("Net Reimbursable Cost (RE − RI)", "Other Income"), so the breakup stops
  * at the same boundary and its total can be seen to equal the Overheads line.
  */
 const POOL_GROUPS = ["overheads"];

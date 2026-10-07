@@ -3,15 +3,16 @@ import { money, moneySigned, percent } from "@/lib/format";
 import type { ReimbursementSummary } from "@/lib/reports/expense-detail";
 
 /**
- * The two sides of the statement's "Reimbursable Costs Recovered (net)" line,
+ * The two sides of the statement's "Net reimbursable cost (RE − RI)" line,
  * shown apart from the Overheads breakup so that breakup agrees with the
  * statement's Overheads figure.
  *
  * Reimbursement expense is a cost the firm paid and billed on; reimbursement
  * income is the billing. Only their net carries a budget - the planning
  * workbook has one line for it - so the two sides show an actual alone and the
- * net is the row that is compared. Variance is actual less budget, since a
- * recovery above plan is the favourable direction.
+ * net is the row that is compared. It is a cost like the lines around it:
+ * expense less income, in brackets when income is the larger, and variance is
+ * budget less actual, so less cost than planned reads favourable.
  */
 export function ReimbursementsTable({
   data,
@@ -28,8 +29,12 @@ export function ReimbursementsTable({
   const cell = "border-b border-line px-3 py-2";
 
   const { period, ytd } = data;
-  const variance = ytd.net - ytd.budget;
-  const variancePct = ytd.budget ? (variance / Math.abs(ytd.budget)) * 100 : null;
+  // The summary holds the net as a recovery (income less expense); this table
+  // reads it as the cost it is shown as everywhere else.
+  const netCost = { period: -period.net, ytd: -ytd.net };
+  const budgetCost = { period: -period.budget, ytd: -ytd.budget };
+  const variance = budgetCost.ytd - netCost.ytd;
+  const variancePct = budgetCost.ytd ? (variance / Math.abs(budgetCost.ytd)) * 100 : null;
 
   return (
     <div className="table-frame">
@@ -96,22 +101,22 @@ export function ReimbursementsTable({
         <tfoot>
           <tr className="font-semibold text-ink">
             <th scope="row" className="border-t border-line-strong px-3 py-2 text-left">
-              Reimbursable costs recovered (net)
+              Net reimbursable cost (RE − RI)
               <span className="mt-0.5 block text-[11px] font-normal text-ink-faint">
-                Income less expense - the statement&rsquo;s own line
+                Expense less income - the statement&rsquo;s own line
               </span>
             </th>
             <td className="num border-t border-line-strong px-3 py-2 text-right text-ink-muted">
-              {money(period.budget)}
+              {moneySigned(budgetCost.period)}
             </td>
             <td className="num border-t border-line-strong px-3 py-2 text-right">
-              {moneySigned(period.net)}
+              {moneySigned(netCost.period)}
             </td>
             <td className="num border-t border-line-strong px-3 py-2 text-right text-ink-muted">
-              {money(ytd.budget)}
+              {moneySigned(budgetCost.ytd)}
             </td>
             <td className="num border-t border-line-strong px-3 py-2 text-right">
-              {moneySigned(ytd.net)}
+              {moneySigned(netCost.ytd)}
             </td>
             <td
               className={clsx(

@@ -217,6 +217,16 @@ export function VerticalCostApportionmentWideTable({
               showTotal={showTotal}
               show={show}
               showDetail={showDetail}
+              label="Other income"
+              pick={(v) => v.otherIncome}
+              lines={data.otherIncomeLines}
+              credit
+            />
+            <ExpandableRow
+              verticals={data.verticals}
+              showTotal={showTotal}
+              show={show}
+              showDetail={showDetail}
               label="Common cost — apportioned (company-wide heads)"
               pick={(v) => v.commonApportionedWide}
               lines={data.wide.commonCostLines}

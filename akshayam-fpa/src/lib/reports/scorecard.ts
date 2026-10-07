@@ -280,7 +280,7 @@ export async function buildScorecard(opts: {
         { revenue: 0, cost: 0, directCost: 0, apportionedCost: 0, contribution: 0 };
       cur.revenue += v.revenue;
       cur.cost += v.totalCost;
-      cur.directCost += v.directTeamCost + v.directOverheads;
+      cur.directCost += v.directTeamCost + v.directOverheads + v.otherIncome;
       cur.apportionedCost += v.commonApportioned + v.accHrcmApportioned;
       cur.contribution += v.contribution;
       apport.set(v.key, cur);

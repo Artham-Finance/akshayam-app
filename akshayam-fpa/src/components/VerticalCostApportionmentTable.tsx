@@ -128,7 +128,8 @@ export function VerticalCostApportionmentTable({
         Reimbursement income and expense are left out of every figure here — a client cost
         recovered from the client is not overhead spend, so it is not counted toward a
         vertical&rsquo;s direct overheads, nor pooled into Common&rsquo;s or ACC and HRCM&rsquo;s
-        apportioned cost. If these figures look different from an earlier view, this is why.
+        apportioned cost. Other income and OSB expenses are counted, each on the vertical it is
+        booked to. If these figures look different from an earlier view, this is why.
       </p>
 
       <div className="table-frame">
@@ -216,6 +217,16 @@ export function VerticalCostApportionmentTable({
               showTotal={showTotal}
               show={show}
               showDetail={showDetail}
+              label="Other income"
+              pick={(v) => v.otherIncome}
+              lines={data.otherIncomeLines}
+              credit
+            />
+            <ExpandableRow
+              verticals={data.verticals}
+              showTotal={showTotal}
+              show={show}
+              showDetail={showDetail}
               label="Common cost — apportioned"
               pick={(v) => v.commonApportioned}
               lines={data.commonCostLines}
@@ -268,6 +279,7 @@ export function Row({
   tone = "muted",
   rule,
   raw,
+  credit,
 }: {
   verticals: ApportionedVerticalCost[];
   showTotal: boolean;
@@ -276,6 +288,8 @@ export function Row({
   note?: string;
   pick: (v: ApportionedVerticalCost) => number;
   tone?: "muted" | "ink" | "strong" | "result";
+  /** a line that reduces cost: a credit is shown in brackets */
+  credit?: boolean;
   /** a heavier line above, where a section ends */
   rule?: boolean;
   /** a count rather than an amount, so the figure scale must not touch it */
@@ -310,6 +324,7 @@ export function Row({
             className={clsx(
               cell,
               tone === "result" && (value < -0.5 ? "num-negative text-negative" : "text-positive"),
+              credit && value < -0.5 && "num-negative",
             )}
           >
             {value === 0 && tone === "muted" ? "—" : raw ? String(value) : show(value)}
@@ -317,7 +332,13 @@ export function Row({
         );
       })}
       {showTotal && (
-        <td className={clsx(cell, "border-l border-line font-semibold text-ink")}>
+        <td
+          className={clsx(
+            cell,
+            "border-l border-line font-semibold text-ink",
+            credit && total < -0.5 && "num-negative",
+          )}
+        >
           {raw ? String(total) : show(total)}
         </td>
       )}
@@ -334,6 +355,7 @@ export function ExpandableRow({
   label,
   pick,
   lines,
+  credit,
 }: {
   verticals: ApportionedVerticalCost[];
   showTotal: boolean;
@@ -342,10 +364,12 @@ export function ExpandableRow({
   label: string;
   pick: (v: ApportionedVerticalCost) => number;
   lines: CostAccountLine[];
+  /** a line that reduces cost: shown in brackets */
+  credit?: boolean;
 }) {
   return (
     <>
-      <Row verticals={verticals} showTotal={showTotal} show={show} label={label} pick={pick} tone="strong" />
+      <Row verticals={verticals} showTotal={showTotal} show={show} label={label} pick={pick} tone="strong" credit={credit} />
       {showDetail &&
         lines.map((line) => (
           <tr key={line.account} className="hover:bg-surface-sunk/50">
@@ -355,13 +379,24 @@ export function ExpandableRow({
             {verticals.map((v) => {
               const value = line.amountByKey[v.key] ?? 0;
               return (
-                <td key={v.key} className="num border-b border-line px-3 py-2 text-right text-ink-faint">
+                <td
+                  key={v.key}
+                  className={clsx(
+                    "num border-b border-line px-3 py-2 text-right text-ink-faint",
+                    credit && value < -0.5 && "num-negative",
+                  )}
+                >
                   {value === 0 ? "—" : show(value)}
                 </td>
               );
             })}
             {showTotal && (
-              <td className="num border-b border-line border-l border-line px-3 py-2 text-right text-ink-faint">
+              <td
+                className={clsx(
+                  "num border-b border-line border-l border-line px-3 py-2 text-right text-ink-faint",
+                  credit && line.total < -0.5 && "num-negative",
+                )}
+              >
                 {show(line.total)}
               </td>
             )}

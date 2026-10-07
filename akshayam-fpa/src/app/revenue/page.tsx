@@ -20,6 +20,7 @@ import { getEntity, getVerticalsInScope, verticalScope } from "@/lib/entity";
 import { compactINR, dateLabel, money, monthLabel, percent, share } from "@/lib/format";
 import { withParams } from "@/lib/href";
 import { fyBounds, fyLabel, fyMonths } from "@/lib/period";
+import { revenueActualsByMonthParts } from "@/lib/reports/budget-trend";
 import {
   getReportingPeriod,
   ledgerAsOfLabel,
@@ -127,7 +128,7 @@ export default async function RevenuePage({
 
     const args = [entity.memberIds, start, end, verticalId, EXCLUDED_STATUS, entity.verticalIds];
 
-    const [totals, credits, byMonth, cnByMonth, byVertical, cnByVertical, retainerByVertical, byCurrency] =
+    const [totals, credits, byMonth, byVertical, cnByVertical, retainerByVertical, byCurrency] =
       await Promise.all([
         queryOne<{ fee: number; ri: number; n: number }>(
           `select coalesce(sum(case when is_reimbursement then 0 else amount_base end),0)::numeric fee,
@@ -165,16 +166,6 @@ export default async function RevenuePage({
              from invoice_lines
             where entity_id=any($1::int[]) and invoice_date between $2 and $3
               and ($4::int is null or vertical_id=$4) and not (status = any($5))
-              ${verticalScope("$6")}
-            group by 1`,
-          [entity.memberIds, fyRange.start, fyRange.end, verticalId, EXCLUDED_STATUS, entity.verticalIds],
-        ),
-        query<{ m: string; v: number }>(
-          `select to_char(credit_note_date,'YYYY-MM') m, sum(cn_amount_base)::numeric v
-             from credit_notes
-            where entity_id=any($1::int[]) and credit_note_date between $2 and $3
-              and ($4::int is null or vertical_id=$4)
-              and is_primary_row and not (status = any($5))
               ${verticalScope("$6")}
             group by 1`,
           [entity.memberIds, fyRange.start, fyRange.end, verticalId, EXCLUDED_STATUS, entity.verticalIds],
@@ -459,16 +450,103 @@ export default async function RevenuePage({
     const cumRiValue = Number(toDate?.ri ?? ri);
 
     const monthMap = new Map(byMonth.map((r) => [r.m, r]));
-    const cnMap = new Map(cnByMonth.map((r) => [r.m, Number(r.v)]));
-    const peak = Math.max(
-      1,
-      ...months.map((m) => Number(monthMap.get(m.key)?.fee ?? 0) + Number(monthMap.get(m.key)?.ri ?? 0)),
+
+    /**
+     * The month-by-month chart is the Actual figure itself, month by month:
+     * the ledger's Revenue from Operations (net of credit notes, the P&L line),
+     * plus outside-books billing, less the revenue transferred to RBJV where
+     * that applies. The same three sources the Actual tile and the Budget vs
+     * Actual statement read, so the months add up to them and agree with the
+     * P&L's revenue for the month - not a second measurement from the invoices.
+     * Recurring retainership is from its own upload; Professional fee is what
+     * is left, as it is on the tiles. Invoices, credit notes and reimbursement
+     * stay in the reconciliation beneath it as memo columns.
+     */
+    const [revenueParts, retainerByMonth, cnSplitByMonth] = await Promise.all([
+      revenueActualsByMonthParts(
+        entity.memberIds,
+        entity.verticalIds,
+        verticalId,
+        fyRange.start,
+        fyRange.end,
+      ),
+      query<{ m: string; v: number }>(
+        `select to_char(month,'YYYY-MM') m, coalesce(sum(amount_base),0)::numeric v
+           from retainer_revenue
+          where entity_id=any($1::int[]) and month between $2 and $3
+            and ($4::int is null or vertical_id=$4)
+            ${verticalScope("$5")}
+          group by 1`,
+        [entity.memberIds, fyRange.start, fyRange.end, verticalId, entity.verticalIds],
+      ),
+      query<{ m: string; fee: number; ri: number }>(
+        `select to_char(credit_note_date,'YYYY-MM') m,
+                sum(case when is_reimbursement then 0 else cn_amount_base end)::numeric fee,
+                sum(case when is_reimbursement then cn_amount_base else 0 end)::numeric ri
+           from credit_notes
+          where entity_id=any($1::int[]) and credit_note_date between $2 and $3
+            and ($4::int is null or vertical_id=$4)
+            and is_primary_row and not (status = any($5))
+            ${verticalScope("$6")}
+          group by 1`,
+        [entity.memberIds, fyRange.start, fyRange.end, verticalId, EXCLUDED_STATUS, entity.verticalIds],
+      ),
+    ]);
+    const sumByMonth = (rows: { month_key: string; actual: number }[]) => {
+      const out = new Map<string, number>();
+      for (const r of rows) out.set(r.month_key, (out.get(r.month_key) ?? 0) + Number(r.actual));
+      return out;
+    };
+    const glMap = sumByMonth(revenueParts.gl);
+    const osbMap = sumByMonth(revenueParts.osb);
+    const transferMap = sumByMonth(revenueParts.transferred); // negative: a deduction
+    const retainerMap = new Map(retainerByMonth.map((r) => [r.m, Number(r.v)]));
+    const cnSplitMap = new Map(cnSplitByMonth.map((r) => [r.m, r]));
+    const showOsbStep = revenueParts.osb.some((r) => Number(r.actual) !== 0);
+    const showTransferStep = revenueParts.transferred.some((r) => Number(r.actual) !== 0);
+
+    const monthRows = months.map((m) => {
+      const gl = glMap.get(m.key) ?? 0;
+      const osb = osbMap.get(m.key) ?? 0;
+      const transfer = -(transferMap.get(m.key) ?? 0);
+      const actual = gl + osb - transfer;
+      const retainer = retainerMap.get(m.key) ?? 0;
+      const fee = Number(monthMap.get(m.key)?.fee ?? 0);
+      const ri = Number(monthMap.get(m.key)?.ri ?? 0);
+      const cnFee = Number(cnSplitMap.get(m.key)?.fee ?? 0);
+      const cnRi = Number(cnSplitMap.get(m.key)?.ri ?? 0);
+      return {
+        key: m.key,
+        start: m.start,
+        end: m.end,
+        label: monthLabel(m.end),
+        gl,
+        osb,
+        transfer,
+        actual,
+        retainer,
+        professional: actual - retainer,
+        fee,
+        cnFee,
+        reimbursement: ri - cnRi,
+        active: actual !== 0 || fee !== 0 || ri !== 0 || cnFee !== 0 || cnRi !== 0 || transfer !== 0,
+      };
+    });
+    const peak = Math.max(1, ...monthRows.map((r) => r.actual));
+    const reconRows = monthRows.filter((r) => r.active);
+    const reconTotal = reconRows.reduce(
+      (t, r) => ({
+        fee: t.fee + r.fee,
+        cnFee: t.cnFee + r.cnFee,
+        gl: t.gl + r.gl,
+        osb: t.osb + r.osb,
+        transfer: t.transfer + r.transfer,
+        actual: t.actual + r.actual,
+        reimbursement: t.reimbursement + r.reimbursement,
+      }),
+      { fee: 0, cnFee: 0, gl: 0, osb: 0, transfer: 0, actual: 0, reimbursement: 0 },
     );
-    // The full year's figures, not the selected period's - the chart above
-    // stays on the full year, so its own total does too.
-    const yearFee = months.reduce((n, m) => n + Number(monthMap.get(m.key)?.fee ?? 0), 0);
-    const yearRi = months.reduce((n, m) => n + Number(monthMap.get(m.key)?.ri ?? 0), 0);
-    const yearCn = months.reduce((n, m) => n + Number(cnMap.get(m.key) ?? 0), 0);
+    const yearActual = reconTotal.actual;
 
     /**
      * The vertical table, assembled once.
@@ -511,10 +589,15 @@ export default async function RevenuePage({
       ri: verticalRows.reduce((n, r) => n + r.ri, 0),
       cnRi: verticalRows.reduce((n, r) => n + r.cnRi, 0),
     };
+    // Professional fee is what is left of the fee after the retainer, so it goes
+    // below nil when the month's retainership list is more than the fee invoiced
+    // in it - and money() drops a sign, which would show that as a positive.
+    const signedMoney = (n: number) => (n < -0.5 ? `(${money(n)})` : money(n));
+    const negativeProfessional = verticalRows.filter((r) => r.professional !== null && r.professional < -0.5);
     // Shared by the pinned copy above the rows and the plain one below them.
     const verticalTotalsRow = [
       "Total",
-      verticalTotals.professional === null ? "—" : money(verticalTotals.professional),
+      verticalTotals.professional === null ? "—" : signedMoney(verticalTotals.professional),
       verticalTotals.retainer ? money(verticalTotals.retainer) : "—",
       money(verticalTotals.fee),
       verticalTotals.cnFee ? `(${money(verticalTotals.cnFee)})` : "—",
@@ -828,44 +911,39 @@ export default async function RevenuePage({
           </Card>
 
           <Card>
-            <CardTitle hint={`peak month ${compactINR(peak)} · full year · click a month to view it`}>
-              Invoiced by month
+            <CardTitle
+              hint={`peak month ${compactINR(peak)} · full year · ties to Actual above · click a month to view it`}
+            >
+              Revenue by month
             </CardTitle>
             <div className="space-y-1.5">
-              {months.map((m) => {
-                const row = monthMap.get(m.key);
-                const f = Number(row?.fee ?? 0);
-                const r = Number(row?.ri ?? 0);
-                const credit = cnMap.get(m.key) ?? 0;
-                // Clicking a month takes the whole report to that month, the
-                // way the header picker would - the figure on the page is
-                // itself a period.
-                const live = monthKey === m.key;
+              {monthRows.map((r) => {
+                // Bars cannot go below nothing: where the retainership list is
+                // more than the month's revenue the figures still say so, but
+                // the bar is drawn within the revenue there is.
+                const proBar = Math.max(0, r.professional);
+                const retBar = r.actual > 0 ? Math.min(r.retainer, r.actual) : 0;
+                const live = monthKey === r.key;
                 const content = (
                   <>
-                    <span className="w-14 shrink-0 text-[11.5px] text-ink-muted">
-                      {monthLabel(m.end)}
-                    </span>
+                    <span className="w-14 shrink-0 text-[11.5px] text-ink-muted">{r.label}</span>
                     <Bar
                       max={peak}
                       segments={[
-                        { value: f, className: "bg-navy", label: `Fee ${money(f)}` },
-                        { value: r, className: "bg-caution/70", label: `Reimbursement ${money(r)}` },
+                        { value: proBar, className: "bg-navy", label: `Professional fee ${money(r.professional)}` },
+                        { value: retBar, className: "bg-caution/70", label: `Recurring retainership ${money(r.retainer)}` },
                       ]}
                     />
                     <span className="num w-24 shrink-0 text-right text-[12px] text-ink">
-                      {f + r ? money(f + r) : "—"}
-                    </span>
-                    <span className="num w-20 shrink-0 text-right text-[11.5px] text-negative">
-                      {credit ? `(${money(credit)})` : ""}
+                      {r.actual ? (r.actual < 0 ? `(${money(r.actual)})` : money(r.actual)) : "—"}
                     </span>
                   </>
                 );
-                return f + r > 0 ? (
+                return r.actual !== 0 ? (
                   <PeriodLink
-                    key={m.key}
-                    from={m.start}
-                    to={m.end}
+                    key={r.key}
+                    from={r.start}
+                    to={r.end}
                     active={live}
                     activeClassName="bg-surface-sunk/50"
                     className="-mx-1 flex w-full items-center gap-3 rounded-sm px-1 text-left transition-colors hover:bg-surface-sunk/50"
@@ -873,7 +951,7 @@ export default async function RevenuePage({
                     {content}
                   </PeriodLink>
                 ) : (
-                  <div key={m.key} className="flex items-center gap-3">
+                  <div key={r.key} className="flex items-center gap-3">
                     {content}
                   </div>
                 );
@@ -882,32 +960,108 @@ export default async function RevenuePage({
                 <span className="w-14 shrink-0 text-[11.5px] text-ink">Total</span>
                 <span className="flex-1" />
                 <span className="num w-24 shrink-0 text-right text-[12px] text-ink">
-                  {money(yearFee + yearRi)}
-                </span>
-                <span className="num w-20 shrink-0 text-right text-[11.5px] text-negative">
-                  {yearCn ? `(${money(yearCn)})` : ""}
+                  {money(yearActual)}
                 </span>
               </div>
             </div>
             <p className="mt-3 flex flex-wrap items-center gap-4 text-[11px] text-ink-muted">
               <span className="flex items-center gap-1.5">
-                <span className="h-2 w-3 rounded-sm bg-navy" /> Fee
+                <span className="h-2 w-3 rounded-sm bg-navy" /> Professional fee
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="h-2 w-3 rounded-sm bg-caution/70" /> Reimbursement
+                <span className="h-2 w-3 rounded-sm bg-caution/70" /> Recurring retainership fee
               </span>
-              <span className="text-negative">( ) credit notes raised that month</span>
             </p>
             <p className="mt-2 text-[11.5px] text-ink-muted">
-              This total won&rsquo;t match a tile elsewhere on the page, on purpose: it is fee and
-              reimbursement together, before credit notes - the same two colours as the chart -
-              over full calendar months, so it can run ahead of them too. Actual, and the By
-              vertical table&rsquo;s Net column, count fee only, net of credit notes, up to the
-              last completed week ({dateLabel(period.cumulative?.end ?? period.end)}). Of the{" "}
-              {money(yearFee + yearRi)} above, {money(yearFee + yearRi - cumFeeInvoiced - cumRiValue)}{" "}
-              was invoiced after that week closed; the rest, {money(cumFeeInvoiced + cumRiValue)}, is
-              everything invoiced within the year to date, before any credit notes.
+              Each month is the ledger&rsquo;s Revenue from Operations - the P&amp;L line, net of
+              credit notes
+              {showOsbStep ? ", plus billing outside the books" : ""}
+              {showTransferStep ? ", less the revenue transferred to RBJV" : ""} - which is what the
+              Actual tile above is made of, so the months add up to it. The tile stops at the last
+              completed week ({dateLabel(period.cumulative?.end ?? period.end)}); this chart runs the
+              full year. Recurring retainership is from its own upload and Professional fee is the
+              rest.
             </p>
+
+            <div className="mt-5 border-t border-line pt-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-faint">
+                Reconciliation to the invoices
+              </p>
+              <p className="mt-1 text-[11.5px] text-ink-muted">
+                The first two columns are what was invoiced and credited in the month, from the
+                invoice data; the ledger&rsquo;s revenue is what the P&amp;L reports. Reimbursement is
+                not revenue: it is the invoiced recharge less credit notes raised against it, and
+                sits in the P&amp;L&rsquo;s Net Reimbursable Cost line.
+              </p>
+              <div className="table-frame mt-2">
+                <table className="w-full min-w-max border-collapse text-[12.5px]">
+                  <thead>
+                    <tr className="text-[11px] uppercase tracking-[0.08em] text-ink-faint">
+                      <th scope="col" className="px-2 py-1.5 text-left font-medium">Month</th>
+                      <th scope="col" className="px-2 py-1.5 text-right font-medium">Fee invoiced</th>
+                      <th scope="col" className="px-2 py-1.5 text-right font-medium">Credit notes</th>
+                      <th scope="col" className="px-2 py-1.5 text-right font-medium">Revenue per ledger / P&amp;L</th>
+                      {showOsbStep && (
+                        <th scope="col" className="px-2 py-1.5 text-right font-medium">Outside books</th>
+                      )}
+                      {showTransferStep && (
+                        <th scope="col" className="px-2 py-1.5 text-right font-medium">Transferred to RBJV</th>
+                      )}
+                      <th scope="col" className="px-2 py-1.5 text-right font-medium">Revenue in chart / Actual</th>
+                      <th scope="col" className="px-2 py-1.5 text-right font-medium">Reimbursement, net</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reconRows.map((r) => (
+                      <tr key={r.key} className="hover:bg-surface-sunk/40">
+                        <th scope="row" className="border-t border-line px-2 py-1.5 text-left font-normal text-ink">
+                          {r.label}
+                        </th>
+                        <td className="num border-t border-line px-2 py-1.5 text-right text-ink-muted">{money(r.fee)}</td>
+                        <td className="num border-t border-line px-2 py-1.5 text-right text-negative">
+                          {r.cnFee ? `(${money(r.cnFee)})` : "—"}
+                        </td>
+                        <td className="num border-t border-line px-2 py-1.5 text-right text-ink">{money(r.gl)}</td>
+                        {showOsbStep && (
+                          <td className="num border-t border-line px-2 py-1.5 text-right text-ink-muted">
+                            {r.osb ? money(r.osb) : "—"}
+                          </td>
+                        )}
+                        {showTransferStep && (
+                          <td className="num border-t border-line px-2 py-1.5 text-right text-negative">
+                            {r.transfer ? `(${money(r.transfer)})` : "—"}
+                          </td>
+                        )}
+                        <td className="num border-t border-line px-2 py-1.5 text-right font-medium text-ink">{money(r.actual)}</td>
+                        <td className="num border-t border-line px-2 py-1.5 text-right text-ink-muted">{money(r.reimbursement)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="font-semibold text-ink">
+                      <th scope="row" className="border-t border-line-strong px-2 py-1.5 text-left">Total</th>
+                      <td className="num border-t border-line-strong px-2 py-1.5 text-right">{money(reconTotal.fee)}</td>
+                      <td className="num border-t border-line-strong px-2 py-1.5 text-right text-negative">
+                        {reconTotal.cnFee ? `(${money(reconTotal.cnFee)})` : "—"}
+                      </td>
+                      <td className="num border-t border-line-strong px-2 py-1.5 text-right">{money(reconTotal.gl)}</td>
+                      {showOsbStep && (
+                        <td className="num border-t border-line-strong px-2 py-1.5 text-right">
+                          {reconTotal.osb ? money(reconTotal.osb) : "—"}
+                        </td>
+                      )}
+                      {showTransferStep && (
+                        <td className="num border-t border-line-strong px-2 py-1.5 text-right text-negative">
+                          {reconTotal.transfer ? `(${money(reconTotal.transfer)})` : "—"}
+                        </td>
+                      )}
+                      <td className="num border-t border-line-strong px-2 py-1.5 text-right">{money(reconTotal.actual)}</td>
+                      <td className="num border-t border-line-strong px-2 py-1.5 text-right">{money(reconTotal.reimbursement)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
           </Card>
 
           <Card padded={false}>
@@ -946,7 +1100,7 @@ export default async function RevenuePage({
                 ) : (
                   r.label
                 ),
-                r.professional === null ? "—" : money(r.professional),
+                r.professional === null ? "—" : signedMoney(r.professional),
                 r.retainer === null ? "—" : r.retainer ? money(r.retainer) : "—",
                 money(r.fee),
                 r.cnFee ? `(${money(r.cnFee)})` : "—",
@@ -962,6 +1116,15 @@ export default async function RevenuePage({
               Reimbursement is net of credit notes raised against those invoices, the same way
               Net is fee net of the credit notes column beside it.
             </p>
+            {negativeProfessional.length > 0 && (
+              <p className="px-4 pb-4 text-[11.5px] text-caution sm:px-5">
+                Professional fee is the fee invoiced less the recurring retainership fee, and for{" "}
+                {negativeProfessional.map((r) => r.label).join(", ")} the retainership figure
+                (from the Recurring Retainership upload) is more than the fee invoiced in the
+                period, so it comes out below nil. Either a retainer invoice the upload counts has
+                not reached the invoice data for this month, or it was billed in a different month.
+              </p>
+            )}
             {!period.monthAligned && (
               <p className="px-4 pb-4 text-[11.5px] text-ink-muted sm:px-5">
                 The retainer is billed monthly, so a single week has no
