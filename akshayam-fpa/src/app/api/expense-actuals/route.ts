@@ -34,7 +34,21 @@ const Remove = z.object({
   id: z.number().int().positive(),
 });
 
-const Body = z.discriminatedUnion("action", [Create, Remove]);
+/**
+ * Correct a bill already recorded. The month it is reported in stays as filed -
+ * only what was typed changes - so a fixed date or amount never moves a cost
+ * from one month's statement to another's.
+ */
+const Update = z.object({
+  action: z.literal("update"),
+  id: z.number().int().positive(),
+  spentOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  vendor: z.string().max(300).nullable(),
+  amount: z.number().finite(),
+  remark: z.string().max(2000).nullable(),
+});
+
+const Body = z.discriminatedUnion("action", [Create, Remove, Update]);
 
 export async function POST(request: Request) {
   const { denied } = await apiGuard("expenses.record");
@@ -69,8 +83,30 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, deleted: parsed.id });
     }
 
-    const { fy, month, head, label, spentOn, vendor, amount, remark } = parsed;
     const clean = (value: string | null) => (value?.trim() ? value.trim() : null);
+
+    if (parsed.action === "update") {
+      const rows = await query<{ id: number }>(
+        `update expense_entries
+            set spent_on = $3, vendor = $4, amount = $5, remark = $6
+          where id = $1 and entity_id = $2
+          returning id`,
+        [
+          parsed.id,
+          entity.id,
+          parsed.spentOn,
+          clean(parsed.vendor),
+          parsed.amount,
+          clean(parsed.remark),
+        ],
+      );
+      if (rows.length === 0) {
+        return NextResponse.json({ error: "That entry no longer exists." }, { status: 404 });
+      }
+      return NextResponse.json({ ok: true, id: parsed.id });
+    }
+
+    const { fy, month, head, label, spentOn, vendor, amount, remark } = parsed;
 
     const rows = await query<{ id: number }>(
       `insert into expense_entries

@@ -18,6 +18,7 @@ import type { RetainerParseResult } from "@/lib/parse/retainers";
 import type { ReimbursementBillsParseResult } from "@/lib/parse/reimbursement-bills";
 import type { ReimbursementExpenseParseResult } from "@/lib/parse/reimbursement-expense";
 import type { RevenueTransferParseResult } from "@/lib/parse/revenue-transfer";
+import type { OsbExpenseParseResult } from "@/lib/parse/osb-expenses";
 
 /**
  * Committing a parsed file into the database.
@@ -752,6 +753,114 @@ export async function commitReimbursementExpense(
       ["entity_id", "upload_id", "txn_date", "description", "reference", "amount", "ri_references"],
       parsed.rows.map((row) => [
         entityId, uploadId, row.txnDate, row.description, row.reference, row.amount, row.riReferences,
+      ]),
+    );
+
+    return { uploadId, rowsInserted, newAccounts: [], newVerticals: [], needsReview: [] };
+  });
+}
+
+/* ============================================================
+   OSB expenses - costs paid outside the books
+   ============================================================ */
+
+/**
+ * The sheet names a vertical the way people say it - "CFC rekha", "Common" -
+ * not the way the ledger tags it, so the loader's usual tag resolution (which
+ * would mint a new vertical for anything it does not recognise) is the wrong
+ * tool: a new vertical here would silently take a cost out of its real home.
+ * A label is matched to an existing vertical by alias, by a word in it that is
+ * a vertical's code, or by its name; anything else stops the load with the
+ * label named, so it can be fixed in the file.
+ */
+export async function commitOsbExpenses(
+  entityId: number,
+  parsed: OsbExpenseParseResult,
+  meta: FileMeta,
+): Promise<CommitResult> {
+  return transaction(async (client) => {
+    const verticals = await client.query<{ id: number; code: string; name: string }>(
+      "select id, code, name from verticals where entity_id = $1",
+      [entityId],
+    );
+    if (verticals.rows.length === 0) {
+      throw new Error(
+        "This view has no verticals of its own to charge the cost to. Switch to the company the " +
+          "cost belongs to (RBJV & Associates) and upload it there.",
+      );
+    }
+    const aliases = await client.query<{ raw_code: string; vertical_id: number }>(
+      "select raw_code, vertical_id from vertical_aliases where entity_id = $1",
+      [entityId],
+    );
+
+    const resolve = (label: string): number | null => {
+      const exactAlias = aliases.rows.find((a) => a.raw_code.toLowerCase() === label.toLowerCase());
+      if (exactAlias) return exactAlias.vertical_id;
+      const words = label.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+      for (const word of words) {
+        const hit = verticals.rows.find((v) => v.code.toUpperCase() === word);
+        if (hit) return hit.id;
+      }
+      const wanted = normaliseTag(label);
+      const byName = verticals.rows.find((v) => normaliseTag(v.name) === wanted);
+      return byName ? byName.id : null;
+    };
+
+    const labels = [...new Set(parsed.rows.map((r) => r.verticalLabel))];
+    const ids = new Map(labels.map((l) => [l, resolve(l)]));
+    const unmatched = labels.filter((l) => ids.get(l) === null);
+    if (unmatched.length > 0) {
+      throw new Error(
+        `No vertical matches ${unmatched.map((l) => `"${l}"`).join(", ")}. Use a vertical's code ` +
+          `(${verticals.rows.map((v) => v.code).join(", ")}) in the first column.`,
+      );
+    }
+
+    // A header with no year ("September") belongs to the financial year the
+    // ledger is currently in.
+    const entity = await client.query<{ fy_start_month: number }>(
+      "select fy_start_month from entities where id = $1",
+      [entityId],
+    );
+    const fyStartMonth = Number(entity.rows[0]?.fy_start_month ?? 4);
+    const latest = await client.query<{ d: string | null }>(
+      "select max(txn_date)::text as d from gl_entries where entity_id = $1",
+      [entityId],
+    );
+    const ref = latest.rows[0]?.d ? new Date(latest.rows[0].d) : new Date();
+    const refYear = ref.getUTCFullYear();
+    const refMonth = ref.getUTCMonth() + 1;
+    const fyStartYear = refMonth >= fyStartMonth ? refYear : refYear - 1;
+    const monthStart = (month: number, year: number | null) => {
+      const y = year ?? (month >= fyStartMonth ? fyStartYear : fyStartYear + 1);
+      return `${y}-${String(month).padStart(2, "0")}-01`;
+    };
+
+    const dated = parsed.rows.map((r) => ({ ...r, monthStart: monthStart(r.month, r.year) }));
+    const months = [...new Set(dated.map((r) => r.monthStart))].sort();
+
+    const uploadId = await createUpload(
+      client, entityId, "osb_expenses", meta, months[0] ?? null, months[months.length - 1] ?? null,
+      dated.length, { detected: parsed.detected, warnings: parsed.warnings },
+    );
+
+    // A re-upload of the same event for the same months replaces it; another
+    // event in the same month is left alone.
+    const particulars = [...new Set(dated.map((r) => r.particulars))];
+    await client.query(
+      `delete from osb_expense_entries
+        where entity_id = $1 and month = any($2::date[])
+          and lower(trim(particulars)) = any($3::text[])`,
+      [entityId, months, particulars.map((p) => p.trim().toLowerCase())],
+    );
+
+    const rowsInserted = await bulkInsert(
+      client,
+      "osb_expense_entries",
+      ["entity_id", "upload_id", "vertical_id", "month", "particulars", "amount"],
+      dated.map((r) => [
+        entityId, uploadId, ids.get(r.verticalLabel), r.monthStart, r.particulars, r.amount,
       ]),
     );
 

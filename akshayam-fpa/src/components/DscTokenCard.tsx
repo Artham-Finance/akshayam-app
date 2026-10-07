@@ -70,7 +70,7 @@ export function DscTokenCard({
   );
 
   return (
-    <div className="overflow-x-auto">
+    <div className="table-frame">
       <div className="flex flex-wrap items-center gap-2 px-4 pb-3 sm:px-5">
         <label className="text-[11px] font-medium uppercase tracking-[0.08em] text-ink-faint">
           Month

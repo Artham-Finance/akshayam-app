@@ -1,6 +1,6 @@
 import { query } from "@/lib/db";
 import { getVerticalsInScope, type Entity } from "@/lib/entity";
-import { fyBounds, type FyMonth } from "@/lib/period";
+import { fyBounds, fyMonths, type FyMonth } from "@/lib/period";
 
 /**
  * Team cost, broken out by role, with a vertical picker.
@@ -98,23 +98,27 @@ const FALLBACK_ROLE: TeamRole = "external_consultant";
  * that has no block at all) carry a nil budget. Figures are whole rupees; VPP
  * was rounded from the workbook's paise-level values.
  *
- * The RBJV columns come to 2,57,91,406 - the figure budget_pnl holds for RBJV's
- * direct_cost for FY 2026-27. GIFT (Akshayam) adds 25,81,931 on top - Professional
- * fee 8,31,600 + Salaries and Stipend 9,27,240 + VPP 8,23,091, "4 - Akshayam
- * Monthly"'s own figures - which is also what budget_pnl holds for Akshayam, so
- * the Group ties to 2,83,73,337. AIF is deliberately nil - the workbook carries a
+ * The RBJV columns come to 2,47,11,831 (V8) - the figure budget_pnl holds for
+ * RBJV's direct_cost for FY 2026-27: the vertical sheets' professional fees
+ * 1,46,13,716 (a team lead, trainees and, for DLR and HRCM, a consultant) plus
+ * VPP 76,98,115 plus Common's consultancy charges 24,00,000. V8 carries no
+ * salary budget in RBJV's team cost, so Employee / trainee salaries read nil
+ * where the ledger posts them. GIFT (Akshayam) adds 28,81,931 on top -
+ * Professional fee 8,31,600 + Salaries and Stipend 9,27,240 + VPP 11,23,091,
+ * "4 - Akshayam Monthly"'s own figures (V8) - which is also what budget_pnl
+ * holds for Akshayam, so the Group ties to 2,75,93,762. AIF is deliberately nil - the workbook carries a
  * zero column for it.
  */
 export const TEAM_COST_ANNUAL_BUDGET: Record<
   string,
   Partial<Record<BudgetKey, number>>
 > = {
-  ECM: { team_lead: 812556, vpp: 272204, trainee: 223440 },
-  GADD: { team_lead: 378000, vpp: 538944, trainee: 411720 },
-  CMRGA: { team_lead: 768600, vpp: 1976355, trainee: 283920 },
+  ECM: { team_lead: 812556, vpp: 392204, trainee: 223440 },
+  GADD: { team_lead: 378000, vpp: 798944, trainee: 411720 },
+  CMRGA: { team_lead: 768600, vpp: 316780, trainee: 283920 },
   DLR: { team_lead: 504000, external_consultant: 5000000, vpp: 2343616, trainee: 614880 },
   RRG: { team_lead: 466200, vpp: 1007665, trainee: 372000 },
-  CFC: { team_lead: 831600, vpp: 1518906, trainee: 525720 },
+  CFC: { team_lead: 831600, vpp: 1718906, trainee: 525720 },
   AIF: {},
   // DSC and support - Vaithy is the team lead; no budget agreed, so nil.
   DSC: {},
@@ -129,9 +133,61 @@ export const TEAM_COST_ANNUAL_BUDGET: Record<
   // Akshayam Corporate Advisors, from "4 - Akshayam Monthly" directly (V7):
   // Raja Krishnan as team lead, the "Professional fee" row (8,31,600);
   // Abhinaya, Gowtham, Riya and Ankith together on the "Salaries and Stipend"
-  // row (9,27,240); "VPP" row 8,23,091; no external consultant. Totals
-  // 25,81,931 - the figure budget_pnl holds for Akshayam's direct_cost.
-  GIFT: { team_lead: 831600, employee: 927240, vpp: 823091 },
+  // row (9,27,240); "VPP" row 11,23,091 (V8); no external consultant. Totals
+  // 28,81,931 - the figure budget_pnl holds for Akshayam's direct_cost.
+  GIFT: { team_lead: 831600, employee: 927240, vpp: 1123091 },
+};
+
+/**
+ * Month-by-month budget for the rows whose own schedule is known, April to
+ * March. Where a vertical has one, that row's budget is the sum of its own
+ * months rather than its annual figure spread on the statement's curve - the
+ * statement's Team cost curve is lumpy because VPP is paid quarterly, and
+ * spreading it over a flat monthly cost (a salary, a team lead's fee) would
+ * show a month's fixed pay swinging with the incentive calendar.
+ *
+ * GIFT, from "4 - Akshayam Monthly" (V8): the team lead and salaries are the
+ * same every month; VPP lands in June, September, December and March. Together
+ * they come to exactly what budget_pnl holds for Akshayam's direct_cost in
+ * each month, so the rows still add up to the statement's Team cost line.
+ */
+const flat = (monthly: number) => Array<number>(12).fill(monthly);
+// VPP is paid in June, September, December and March: each vertical's amount for
+// the four, from its own sheet in V8 (an even quarter, but for Common's March).
+const QUARTER_END_MONTHS = [2, 5, 8, 11];
+const quarterly = (amounts: number[]) => {
+  const months = Array<number>(12).fill(0);
+  QUARTER_END_MONTHS.forEach((m, i) => (months[m] = amounts[i]));
+  return months;
+};
+const VPP_QUARTERS: Record<string, number[]> = {
+  COMMON: [17500, 17500, 17500, 67500],
+  ECM: [98051, 98051, 98051, 98051],
+  GADD: [199736, 199736, 199736, 199736],
+  CMRGA: [79195, 79195, 79195, 79195],
+  DLR: [585904, 585904, 585904, 585904],
+  RRG: [251916, 251916, 251916, 251916],
+  CFC: [429727, 429727, 429727, 429727],
+  ACC: [200000, 200000, 200000, 200000],
+  HRCM: [50000, 50000, 50000, 50000],
+};
+// RBJV: every fixed row (a team lead's or trainee's fee, a consultant) is the
+// same each month, and only VPP moves with the quarter.
+const rbjvMonthly = (code: string): Partial<Record<BudgetKey, number[]>> => {
+  const annual = TEAM_COST_ANNUAL_BUDGET[code] ?? {};
+  const out: Partial<Record<BudgetKey, number[]>> = {};
+  for (const [key, amount] of Object.entries(annual) as [BudgetKey, number][]) {
+    out[key] = key === "vpp" && VPP_QUARTERS[code] ? quarterly(VPP_QUARTERS[code]) : flat(amount / 12);
+  }
+  return out;
+};
+const TEAM_COST_MONTHLY_BUDGET: Record<string, Partial<Record<BudgetKey, number[]>>> = {
+  ...Object.fromEntries(Object.keys(VPP_QUARTERS).map((code) => [code, rbjvMonthly(code)])),
+  GIFT: {
+    team_lead: flat(69300),
+    employee: flat(77270),
+    vpp: [0, 0, 275597.6406, 0, 0, 282497.6406, 0, 0, 282497.6406, 0, 0, 282497.6406],
+  },
 };
 
 /** One ledger posting behind a line's actual - what a drill-down shows. */
@@ -311,6 +367,8 @@ export async function buildTeamCost(opts: {
   const { start: fyStart, end: fyEnd } = fyBounds(fyStartYear, entity.fy_start_month);
   const periodKeys = new Set(periodMonths.map((m) => m.key));
   const ytdKeys = new Set(ytdMonths.map((m) => m.key));
+  // April to March, so a month's position matches the schedules above.
+  const monthKeys = fyMonths(fyStartYear).map((m) => m.key);
 
   // Actuals from the ledger: every direct_cost posting for the whole year,
   // kept as its own row so a line can be drilled into and bucketed by month
@@ -397,10 +455,28 @@ export async function buildTeamCost(opts: {
 
   const verticalScopes: TeamCostScope[] = shown.map((v) => {
     const table = TEAM_COST_ANNUAL_BUDGET[v.code] ?? {};
+    const monthly = TEAM_COST_MONTHLY_BUDGET[v.code] ?? {};
     const roles: TeamCostRoleLine[] = TEAM_ROLES.map(({ key, label, hint, budgetKeys }) => {
-      const annualBudget = budgetKeys.reduce((s, bk) => s + (table[bk] ?? 0), 0);
-      const periodBudget = prorateP(annualBudget);
-      const ytdBudget = prorateY(annualBudget);
+      // Each workbook row is spread on its own schedule where one is known,
+      // otherwise on the statement's curve.
+      let annualBudget = 0;
+      let periodBudget = 0;
+      let ytdBudget = 0;
+      for (const bk of budgetKeys) {
+        const schedule = monthly[bk];
+        if (schedule) {
+          const sumOver = (keys: Set<string>) =>
+            schedule.reduce((s, amount, i) => s + (keys.has(monthKeys[i]) ? amount : 0), 0);
+          annualBudget += schedule.reduce((s, n) => s + n, 0);
+          periodBudget += sumOver(periodKeys);
+          ytdBudget += sumOver(ytdKeys);
+        } else {
+          const annual = table[bk] ?? 0;
+          annualBudget += annual;
+          periodBudget += prorateP(annual);
+          ytdBudget += prorateY(annual);
+        }
+      }
       const periodActual = periodActualBy.get(`${v.id}|${key}`) ?? 0;
       const ytdActual = ytdActualBy.get(`${v.id}|${key}`) ?? 0;
       const ytdVariance = ytdBudget - ytdActual;

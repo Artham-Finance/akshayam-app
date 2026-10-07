@@ -98,7 +98,7 @@ export function VerticalMapper({ verticals }: { verticals: VerticalRow[] }) {
             Every reporting tag in the ledger maps to one of your verticals.
           </p>
         ) : (
-          <div className="overflow-x-auto rounded-card border border-line bg-surface">
+          <div className="table-frame rounded-card border border-line bg-surface">
             <table className="w-full min-w-max border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -204,7 +204,7 @@ export function VerticalMapper({ verticals }: { verticals: VerticalRow[] }) {
         <h2 className="mb-2 text-[13px] font-semibold uppercase tracking-[0.1em] text-ink-muted">
           Your verticals ({canonical.length})
         </h2>
-        <div className="overflow-x-auto rounded-card border border-line bg-surface">
+        <div className="table-frame rounded-card border border-line bg-surface">
           <table className="w-full min-w-max border-collapse text-[13px]">
             <thead>
               <tr>

@@ -145,7 +145,7 @@ export async function buildVerticalCostApportionment(opts: {
   const start = months[0].start;
   const end = months[months.length - 1].end;
 
-  const [rows, headcounts, verticalRows, companyEntityRows, companyHeadcounts] = await Promise.all([
+  const [glRows, osbExpenseRows, headcounts, verticalRows, companyEntityRows, companyHeadcounts] = await Promise.all([
     query<{
       code: string | null;
       group_code: string | null;
@@ -172,6 +172,25 @@ export async function buildVerticalCostApportionment(opts: {
           and a.group_code in ('revenue','direct_cost','establishment_cost','overheads',
                                'other_income')
         group by v.code, a.group_code, a.name`,
+      [entity.memberIds, start, end],
+    ),
+    // Costs paid outside the books (the OSB expenses sheet) have no ledger row,
+    // so they come from their own table - but they are real overhead of the
+    // vertical the sheet names, and a vertical's own line or Common's pool
+    // that left them out would not agree with the P&L they sit beside.
+    query<{
+      code: string | null;
+      group_code: string | null;
+      name: string;
+      revenue: number;
+      cost: number;
+    }>(
+      `select v.code, 'osb_expenses' as group_code, 'OSB Expenses' as name,
+              0::numeric as revenue, sum(o.amount)::numeric as cost
+         from osb_expense_entries o
+         left join verticals v on v.id = o.vertical_id
+        where o.entity_id = any($1::int[]) and o.month between $2 and $3
+        group by v.code`,
       [entity.memberIds, start, end],
     ),
     // Each month in the window takes that month's own head count where one
@@ -221,6 +240,7 @@ export async function buildVerticalCostApportionment(opts: {
     ),
   ]);
 
+  const rows = [...glRows, ...osbExpenseRows];
   const round2 = (n: number) => Math.round(n * 100) / 100;
   const headsByCode = new Map(headcounts.map((h) => [h.code, Number(h.heads)]));
   const idByCode = new Map(verticalRows.map((v) => [v.code, v.id]));

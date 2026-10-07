@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { FrozenHeaders } from "@/components/FrozenHeaders";
 import { Nav } from "@/components/Nav";
 import { getCurrentUser } from "@/lib/auth/dal";
 import { fyBounds } from "@/lib/period";
@@ -95,6 +96,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-6 sm:px-6 sm:py-8">
           {children}
         </main>
+        <FrozenHeaders />
         <footer className="no-print border-t border-line px-4 py-4 text-[11px] text-ink-faint sm:px-6">
           <div className="mx-auto max-w-[1400px]">
             Figures are in Indian rupees unless stated otherwise. Prepared from the

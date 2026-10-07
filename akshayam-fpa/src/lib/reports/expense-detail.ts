@@ -97,10 +97,37 @@ export interface ExpenseDetailResult {
   };
   /** vendors already used on this entity's entries, plus the ledger's own */
   vendors: string[];
+  /**
+   * The statement's "Reimbursable Costs Recovered (net)" line, split into the
+   * two sides it is made of. Kept apart from the Overheads breakup above so
+   * that breakup agrees with the statement's Overheads line.
+   */
+  reimbursements: ReimbursementSummary;
 }
 
-/** The groups that together make up the statement's "Other expenses" line. */
-const POOL_GROUPS = ["overheads", "other_income", "reimbursements"];
+export interface ReimbursementWindow {
+  /** reimbursement expense, a cost, shown positive */
+  expense: number;
+  /** reimbursement income, shown positive */
+  income: number;
+  /** income less expense - what the statement shows as recovered, net */
+  net: number;
+  /** the budgeted net recovery */
+  budget: number;
+}
+
+export interface ReimbursementSummary {
+  period: ReimbursementWindow;
+  ytd: ReimbursementWindow;
+}
+
+/**
+ * The group behind the statement's "Overheads" line. Reimbursements and Other
+ * income are deliberately not here: the statement carries each as its own line
+ * ("Reimbursable Costs Recovered (net)", "Other Income"), so the breakup stops
+ * at the same boundary and its total can be seen to equal the Overheads line.
+ */
+const POOL_GROUPS = ["overheads"];
 
 export async function buildExpenseDetail(opts: {
   entity: Entity;
@@ -118,7 +145,7 @@ export async function buildExpenseDetail(opts: {
   // same figures twice, and it keeps the two windows reading the same rows.
   const { start: fyStart, end: fyEnd } = fyBounds(fyStartYear, entity.fy_start_month);
 
-  const [budgetRows, entryRows, ledgerRows, statementRows, vendorRows, reimbRows] = await Promise.all([
+  const [budgetRows, entryRows, ledgerRows, statementRows, vendorRows, reimbRows, reimbBudgetRows] = await Promise.all([
     query<{ head: string; label: string; month_key: string; sort_order: number; amount: number }>(
       `select head, label, to_char(month, 'YYYY-MM') as month_key, sort_order, amount
          from expense_budget_lines
@@ -212,6 +239,14 @@ export async function buildExpenseDetail(opts: {
         group by 1`,
       [entity.memberIds, fyStart, fyEnd, entity.consolidates],
     ),
+    // The budgeted net recovery - the statement's own budget for that line.
+    query<{ month_key: string; amount: number }>(
+      `select to_char(month, 'YYYY-MM') as month_key, sum(amount) as amount
+         from budget_pnl
+        where entity_id = $1 and fy_start_year = $2 and group_code = 'reimbursements'
+        group by 1`,
+      [entity.id, fyStartYear],
+    ),
   ]);
 
   const bucketSum = (rows: { month_key: string; amount: number }[], keys: Set<string>) =>
@@ -290,12 +325,12 @@ export async function buildExpenseDetail(opts: {
    * budget re-upload (which wipes and rebuilds every row above from the sheet).
    * None has a budget:
    *
-   *  - Misc (Others): bad debts, other income and anything with no budget head.
+   *  - Misc (Others): bad debts and anything with no budget head.
    *    Keyed by hand like any bill, at the foot of the Other Expenses breakdown.
-   *  - RE less RI: reimbursement expenses and, under them, reimbursement income
-   *    as a deduction. These two come straight from the ledger, month by month —
-   *    the reimbursements group is a clean pair of accounts, so unlike the
-   *    budget heads there is nothing to mis-match. Read-only.
+   *
+   * Reimbursement expense and income are not here: they are their own line on
+   * the statement, so they are returned apart (`reimbursements`) rather than
+   * folded into this breakup.
    */
   const actualOnly = (
     head: string,
@@ -328,7 +363,7 @@ export async function buildExpenseDetail(opts: {
   const lastOther = lines.map((l) => l.head).lastIndexOf("Other Expenses");
   const misc = actualOnly("Other Expenses", "Misc (Others)", {
     isHeadOnly: lastOther < 0,
-    hint: "Bad debts, other income and anything with no budget line",
+    hint: "Bad debts and anything with no budget line",
     sortOrder: lastOther >= 0 ? lines[lastOther].sortOrder + 1 : 9_000,
   });
   if (lastOther >= 0) lines.splice(lastOther + 1, 0, misc);
@@ -337,7 +372,7 @@ export async function buildExpenseDetail(opts: {
   /**
    * Named lines the sheet never carries, placed at the foot of the head they
    * belong to. Each shows only when its head is on the statement, and - like
-   * Misc above - survives a budget re-upload. None has a budget: the two
+   * Misc above - survives a budget re-upload. None has a budget: the
    * "Others (not budgeted)" lines are a catch-all for unplanned spend, and the
    * two memberships are named but budgeted as nil (the whole dues budget sits
    * on ICSI membership).
@@ -345,6 +380,7 @@ export async function buildExpenseDetail(opts: {
   const TRAILING: { head: string; label: string }[] = [
     { head: "Computer - subscription", label: "Others (not budgeted)" },
     { head: "Computer maintenance charges", label: "Others (not budgeted)" },
+    { head: "Staff Welfare", label: "Others (not budgeted)" },
     { head: "Dues and subscription", label: "IBBI membership" },
     { head: "Dues and subscription", label: "Other" },
   ];
@@ -358,57 +394,17 @@ export async function buildExpenseDetail(opts: {
     );
   }
 
-  const fromLedger = (
-    label: string,
-    periodActual: number,
-    ytdActual: number,
-    opts: { isDeduction?: boolean; sortOrder: number },
-  ): ExpenseDetailLine => {
-    const signedYtd = opts.isDeduction ? -ytdActual : ytdActual;
-    return {
-      head: "RE less RI",
-      label,
-      isHeadOnly: false,
-      isActualOnly: true,
-      isLedger: true,
-      isDeduction: opts.isDeduction,
-      sortOrder: opts.sortOrder,
-      periodBudget: 0,
-      periodActual,
-      ytdBudget: 0,
-      ytdActual,
-      ytdVariance: -signedYtd,
-      ytdVariancePct: null,
-      entries: [],
-    };
+  const reimbWindow = (keys: Set<string>): ReimbursementWindow => {
+    const expense = bucketSum(
+      reimbRows.map((r) => ({ month_key: r.month_key, amount: Number(r.expense) })),
+      keys,
+    );
+    const income = bucketSum(
+      reimbRows.map((r) => ({ month_key: r.month_key, amount: Number(r.income) })),
+      keys,
+    );
+    return { expense, income, net: income - expense, budget: bucketSum(reimbBudgetRows, keys) };
   };
-
-  lines.push(
-    fromLedger(
-      "Reimbursement expenses",
-      bucketSum(
-        reimbRows.map((r) => ({ month_key: r.month_key, amount: Number(r.expense) })),
-        periodKeys,
-      ),
-      bucketSum(
-        reimbRows.map((r) => ({ month_key: r.month_key, amount: Number(r.expense) })),
-        ytdKeys,
-      ),
-      { sortOrder: 9_998 },
-    ),
-    fromLedger(
-      "Less - Reimbursement income",
-      bucketSum(
-        reimbRows.map((r) => ({ month_key: r.month_key, amount: Number(r.income) })),
-        periodKeys,
-      ),
-      bucketSum(
-        reimbRows.map((r) => ({ month_key: r.month_key, amount: Number(r.income) })),
-        ytdKeys,
-      ),
-      { isDeduction: true, sortOrder: 9_999 },
-    ),
-  );
 
   const signedPeriodActual = (l: ExpenseDetailLine) => (l.isDeduction ? -l.periodActual : l.periodActual);
   const signedYtdActual = (l: ExpenseDetailLine) => (l.isDeduction ? -l.ytdActual : l.ytdActual);
@@ -442,5 +438,9 @@ export async function buildExpenseDetail(opts: {
       },
     },
     vendors: vendorRows.map((v) => v.vendor),
+    reimbursements: {
+      period: reimbWindow(periodKeys),
+      ytd: reimbWindow(ytdKeys),
+    },
   };
 }

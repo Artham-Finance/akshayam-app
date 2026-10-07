@@ -132,7 +132,7 @@ export function AccountMapper({
           Every account with activity is mapped. The statements include all of the ledger.
         </p>
       ) : (
-        <div className="overflow-x-auto rounded-card border border-line bg-surface">
+        <div className="table-frame rounded-card border border-line bg-surface">
           <table className="w-full min-w-max border-collapse text-[13px]">
             <thead>
               <tr>

@@ -103,6 +103,40 @@ body {
   z-index: 2;
 }
 
+/* Frozen table headers.
+   A table sits in a box that scrolls sideways, and a box like that cannot also
+   hold a heading to the top of the page with position: sticky - the heading
+   would bind to the box, which never scrolls up and down. So the headings are
+   moved by FrozenHeaders (a small scroll handler) to rest just under the nav
+   bar until the card's last row has passed; this only dresses them.
+   Layered, so a heading that sets its own background (a tinted total column)
+   keeps it; every other heading gets an opaque one, or rows would show
+   through it. The border is a shadow because a collapsed table's borders do
+   not travel with a moved cell. A table nested in a row (an expanded
+   drill-down) is left alone. */
+@layer components {
+  .table-frame {
+    overflow-x: auto;
+  }
+  .table-frame table thead th {
+    position: relative;
+    z-index: 3;
+    background-color: var(--color-surface);
+    box-shadow: inset 0 -1px 0 var(--color-line-strong);
+  }
+  .table-frame table table thead th {
+    position: static;
+    z-index: auto;
+    box-shadow: none;
+  }
+}
+
+/* The corner heading is frozen both ways; it must sit above the frozen label
+   column beneath it, which would otherwise paint over it while scrolling. */
+.table-frame thead .sticky-label {
+  z-index: 4;
+}
+
 /* Give the scroll container a soft edge so users can see there is more to the right. */
 .scroll-fade {
   -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 24px), transparent 100%);
@@ -110,6 +144,9 @@ body {
 }
 
 @media print {
+  .table-frame table thead th {
+    transform: none !important;
+  }
   .no-print {
     display: none !important;
   }

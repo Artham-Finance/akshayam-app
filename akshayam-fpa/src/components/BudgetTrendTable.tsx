@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import clsx from "clsx";
 import { money, percent } from "@/lib/format";
 import type { BudgetTrend, TrendCells, TrendMonthRow } from "@/lib/reports/budget-trend";
@@ -71,8 +71,8 @@ export function BudgetTrendTable({ trend }: { trend: BudgetTrend }) {
   ) => {
     const isOpen = open.has(key);
     return (
-      <>
-        <tr key={key} className="hover:bg-surface-sunk/50">
+      <Fragment key={key}>
+        <tr className="hover:bg-surface-sunk/50">
           <th scope="row" className="border-b border-line px-3 py-2 text-left font-semibold text-ink">
             <button
               type="button"
@@ -99,12 +99,12 @@ export function BudgetTrendTable({ trend }: { trend: BudgetTrend }) {
           {cellsFor(cells, "strong")}
         </tr>
         {isOpen && months.map((m) => monthRow(m))}
-      </>
+      </Fragment>
     );
   };
 
   return (
-    <div className="overflow-x-auto">
+    <div className="table-frame">
       <div className="flex justify-end gap-2 px-3 pb-2 pt-3 text-[11.5px]">
         <button
           type="button"

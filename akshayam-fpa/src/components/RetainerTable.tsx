@@ -27,7 +27,7 @@ export function RetainerTable({
   const months = data.activeMonths;
 
   return (
-    <div className="overflow-x-auto scroll-fade">
+    <div className="table-frame scroll-fade">
       <table className="w-full min-w-max border-collapse text-[13px]">
         <caption className="px-3 pb-3 text-left text-[11.5px] text-ink-muted">
           {data.rows.length} customer{data.rows.length === 1 ? "" : "s"} on a retainer, largest

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { BvaStatement, type StatementDetailLine } from "@/components/BvaTable";
 import { EstablishmentCostTable } from "@/components/EstablishmentCostTable";
 import { ExpenseDetailTable } from "@/components/ExpenseDetailTable";
+import { ReimbursementsTable } from "@/components/ReimbursementsTable";
 import { TeamCostTable } from "@/components/TeamCostTable";
 import { SetupRequired } from "@/components/SetupRequired";
 import {
@@ -115,14 +116,20 @@ export default async function BudgetVsActualPage({
       isCustomRange && lastTouchedMonth ? lastTouchedMonth.label : period.shortLabel;
 
     /**
-     * Year to date, always - shown beside whatever the picker's own period is,
-     * so every breakdown on this tab never loses the full-year story. Stops
+     * Year to date - shown beside whatever the picker's own period is, so
+     * every breakdown on this tab keeps the full-year story. Stops
      * at the last *completed* month rather than however far the ledger
      * happens to reach mid-month: a GL posted through 15 September has not
      * finished September, so August is still the year to date.
      */
     const ytdCutoff = writtenTo ?? period.end;
-    const ytdMonths = months.filter((m) => m.end <= ytdCutoff);
+    // A period that ends before the ledger does (say 1 Apr - 31 Aug, with
+    // September already posted) takes the year to date to its own end: the
+    // YTD columns must not run past the period they sit beside. The month the
+    // period ends in is kept whole, since the budget side snaps to months.
+    const ytdMonths = months.filter(
+      (m) => m.end <= ytdCutoff && (period.end >= ytdCutoff || m.start <= period.end),
+    );
     const ytdThrough = ytdMonths[ytdMonths.length - 1]?.end ?? null;
     const ytdLabel = ytdThrough ? `to ${dateLabel(ytdThrough)}` : "1 Apr onward";
 
@@ -211,14 +218,13 @@ export default async function BudgetVsActualPage({
             // The workbook only budgets Accounting support and Other Expenses
             // by name; the ledger carries several more real accounts that
             // fold into the same Overheads statement line (Dues and
-            // Subscriptions chief among them, plus other_income - see
-            // GROUP_TO_LINE in budget-pnl.ts) and would otherwise never
+            // Subscriptions chief among them) and would otherwise never
             // appear in the breakdown at all. Flat Maintanance is left out -
             // it is already read into Establishment cost's own line.
             // Reimbursements is not swept here - it has its own statement
             // line now, not folded into Overheads.
             catchAll: {
-              groupCodes: ["overheads", "other_income"],
+              groupCodes: ["overheads"],
               exclude: ["Flat Maintanance"],
             },
           })
@@ -486,26 +492,59 @@ export default async function BudgetVsActualPage({
                 periodLabel={periodColumnLabel}
                 ytdLabel={ytdLabel}
               />
-              {Math.abs(
+              {(Math.abs(
                 expenseDetail.statement.period.ledger - expenseDetail.totals.periodActual,
-              ) > 0.5 && (
+              ) > 0.5 ||
+                Math.abs(expenseDetail.statement.ytd.ledger - expenseDetail.totals.ytdActual) >
+                  0.5) && (
                 <div className="px-4 pb-4 sm:px-5">
                   <Notice tone="caution" title="Entries do not agree with the ledger">
                     The ledger posted{" "}
                     <span className="num font-medium">
                       {Math.round(expenseDetail.statement.period.ledger).toLocaleString("en-IN")}
                     </span>{" "}
-                    of other expenses for this period; the entries above come to{" "}
+                    of overheads for this period (
+                    <span className="num font-medium">
+                      {Math.round(expenseDetail.statement.ytd.ledger).toLocaleString("en-IN")}
+                    </span>{" "}
+                    year to date); the entries above come to{" "}
                     <span className="num font-medium">
                       {Math.round(expenseDetail.totals.periodActual).toLocaleString("en-IN")}
+                    </span>{" "}
+                    (
+                    <span className="num font-medium">
+                      {Math.round(expenseDetail.totals.ytdActual).toLocaleString("en-IN")}
                     </span>
-                    . The statement above stays the ledger&rsquo;s — entries here are the
+                    ). The statement above stays the ledger&rsquo;s — entries here are the
                     breakdown, and this is the check that the two have not drifted apart.
                   </Notice>
                 </div>
               )}
             </Card>
           )}
+
+          {/*
+            The statement carries reimbursements as their own line, so they sit
+            here rather than inside the Overheads breakup above - which keeps
+            that breakup equal to the statement's Overheads.
+          */}
+          {!isSlice &&
+            !isAkshayam &&
+            expenseDetail &&
+            (expenseDetail.reimbursements.ytd.expense !== 0 ||
+              expenseDetail.reimbursements.ytd.income !== 0 ||
+              expenseDetail.reimbursements.ytd.budget !== 0) && (
+              <Card padded={false}>
+                <div className="px-4 pt-4 sm:px-5">
+                  <CardTitle hint={periodLabel}>Reimbursements — expense and income</CardTitle>
+                </div>
+                <ReimbursementsTable
+                  data={expenseDetail.reimbursements}
+                  periodLabel={periodColumnLabel}
+                  ytdLabel={ytdLabel}
+                />
+              </Card>
+            )}
 
           {!isSlice && verticals.length > 0 && (
             <Notice tone="info">

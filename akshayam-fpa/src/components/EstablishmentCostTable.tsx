@@ -39,7 +39,7 @@ export function EstablishmentCostTable({
   const { totals } = result;
 
   return (
-    <div className="overflow-x-auto">
+    <div className="table-frame">
       <table className="w-full min-w-max border-collapse text-[13px]">
         <caption className="px-4 pb-3 text-left text-[11.5px] text-ink-muted">
           {caption ?? (
@@ -144,7 +144,7 @@ function EstablishmentRow({
   onToggle: () => void;
 }) {
   const cell = "border-b border-line px-3 py-2";
-  const canOpen = line.entries.length > 0;
+  const canOpen = line.ytdEntries.length > 0;
 
   return (
     <>
@@ -173,7 +173,7 @@ function EstablishmentRow({
               {line.label}
               {canOpen && (
                 <span className="ml-2 text-[11px] font-normal text-ink-faint">
-                  {line.entries.length} posting{line.entries.length === 1 ? "" : "s"}
+                  {line.ytdEntries.length} posting{line.ytdEntries.length === 1 ? "" : "s"}
                 </span>
               )}
             </span>
@@ -246,7 +246,7 @@ function DrillTable({ line }: { line: EstablishmentLine }) {
         </tr>
       </thead>
       <tbody>
-        {line.entries.map((e, i) => (
+        {line.ytdEntries.map((e, i) => (
           <tr key={i} className="text-ink">
             <td className={clsx(cell, "num whitespace-nowrap text-ink-muted")}>
               {dateLabel(e.date)}
@@ -260,10 +260,10 @@ function DrillTable({ line }: { line: EstablishmentLine }) {
       <tfoot>
         <tr className="font-semibold text-ink">
           <td className={clsx(cell, "border-t-line-strong")} colSpan={3}>
-            {line.entries.length} posting{line.entries.length === 1 ? "" : "s"}
+            {line.ytdEntries.length} posting{line.ytdEntries.length === 1 ? "" : "s"}
           </td>
           <td className={clsx(cell, "num border-t-line-strong text-right")}>
-            {money(line.periodActual)}
+            {money(line.ytdActual)}
           </td>
         </tr>
       </tfoot>

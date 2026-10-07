@@ -131,7 +131,7 @@ export function UsersAdmin({
         />
       )}
 
-      <div className="overflow-x-auto rounded-lg border border-line">
+      <div className="table-frame rounded-lg border border-line">
         <table className="w-full min-w-[720px] border-collapse text-[13px]">
           <thead>
             <tr className="border-b border-line bg-surface-sunk text-left text-[11px] uppercase tracking-wider text-ink-faint">

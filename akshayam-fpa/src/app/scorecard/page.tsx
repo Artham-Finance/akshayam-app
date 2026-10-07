@@ -364,7 +364,7 @@ export default async function ScorecardPage({
             <div className="p-4 sm:p-5">
               <CardTitle hint="each metric 0–4 · composite 0–4">Ratings summary</CardTitle>
             </div>
-            <div className="overflow-x-auto">
+            <div className="table-frame">
               <table className="w-full min-w-[720px] border-t border-line">
                 <thead>
                   <tr className="border-b border-line bg-surface-sunk/40">
@@ -757,7 +757,7 @@ function WorkingCard({
       <div className="p-4 sm:p-5">
         <CardTitle hint={hint}>{title}</CardTitle>
       </div>
-      <div className="overflow-x-auto">
+      <div className="table-frame">
         <table className="w-full min-w-[640px] border-t border-line">
           <thead>
             <tr className="border-b border-line bg-surface-sunk/40">

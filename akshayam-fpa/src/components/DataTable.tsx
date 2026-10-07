@@ -90,7 +90,7 @@ export function DataTable({
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="table-frame">
       <table className="w-full min-w-max border-collapse text-[13px]">
         <thead>
           <tr>

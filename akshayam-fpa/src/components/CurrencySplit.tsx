@@ -57,7 +57,7 @@ export function CurrencySplit({
     .map((r) => r.currency);
 
   return (
-    <div className="overflow-x-auto">
+    <div className="table-frame">
       <table className="w-full min-w-max border-collapse text-[13px]">
         <caption className="px-3 pb-3 text-left text-[11.5px] text-ink-muted">
           Amounts are shown in the currency they were denominated in and in

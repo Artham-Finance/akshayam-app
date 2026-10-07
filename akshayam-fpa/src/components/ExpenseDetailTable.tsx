@@ -104,7 +104,7 @@ export function ExpenseDetailTable({
     });
 
   return (
-    <div className="overflow-x-auto">
+    <div className="table-frame">
       {/* One list for the whole table: the same vendors are offered on every line. */}
       <datalist id={vendorListId}>
         {vendors.map((v) => (
@@ -570,7 +570,9 @@ function EntryPanel({
                 entry={entry}
                 editable={month !== null}
                 busy={busy}
+                vendorListId={vendorListId}
                 onDelete={() => post({ action: "delete", id: entry.id })}
+                onSave={(changes) => post({ action: "update", id: entry.id, ...changes })}
               />
             ))}
           </tbody>
@@ -640,15 +642,126 @@ function EntryRow({
   entry,
   editable,
   busy,
+  vendorListId,
   onDelete,
+  onSave,
 }: {
   entry: ExpenseEntry;
   editable: boolean;
   busy: boolean;
+  vendorListId: string;
   onDelete: () => void;
+  /** resolves true once saved, so the row can close its editor */
+  onSave: (changes: {
+    spentOn: string;
+    vendor: string | null;
+    amount: number;
+    remark: string | null;
+  }) => Promise<boolean>;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [spentOn, setSpentOn] = useState(entry.spentOn);
+  const [vendor, setVendor] = useState(entry.vendor ?? "");
+  const [amount, setAmount] = useState(String(entry.amount));
+  const [remark, setRemark] = useState(entry.remark ?? "");
+  const [problem, setProblem] = useState<string | null>(null);
   const cell = "border-t border-line px-2 py-1.5";
+  const field =
+    "w-full rounded-md border border-line bg-surface px-2 py-1 text-[12px] text-ink placeholder:text-ink-faint";
+
+  const startEditing = () => {
+    // Start from what is saved, not from an abandoned half-edit.
+    setSpentOn(entry.spentOn);
+    setVendor(entry.vendor ?? "");
+    setAmount(String(entry.amount));
+    setRemark(entry.remark ?? "");
+    setProblem(null);
+    setEditing(true);
+  };
+
+  const save = async () => {
+    const raw = amount.trim().replace(/[,\s₹]/g, "");
+    if (raw === "" || !Number.isFinite(Number(raw))) {
+      setProblem("Enter an amount.");
+      return;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(spentOn)) {
+      setProblem("Enter the date it was spent.");
+      return;
+    }
+    const saved = await onSave({
+      spentOn,
+      vendor: vendor.trim() || null,
+      amount: Number(raw),
+      remark: remark.trim() || null,
+    });
+    if (saved) setEditing(false);
+    else setProblem("Could not save.");
+  };
+
+  if (editing) {
+    return (
+      <tr className="bg-surface text-ink">
+        <td className={cell}>
+          <input
+            type="date"
+            value={spentOn}
+            onChange={(e) => setSpentOn(e.target.value)}
+            className={clsx(field, "w-36")}
+            aria-label="Date"
+          />
+        </td>
+        <td className={cell}>
+          <input
+            value={vendor}
+            onChange={(e) => setVendor(e.target.value)}
+            list={vendorListId}
+            placeholder="Who it was paid to"
+            className={field}
+            aria-label="Vendor"
+          />
+        </td>
+        <td className={cell}>
+          <input
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            inputMode="decimal"
+            className={clsx(field, "num w-28 text-right")}
+            aria-label="Amount"
+          />
+        </td>
+        <td className={cell}>
+          <input
+            value={remark}
+            onChange={(e) => setRemark(e.target.value)}
+            placeholder="Remarks"
+            className={field}
+            aria-label="Remarks"
+          />
+          {problem && <span className="mt-1 block text-[11px] text-negative">{problem}</span>}
+        </td>
+        <td className={clsx(cell, "whitespace-nowrap text-right")}>
+          <button
+            type="button"
+            onClick={save}
+            disabled={busy}
+            className="rounded-md bg-navy px-2 py-0.5 text-[11px] font-medium text-ink-invert hover:bg-navy-deep disabled:opacity-60"
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>{" "}
+          <button
+            type="button"
+            onClick={() => setEditing(false)}
+            disabled={busy}
+            className="text-[11px] text-ink-faint hover:text-ink"
+          >
+            cancel
+          </button>
+        </td>
+      </tr>
+    );
+  }
 
   return (
     <tr className="text-ink">
@@ -662,7 +775,7 @@ function EntryRow({
       <td className={cell}>{entry.vendor ?? <span className="text-ink-faint">—</span>}</td>
       <td className={clsx(cell, "num text-right font-medium")}>{money(entry.amount)}</td>
       <td className={clsx(cell, "max-w-[22rem] text-ink-muted")}>{entry.remark}</td>
-      <td className={clsx(cell, "text-right")}>
+      <td className={clsx(cell, "whitespace-nowrap text-right")}>
         {editable &&
           (confirming ? (
             <span className="whitespace-nowrap">
@@ -683,14 +796,24 @@ function EntryRow({
               </button>
             </span>
           ) : (
-            <button
-              type="button"
-              onClick={() => setConfirming(true)}
-              className="text-[11px] text-ink-faint hover:text-negative"
-              title="Remove this entry"
-            >
-              ×
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={startEditing}
+                className="mr-2 text-[11px] text-ink-faint hover:text-navy"
+                title="Edit this entry"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirming(true)}
+                className="text-[11px] text-ink-faint hover:text-negative"
+                title="Remove this entry"
+              >
+                ×
+              </button>
+            </>
           ))}
       </td>
     </tr>

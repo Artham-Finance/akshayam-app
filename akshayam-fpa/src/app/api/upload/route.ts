@@ -10,6 +10,7 @@ import {
   commitCreditNotes,
   commitGeneralLedger,
   commitInvoices,
+  commitOsbExpenses,
   commitPayments,
   commitReimbursementBills,
   commitReimbursementExpense,
@@ -20,6 +21,7 @@ import {
 } from "@/lib/ingest";
 import { parseBudgetWorkbook } from "@/lib/parse/budget";
 import { parseGeneralLedger } from "@/lib/parse/gl";
+import { parseOsbExpenses } from "@/lib/parse/osb-expenses";
 import { parseReimbursementBills } from "@/lib/parse/reimbursement-bills";
 import { parseReimbursementExpense } from "@/lib/parse/reimbursement-expense";
 import { parseRetainers } from "@/lib/parse/retainers";
@@ -36,6 +38,7 @@ export const maxDuration = 300;
 const KINDS = [
   "gl", "opening_tb", "invoices", "payments", "ar_aging", "credit_notes", "retainers",
   "budget", "tds_26as", "reimbursement_bills", "reimbursement_expense_txns", "osb_entries",
+  "osb_expenses",
 ] as const;
 type Kind = (typeof KINDS)[number];
 
@@ -293,6 +296,19 @@ export async function POST(request: Request) {
         warnings = parsed.warnings;
         detected = parsed.detected;
         summary = { period: [parsed.periodStart, parsed.periodEnd], rows: parsed.rows.length };
+        break;
+      }
+      case "osb_expenses": {
+        const parsed = await parseOsbExpenses(bytes);
+        result = await commitOsbExpenses(entity.id, parsed, meta);
+        warnings = parsed.warnings;
+        detected = parsed.detected;
+        summary = {
+          particulars: parsed.detected.particulars,
+          months: parsed.detected.months,
+          rows: parsed.rows.length,
+          total: parsed.rows.reduce((s, r) => s + r.amount, 0),
+        };
         break;
       }
       default:
