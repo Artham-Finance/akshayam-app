@@ -122,12 +122,12 @@ export interface ReimbursementSummary {
 }
 
 /**
- * The groups that together make up the statement's "Overheads" line. The
- * reimbursements group is deliberately not here: the statement carries it as
- * its own line ("Reimbursable Costs Recovered (net)"), so the breakup stops at
- * the same boundary and its total can be seen to equal the Overheads line.
+ * The group behind the statement's "Overheads" line. Reimbursements and Other
+ * income are deliberately not here: the statement carries each as its own line
+ * ("Reimbursable Costs Recovered (net)", "Other Income"), so the breakup stops
+ * at the same boundary and its total can be seen to equal the Overheads line.
  */
-const POOL_GROUPS = ["overheads", "other_income"];
+const POOL_GROUPS = ["overheads"];
 
 export async function buildExpenseDetail(opts: {
   entity: Entity;
@@ -325,7 +325,7 @@ export async function buildExpenseDetail(opts: {
    * budget re-upload (which wipes and rebuilds every row above from the sheet).
    * None has a budget:
    *
-   *  - Misc (Others): bad debts, other income and anything with no budget head.
+   *  - Misc (Others): bad debts and anything with no budget head.
    *    Keyed by hand like any bill, at the foot of the Other Expenses breakdown.
    *
    * Reimbursement expense and income are not here: they are their own line on
@@ -363,7 +363,7 @@ export async function buildExpenseDetail(opts: {
   const lastOther = lines.map((l) => l.head).lastIndexOf("Other Expenses");
   const misc = actualOnly("Other Expenses", "Misc (Others)", {
     isHeadOnly: lastOther < 0,
-    hint: "Bad debts, other income and anything with no budget line",
+    hint: "Bad debts and anything with no budget line",
     sortOrder: lastOther >= 0 ? lines[lastOther].sortOrder + 1 : 9_000,
   });
   if (lastOther >= 0) lines.splice(lastOther + 1, 0, misc);

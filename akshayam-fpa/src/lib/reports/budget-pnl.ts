@@ -27,6 +27,7 @@ export type BvaCode =
   | "overheads"
   | "reimbursements"
   | "osb_expenses"
+  | "other_income"
   | "common_cost_apportionment"
   | "ebitda"
   | "depreciation"
@@ -79,6 +80,10 @@ const LAYOUT: {
   // expenses sheet. Nothing is planned for it, so the budget side is nil and
   // the whole figure reads as variance - the point is to show it, not to plan it.
   { code: "osb_expenses", name: "OSB Expenses", sign: -1 },
+  // Its own line, as on the main P&L - interest received, round-off, anything
+  // else the ledger books as income outside the firm's services. The planning
+  // workbook carries no figure for it, so only the actual side is filled.
+  { code: "other_income", name: "Other Income", sign: 1 },
   { code: "common_cost_apportionment", name: "Common cost apportionment", sign: -1 },
   {
     code: "ebitda",
@@ -91,6 +96,7 @@ const LAYOUT: {
       "overheads",
       "reimbursements",
       "osb_expenses",
+      "other_income",
       "common_cost_apportionment",
     ],
   },
@@ -106,14 +112,13 @@ const LAYOUT: {
 /**
  * Where each P&L group lands on this statement.
  *
- * Other income joins Overheads rather than getting a line of its own - small
- * enough that a line for it would lengthen the statement without telling
- * anyone something they act on. Reimbursements gets its own line instead,
- * the same group the main P&L statement already carries separately.
+ * Reimbursements and Other income each get a line of their own, the same
+ * groups the main P&L statement already carries separately - folding Other
+ * income into Overheads made the Overheads figure here differ from the P&L's.
  */
 const GROUP_TO_LINE: Record<string, BvaCode> = {
   revenue: "revenue",
-  other_income: "overheads",
+  other_income: "other_income",
   reimbursements: "reimbursements",
   osb_expenses: "osb_expenses",
   direct_cost: "direct_cost",
