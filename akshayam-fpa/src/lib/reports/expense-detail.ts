@@ -372,7 +372,7 @@ export async function buildExpenseDetail(opts: {
   /**
    * Named lines the sheet never carries, placed at the foot of the head they
    * belong to. Each shows only when its head is on the statement, and - like
-   * Misc above - survives a budget re-upload. None has a budget: the two
+   * Misc above - survives a budget re-upload. None has a budget: the
    * "Others (not budgeted)" lines are a catch-all for unplanned spend, and the
    * two memberships are named but budgeted as nil (the whole dues budget sits
    * on ICSI membership).
@@ -380,6 +380,7 @@ export async function buildExpenseDetail(opts: {
   const TRAILING: { head: string; label: string }[] = [
     { head: "Computer - subscription", label: "Others (not budgeted)" },
     { head: "Computer maintenance charges", label: "Others (not budgeted)" },
+    { head: "Staff Welfare", label: "Others (not budgeted)" },
     { head: "Dues and subscription", label: "IBBI membership" },
     { head: "Dues and subscription", label: "Other" },
   ];

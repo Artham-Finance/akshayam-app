@@ -126,6 +126,20 @@ export const UPLOAD_KINDS: Omit<UploadKindInfo, "lastUpload">[] = [
     needsAsOf: false,
   },
   {
+    kind: "osb_expenses",
+    title: "OSB Expenses — costs paid outside the books",
+    zohoPath: "Not a Zoho report — a hand-made sheet: the event's name, then a row per vertical with its amount under the month",
+    blurb:
+      "For RBJV: costs that never reach Zoho, such as an event or team outing. The sheet carries the " +
+      "event's name on top, then one row per vertical (use its code, e.g. CFC or Common) with the " +
+      "amount under the month it belongs to. Shown on the P&L as its own line after Reimbursable " +
+      "Costs Recovered, inside EBITDA, with no budget; it appears on Budget vs Actual, in the " +
+      "vertical's own P&L, and in the cost apportionment (Common's share is spread by head count). " +
+      "Re-uploading the same event for the same months replaces it; other events are left alone.",
+    cadence: "As incurred",
+    needsAsOf: false,
+  },
+  {
     kind: "reimbursement_bills",
     title: "Bills — item-wise (for RE / RI reconciliation)",
     zohoPath: "Purchases → Bills → Export (item-wise), or Settings → Import/Export → Export Data",

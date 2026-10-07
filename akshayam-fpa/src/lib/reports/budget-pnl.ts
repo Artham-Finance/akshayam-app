@@ -26,6 +26,7 @@ export type BvaCode =
   | "establishment_cost"
   | "overheads"
   | "reimbursements"
+  | "osb_expenses"
   | "common_cost_apportionment"
   | "ebitda"
   | "depreciation"
@@ -74,6 +75,10 @@ const LAYOUT: {
   // RI Expense Reimbursement both run into the lakhs), so folding it into
   // Overheads was hiding a real recovery position, not tidying a rounding.
   { code: "reimbursements", name: "Reimbursable Costs Recovered (net)", sign: 1 },
+  // Costs paid outside the books (an event, an outing), keyed from the OSB
+  // expenses sheet. Nothing is planned for it, so the budget side is nil and
+  // the whole figure reads as variance - the point is to show it, not to plan it.
+  { code: "osb_expenses", name: "OSB Expenses", sign: -1 },
   { code: "common_cost_apportionment", name: "Common cost apportionment", sign: -1 },
   {
     code: "ebitda",
@@ -85,6 +90,7 @@ const LAYOUT: {
       "establishment_cost",
       "overheads",
       "reimbursements",
+      "osb_expenses",
       "common_cost_apportionment",
     ],
   },
@@ -109,6 +115,7 @@ const GROUP_TO_LINE: Record<string, BvaCode> = {
   revenue: "revenue",
   other_income: "overheads",
   reimbursements: "reimbursements",
+  osb_expenses: "osb_expenses",
   direct_cost: "direct_cost",
   establishment_cost: "establishment_cost",
   overheads: "overheads",
@@ -138,7 +145,7 @@ export async function buildBudgetVsActualPnl(opts: {
   const start = window?.start ?? fyRange.start;
   const end = window?.end ?? fyRange.end;
 
-  const [glRows, osbRows, budgetRows, commonCostActualRows] = await Promise.all([
+  const [glRows, osbRows, budgetRows, commonCostActualRows, osbExpenseRows] = await Promise.all([
     query<{ month_key: string; group_code: string | null; amount: number }>(
       // credit - debit, so income is positive and a cost negative: the same
       // convention the P&L page uses, which is what lets the two agree.
@@ -206,6 +213,24 @@ export async function buildBudgetVsActualPnl(opts: {
         where coalesce(mh.amount, ah.amount) is not null`,
       [entity.id, fyStartYear, months.map((m) => m.start)],
     ),
+    /**
+     * Outside-books expenses, from their own table - no ledger row carries
+     * them. Stored credit - debit like the ledger rows above (a cost is
+     * negative), so the loop below treats them the same way. Whole months:
+     * the sheet gives a month, not a day.
+     */
+    query<{ month_key: string; group_code: string; amount: number }>(
+      `select to_char(o.month, 'YYYY-MM') as month_key,
+              'osb_expenses' as group_code,
+              -sum(o.amount) as amount
+         from osb_expense_entries o
+        where o.entity_id = any($1::int[])
+          and o.month between date_trunc('month', $2::date)::date and $3::date
+          and ($4::int is null or o.vertical_id = $4)
+          ${verticalScope("$5", "o.vertical_id")}
+        group by 1`,
+      [entity.memberIds, start, end, verticalId, entity.verticalIds],
+    ),
   ]);
 
   const lines: BvaLine[] = LAYOUT.map((l) => ({
@@ -219,7 +244,7 @@ export async function buildBudgetVsActualPnl(opts: {
   const byCode = new Map(lines.map((l) => [l.code, l]));
   const valid = new Set(months.map((m) => m.key));
 
-  for (const row of [...glRows, ...osbRows]) {
+  for (const row of [...glRows, ...osbRows, ...osbExpenseRows]) {
     if (!valid.has(row.month_key)) continue;
     const code = row.group_code ? GROUP_TO_LINE[row.group_code] : undefined;
     // An account with no reporting line has nowhere to sit on a statement this

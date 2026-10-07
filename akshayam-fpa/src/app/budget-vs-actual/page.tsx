@@ -116,14 +116,20 @@ export default async function BudgetVsActualPage({
       isCustomRange && lastTouchedMonth ? lastTouchedMonth.label : period.shortLabel;
 
     /**
-     * Year to date, always - shown beside whatever the picker's own period is,
-     * so every breakdown on this tab never loses the full-year story. Stops
+     * Year to date - shown beside whatever the picker's own period is, so
+     * every breakdown on this tab keeps the full-year story. Stops
      * at the last *completed* month rather than however far the ledger
      * happens to reach mid-month: a GL posted through 15 September has not
      * finished September, so August is still the year to date.
      */
     const ytdCutoff = writtenTo ?? period.end;
-    const ytdMonths = months.filter((m) => m.end <= ytdCutoff);
+    // A period that ends before the ledger does (say 1 Apr - 31 Aug, with
+    // September already posted) takes the year to date to its own end: the
+    // YTD columns must not run past the period they sit beside. The month the
+    // period ends in is kept whole, since the budget side snaps to months.
+    const ytdMonths = months.filter(
+      (m) => m.end <= ytdCutoff && (period.end >= ytdCutoff || m.start <= period.end),
+    );
     const ytdThrough = ytdMonths[ytdMonths.length - 1]?.end ?? null;
     const ytdLabel = ytdThrough ? `to ${dateLabel(ytdThrough)}` : "1 Apr onward";
 

@@ -90,7 +90,7 @@ export async function buildProfitAndLoss(opts: {
     amount: number;
   };
 
-  const [groups, rows, osbRows] = await Promise.all([
+  const [groups, rows, osbRows, osbExpenseRows] = await Promise.all([
     loadGroups(entity.id, "pnl"),
     query<FlatRow>(
       `select to_char(g.txn_date, 'YYYY-MM') as month_key,
@@ -141,9 +141,33 @@ export async function buildProfitAndLoss(opts: {
         group by 1, 2, 3, 4, 5`,
       [entity.memberIds, start, end, verticalId, entity.verticalIds],
     ),
+    /**
+     * Outside-books expenses, the cost-side twin of the OSB revenue above:
+     * nothing in the ledger carries them, so they are read from their own
+     * table and shaped like a ledger row (credit less debit, so a cost is
+     * negative) for the same assemble(). Filed against the vertical the sheet
+     * named, so a vertical's own P&L and a slice carry exactly its share.
+     * Whole months only - the sheet gives a month, not a day.
+     */
+    query<FlatRow>(
+      `select to_char(o.month, 'YYYY-MM') as month_key,
+              a.group_code,
+              a.id         as account_id,
+              a.name       as account_name,
+              a.sort_order as account_sort,
+              -sum(o.amount) as amount
+         from osb_expense_entries o
+         join accounts a on a.entity_id = o.entity_id and a.group_code = 'osb_expenses'
+        where o.entity_id = any($1::int[])
+          and o.month between date_trunc('month', $2::date)::date and $3::date
+          and ($4::int is null or o.vertical_id = $4)
+          ${verticalScope("$5", "o.vertical_id")}
+        group by 1, 2, 3, 4, 5`,
+      [entity.memberIds, start, end, verticalId, entity.verticalIds],
+    ),
   ]);
 
-  const result = assemble(months, groups, [...rows, ...osbRows], detail);
+  const result = assemble(months, groups, [...rows, ...osbRows, ...osbExpenseRows], detail);
 
   // Presentational only, and only for the whole company - a single vertical's
   // slice of Profit Before Tax is not a taxable base of its own.
