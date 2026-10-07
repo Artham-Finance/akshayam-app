@@ -70,6 +70,56 @@ interface MonthActualRow {
 }
 
 /**
+ * Revenue actual by month, in the three parts the Actual figure is made of: the
+ * ledger's Revenue from Operations (net of credit notes - the P&L line), the
+ * outside-books billing added to it, and the revenue transferred to RBJV taken
+ * off it (negative). Exported so a page can show the parts beside the total and
+ * stay equal to the Actual tile and to the P&L month for month.
+ */
+export async function revenueActualsByMonthParts(
+  entityIds: number[],
+  verticalIds: number[] | null,
+  verticalId: number | null,
+  fyStart: string,
+  asOf: string,
+): Promise<{ gl: MonthActualRow[]; osb: MonthActualRow[]; transferred: MonthActualRow[] }> {
+  const args = [entityIds, fyStart, asOf, verticalIds, verticalId];
+  const [gl, osb, transferred] = await Promise.all([
+    query<MonthActualRow>(
+      `select to_char(g.txn_date, 'YYYY-MM') as month_key, sum(g.credit - g.debit)::numeric as actual
+         from gl_entries g
+         join accounts a on a.id = g.account_id
+        where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
+          and a.statement = 'pnl' and a.group_code = 'revenue'
+          ${verticalScope("$4", "g.vertical_id")}
+          and ($5::int is null or g.vertical_id = $5)
+        group by 1`,
+      args,
+    ),
+    query<MonthActualRow>(
+      `select to_char(i.invoice_date, 'YYYY-MM') as month_key, sum(i.amount_base)::numeric as actual
+         from invoice_lines i
+        where i.entity_id = any($1::int[]) and i.is_osb
+          and i.invoice_date between $2 and $3
+          ${verticalScope("$4", "i.vertical_id")}
+          and ($5::int is null or i.vertical_id = $5)
+        group by 1`,
+      args,
+    ),
+    query<MonthActualRow>(
+      `select to_char(t.invoice_date, 'YYYY-MM') as month_key, -sum(t.amount)::numeric as actual
+         from revenue_transfer_entries t
+        where t.entity_id = any($1::int[]) and t.invoice_date between $2 and $3
+          ${verticalScope("$4", "t.vertical_id")}
+          and ($5::int is null or t.vertical_id = $5)
+        group by 1`,
+      args,
+    ),
+  ]);
+  return { gl, osb, transferred };
+}
+
+/**
  * What a measure actually did, by month - the same sources
  * buildBudgetVsActual reads for the same measure (see budget.ts), just
  * grouped by month instead of struck over one window.
@@ -93,38 +143,13 @@ async function actualsByMonth(
   const args = [entityIds, fyStart, asOf, verticalIds, verticalId];
 
   if (measure === "revenue") {
-    const [gl, osb, transferred] = await Promise.all([
-      query<MonthActualRow>(
-        `select to_char(g.txn_date, 'YYYY-MM') as month_key, sum(g.credit - g.debit)::numeric as actual
-           from gl_entries g
-           join accounts a on a.id = g.account_id
-          where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
-            and a.statement = 'pnl' and a.group_code = 'revenue'
-            ${verticalScope("$4", "g.vertical_id")}
-            and ($5::int is null or g.vertical_id = $5)
-          group by 1`,
-        args,
-      ),
-      query<MonthActualRow>(
-        `select to_char(i.invoice_date, 'YYYY-MM') as month_key, sum(i.amount_base)::numeric as actual
-           from invoice_lines i
-          where i.entity_id = any($1::int[]) and i.is_osb
-            and i.invoice_date between $2 and $3
-            ${verticalScope("$4", "i.vertical_id")}
-            and ($5::int is null or i.vertical_id = $5)
-          group by 1`,
-        args,
-      ),
-      query<MonthActualRow>(
-        `select to_char(t.invoice_date, 'YYYY-MM') as month_key, -sum(t.amount)::numeric as actual
-           from revenue_transfer_entries t
-          where t.entity_id = any($1::int[]) and t.invoice_date between $2 and $3
-            ${verticalScope("$4", "t.vertical_id")}
-            and ($5::int is null or t.vertical_id = $5)
-          group by 1`,
-        args,
-      ),
-    ]);
+    const { gl, osb, transferred } = await revenueActualsByMonthParts(
+      entityIds,
+      verticalIds,
+      verticalId,
+      fyStart,
+      asOf,
+    );
     return [...gl, ...osb, ...transferred];
   }
 
