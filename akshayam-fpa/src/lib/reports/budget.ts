@@ -172,6 +172,10 @@ async function actualsByVertical(
  * Negative by construction, unioned into actualsByVertical's own totals the
  * same way OSB revenue is added: as a plain row the caller sums in, not a
  * special case it has to know about.
+ *
+ * Akshayam's own entries only: it is a deduction from Akshayam's revenue, so
+ * RBJV's views never subtract it (and never grow a GIFT line for it). The
+ * group, which includes Akshayam, still does.
  */
 async function revenueTransferByVertical(
   entityIds: number[],
@@ -185,7 +189,7 @@ async function revenueTransferByVertical(
             -sum(t.amount)::numeric as actual
        from revenue_transfer_entries t
        left join verticals v on v.id = t.vertical_id
-      where t.entity_id = any($1::int[]) and t.invoice_date between $2 and $3
+      where t.entity_id = any($1::int[]) and t.entity_id in (select id from entities where slug = 'akshayam') and t.invoice_date between $2 and $3
         and (not $6::boolean or lower(coalesce(t.status, '')) = 'paid')
         ${verticalScope("$4", "t.vertical_id")}
         and ($5::int is null or t.vertical_id = $5)

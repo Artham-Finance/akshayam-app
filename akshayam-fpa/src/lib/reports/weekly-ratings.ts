@@ -165,7 +165,7 @@ export async function buildWeeklyRatings(opts: {
       query<{ vertical_id: number | null; v: number }>(
         `select t.vertical_id, -sum(t.amount)::numeric as v
            from revenue_transfer_entries t
-          where t.entity_id = any($1::int[]) and t.invoice_date between $2 and $3
+          where t.entity_id = any($1::int[]) and t.entity_id in (select id from entities where slug = 'akshayam') and t.invoice_date between $2 and $3
             and t.vertical_id = any($4::int[])
           group by 1`,
         [...window],

@@ -110,7 +110,7 @@ export async function revenueActualsByMonthParts(
     query<MonthActualRow>(
       `select to_char(t.invoice_date, 'YYYY-MM') as month_key, -sum(t.amount)::numeric as actual
          from revenue_transfer_entries t
-        where t.entity_id = any($1::int[]) and t.invoice_date between $2 and $3
+        where t.entity_id = any($1::int[]) and t.entity_id in (select id from entities where slug = 'akshayam') and t.invoice_date between $2 and $3
           ${verticalScope("$4", "t.vertical_id")}
           and ($5::int is null or t.vertical_id = $5)
         group by 1`,
@@ -173,7 +173,7 @@ async function actualsByMonth(
     query<MonthActualRow>(
       `select to_char(t.invoice_date, 'YYYY-MM') as month_key, -sum(t.amount)::numeric as actual
          from revenue_transfer_entries t
-        where t.entity_id = any($1::int[]) and t.invoice_date between $2 and $3
+        where t.entity_id = any($1::int[]) and t.entity_id in (select id from entities where slug = 'akshayam') and t.invoice_date between $2 and $3
           and lower(coalesce(t.status, '')) = 'paid'
           ${verticalScope("$4", "t.vertical_id")}
           and ($5::int is null or t.vertical_id = $5)
