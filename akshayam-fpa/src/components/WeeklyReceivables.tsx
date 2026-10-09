@@ -8,6 +8,7 @@ import type {
   Over180Customer,
   TdsCustomer,
   TdsReflected,
+  TopCustomer,
   VerticalReceivables,
   WeeklyReceivablesResult,
 } from "@/lib/reports/weekly-receivables";
@@ -128,6 +129,14 @@ export function WeeklyReceivables({
           </section>
         );
       })}
+
+      {Math.abs(data.tdsUnallocated) >= 1 && (
+        <p className="px-4 py-3 text-[12px] text-ink-muted sm:px-5">
+          TDS booked in Zoho this year on no vertical:{" "}
+          <span className="num font-medium text-ink">{money(data.tdsUnallocated)}</span>. It is the
+          &ldquo;Unallocated&rdquo; line of the TDS reconciliation and is in none of the verticals above.
+        </p>
+      )}
     </div>
   );
 }
@@ -201,16 +210,7 @@ function VerticalBlock({
             </thead>
             <tbody>
               {v.top.map((t) => (
-                <tr key={t.customer} className="hover:bg-surface-sunk/40">
-                  <td className={clsx(td, "num text-right text-ink-faint")}>{t.rank}</td>
-                  <td className={clsx(td, "text-ink")}>{t.customer}</td>
-                  <td className={clsx(td, "num text-right text-ink")}>{money(t.outstanding)}</td>
-                  <td className={clsx(td, "num text-right text-ink-muted")}>{percent(t.pctOfVertical * 100, 1)}</td>
-                  <td className={clsx(td, "num text-right text-ink-muted")}>{percent(t.pctOfEntity * 100, 1)}</td>
-                  <td className={clsx(td, "num text-right", t.over180 > 0 ? "text-caution" : "text-ink-faint")}>
-                    {t.over180 > 0 ? money(t.over180) : "—"}
-                  </td>
-                </tr>
+                <TopRow key={t.customer} t={t} />
               ))}
             </tbody>
             <tfoot>
@@ -457,6 +457,75 @@ function Over180Row({
   );
 }
 
+/** One of the ten largest customers; opens to the invoices that make up its balance. */
+function TopRow({ t }: { t: TopCustomer }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Fragment>
+      <tr className="hover:bg-surface-sunk/40">
+        <td className={clsx(td, "num text-right text-ink-faint")}>{t.rank}</td>
+        <td className={clsx(td, "text-ink")}>
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+            className="flex items-center gap-2 text-left hover:text-navy"
+          >
+            <span className={clsx("text-[9px] text-ink-faint transition-transform", open && "rotate-90")}>▶</span>
+            {t.customer}
+            <span className="text-[11px] text-ink-faint">
+              {t.invoices.length} invoice{t.invoices.length === 1 ? "" : "s"}
+            </span>
+          </button>
+        </td>
+        <td className={clsx(td, "num text-right text-ink")}>{money(t.outstanding)}</td>
+        <td className={clsx(td, "num text-right text-ink-muted")}>{percent(t.pctOfVertical * 100, 1)}</td>
+        <td className={clsx(td, "num text-right text-ink-muted")}>{percent(t.pctOfEntity * 100, 1)}</td>
+        <td className={clsx(td, "num text-right", t.over180 > 0 ? "text-caution" : "text-ink-faint")}>
+          {t.over180 > 0 ? money(t.over180) : "—"}
+        </td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={6} className="border-b border-line bg-surface-sunk/30 px-6 py-2">
+            <table className="w-full max-w-3xl border-collapse text-[12px]">
+              <thead>
+                <tr className="text-ink-faint">
+                  <th className="px-1 py-1 text-left font-medium">Invoice</th>
+                  <th className="px-1 py-1 text-left font-medium">Date</th>
+                  <th className="px-1 py-1 text-left font-medium">Due</th>
+                  <th className="px-1 py-1 text-right font-medium">Balance</th>
+                  <th className="px-1 py-1 text-right font-medium">Days overdue</th>
+                </tr>
+              </thead>
+              <tbody>
+                {t.invoices.map((i) => (
+                  <tr key={i.invoiceNumber + (i.invoiceDate ?? "") + i.balance}>
+                    <td className="border-t border-line px-1 py-1.5 text-ink">{i.invoiceNumber}</td>
+                    <td className="border-t border-line px-1 py-1.5 text-ink-muted">{i.invoiceDate ? dateLabel(i.invoiceDate) : "—"}</td>
+                    <td className="border-t border-line px-1 py-1.5 text-ink-muted">{i.dueDate ? dateLabel(i.dueDate) : "—"}</td>
+                    <td className="num border-t border-line px-1 py-1.5 text-right">{money(i.balance)}</td>
+                    <td className={clsx("num border-t border-line px-1 py-1.5 text-right", i.ageDays > 180 ? "text-caution" : "text-ink-muted")}>
+                      {i.ageDays > 0 ? i.ageDays : "not due"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="font-semibold text-ink">
+                  <td className="border-t border-line-strong px-1 py-1.5" colSpan={3}>Total</td>
+                  <td className="num border-t border-line-strong px-1 py-1.5 text-right">{money(t.invoices.reduce((s, i) => s + i.balance, 0))}</td>
+                  <td className="border-t border-line-strong px-1 py-1.5" />
+                </tr>
+              </tfoot>
+            </table>
+          </td>
+        </tr>
+      )}
+    </Fragment>
+  );
+}
+
 /** One customer's TDS: the invoices behind it, Zoho against Form 26AS, and the follow-up. */
 function TdsRow({
   c,
@@ -564,7 +633,7 @@ function TdsRow({
       {open && (
         <tr>
           <td colSpan={8} className="border-b border-line bg-surface-sunk/30 px-6 py-2">
-            {c.invoices.length === 0 ? (
+            {c.invoices.length === 0 && !c.tdsOther ? (
               <p className="text-[12px] text-ink-muted">No invoice has been raised on this customer this financial year.</p>
             ) : (
               <table className="w-full max-w-3xl border-collapse text-[12px]">
@@ -585,6 +654,14 @@ function TdsRow({
                       <td className="num border-t border-line px-1 py-1.5 text-right">{i.tdsZoho ? money(i.tdsZoho) : "—"}</td>
                     </tr>
                   ))}
+                  {c.tdsOther !== 0 && (
+                    <tr>
+                      <td className="border-t border-line px-1 py-1.5 text-ink-muted" colSpan={3}>
+                        Other TDS entries this year - against earlier years&rsquo; invoices, and adjustments
+                      </td>
+                      <td className="num border-t border-line px-1 py-1.5 text-right">{money(c.tdsOther)}</td>
+                    </tr>
+                  )}
                 </tbody>
                 <tfoot>
                   <tr className="font-semibold text-ink">

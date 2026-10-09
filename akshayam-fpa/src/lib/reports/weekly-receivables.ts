@@ -2,7 +2,7 @@ import { query } from "@/lib/db";
 import { getVerticalsInScope, type Entity } from "@/lib/entity";
 import { fyBounds } from "@/lib/period";
 import { ROWS, scorecardRowCodeFor } from "@/lib/reports/scorecard";
-import { TDS_ACCOUNTS, TDS_TOLERANCE } from "@/lib/reports/tds";
+import { BOOKS_CUSTOMER, TDS_ACCOUNTS, TDS_TOLERANCE } from "@/lib/reports/tds";
 import { addDays, isLocked, todayIst } from "@/lib/weekly";
 
 /**
@@ -67,6 +67,8 @@ export interface TopCustomer {
   pctOfVertical: number;
   pctOfEntity: number;
   over180: number;
+  /** every open invoice behind the balance, the oldest first */
+  invoices: ReceivableInvoice[];
 }
 
 export type TdsReflected = "yes" | "partly" | "no" | "na";
@@ -76,7 +78,10 @@ export interface TdsInvoice {
   invoiceDate: string | null;
   /** invoice value, ex tax */
   amount: number;
-  /** the TDS receivable booked on it in Zoho */
+  /**
+   * the TDS receivable booked on it in Zoho - an invoice shared by two verticals
+   * carries its TDS on one of them only, as the TDS reconciliation does
+   */
   tdsZoho: number;
 }
 
@@ -85,6 +90,11 @@ export interface TdsCustomer {
   outstanding: number;
   invoices: TdsInvoice[];
   tdsZoho: number;
+  /**
+   * the part of `tdsZoho` that sits on no invoice listed here: TDS posted this year
+   * against earlier years' invoices, and adjustments - mostly credits
+   */
+  tdsOther: number;
   /** tax deducted for this customer in Form 26AS over the same stretch */
   tds26as: number;
   difference: number;
@@ -113,6 +123,8 @@ export interface WeeklyReceivablesResult {
   entityTotal: number;
   /** the financial year's start, the beginning of the TDS stretch */
   tdsFrom: string;
+  /** TDS booked in Zoho this year on no vertical - in the TDS reconciliation's "Unallocated" line */
+  tdsUnallocated: number;
   verticals: VerticalReceivables[];
 }
 
@@ -215,30 +227,65 @@ export async function buildWeeklyReceivables(opts: {
           invoice_number: string;
           invoice_date: string | null;
           amount: number;
-          tds: number;
         }>(
-          `with inv as (
-             select i.vertical_id, btrim(i.customer_name) as customer, i.invoice_number,
-                    min(i.invoice_date)::text as invoice_date,
-                    sum(i.amount_base)::float8 as amount
-               from invoice_lines i
-              where i.entity_id = any($1::int[]) and i.invoice_date between $2 and $3
-                and i.vertical_id = any($4::int[]) and i.customer_name is not null
-              group by 1, 2, 3
-           ),
-           tds as (
-             select g.txn_number as invoice_number, sum(g.debit - g.credit)::float8 as tds
-               from gl_entries g join accounts a on a.id = g.account_id
-              where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
-                and g.txn_number is not null and ${TDS_ACCOUNTS}
-              group by 1
-           )
-           select inv.vertical_id, inv.customer, inv.invoice_number, inv.invoice_date, inv.amount,
-                  coalesce(tds.tds, 0) as tds
-             from inv left join tds on tds.invoice_number = inv.invoice_number
-            order by inv.invoice_date desc, inv.invoice_number`,
+          `select i.vertical_id, btrim(i.customer_name) as customer, i.invoice_number,
+                  min(i.invoice_date)::text as invoice_date,
+                  sum(i.amount_base)::float8 as amount
+             from invoice_lines i
+            where i.entity_id = any($1::int[]) and i.invoice_date between $2 and $3
+              and i.vertical_id = any($4::int[]) and i.customer_name is not null
+            group by 1, 2, 3
+            order by min(i.invoice_date) desc, i.invoice_number`,
           [ids, tdsFrom, weekEnd, scopedIds],
         );
+
+  /*
+    The TDS receivable as Zoho books it, struck the way the TDS reconciliation
+    strikes it - every TDS posting of the stretch, to the customer and vertical of
+    the invoice it was raised on (the invoice's first line where it is split over
+    verticals, so a shared invoice's TDS is counted once), else the posting's own
+    vertical and the customer its ledger or description names. This is the figure
+    the reconciliation's "books" column shows; postings against earlier years'
+    invoices are in it, and so are credits.
+  */
+  const tdsBooks = await query<{
+    vertical_id: number | null;
+    customer: string | null;
+    invoice_number: string | null;
+    tds: number;
+  }>(
+    `select coalesce(inv.vertical_id, g.vertical_id) as vertical_id,
+            ${BOOKS_CUSTOMER} as customer,
+            g.txn_number as invoice_number,
+            sum(g.debit - g.credit)::float8 as tds
+       from gl_entries g
+       join accounts a on a.id = g.account_id
+       left join lateral (
+         select i.customer_name, i.vertical_id
+           from invoice_lines i
+          where i.entity_id = g.entity_id and i.invoice_number = g.txn_number
+          order by i.id limit 1
+       ) inv on true
+      where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3 and ${TDS_ACCOUNTS}
+      group by 1, 2, 3`,
+    [ids, tdsFrom, weekEnd],
+  );
+  const zohoByPair = new Map<string, number>();
+  const zohoByInvoice = new Map<string, number>();
+  let tdsUnallocated = 0;
+  for (const t of tdsBooks) {
+    if (t.vertical_id === null) {
+      tdsUnallocated += Number(t.tds);
+      continue;
+    }
+    if (!scopedIds.includes(t.vertical_id)) continue;
+    const pair = `${t.vertical_id}|${norm(t.customer)}`;
+    zohoByPair.set(pair, (zohoByPair.get(pair) ?? 0) + Number(t.tds));
+    if (t.invoice_number) {
+      const k = `${t.vertical_id}|${t.invoice_number}`;
+      zohoByInvoice.set(k, (zohoByInvoice.get(k) ?? 0) + Number(t.tds));
+    }
+  }
 
   /* ---- Form 26AS, by customer, over the same stretch ---- */
   const form26as =
@@ -273,14 +320,10 @@ export async function buildWeeklyReceivables(opts: {
     tdsPairs.set(vid, m);
   };
   for (const vid of verticalIds) for (const r of byVertical.get(vid) ?? []) addPair(vid, r.customer);
-  const zohoByPair = new Map<string, number>();
-  for (const i of invoices) {
-    const k = `${i.vertical_id}|${norm(i.customer)}`;
-    zohoByPair.set(k, (zohoByPair.get(k) ?? 0) + Number(i.tds));
-  }
-  for (const i of invoices) {
-    if (Math.abs(zohoByPair.get(`${i.vertical_id}|${norm(i.customer)}`) ?? 0) >= TDS_TOLERANCE) {
-      addPair(i.vertical_id, i.customer);
+  for (const t of tdsBooks) {
+    if (t.vertical_id === null || !t.customer || !scopedIds.includes(t.vertical_id)) continue;
+    if (Math.abs(zohoByPair.get(`${t.vertical_id}|${norm(t.customer)}`) ?? 0) >= TDS_TOLERANCE) {
+      addPair(t.vertical_id, t.customer);
     }
   }
   for (const f of form26as) {
@@ -315,6 +358,15 @@ export async function buildWeeklyReceivables(opts: {
         pctOfVertical: total > 0 ? outstanding / total : 0,
         pctOfEntity: entityTotal > 0 ? outstanding / entityTotal : 0,
         over180: oldAmount,
+        invoices: list
+          .map((r) => ({
+            invoiceNumber: r.invoice_number ?? "—",
+            invoiceDate: r.invoice_date,
+            dueDate: r.due_date,
+            balance: Number(r.balance),
+            ageDays: Number(r.age),
+          }))
+          .sort((a, b) => b.ageDays - a.ageDays),
       });
       if (oldAmount <= 0) continue;
 
@@ -363,9 +415,12 @@ export async function buildWeeklyReceivables(opts: {
           invoiceNumber: i.invoice_number,
           invoiceDate: i.invoice_date,
           amount: Number(i.amount),
-          tdsZoho: Number(i.tds),
+          tdsZoho: zohoByInvoice.get(`${vid}|${i.invoice_number}`) ?? 0,
         }));
-      const tdsZoho = mine.reduce((s, i) => s + i.tdsZoho, 0);
+      // The customer's whole figure is the reconciliation's; the invoices listed
+      // explain what they can, and the rest is "other entries".
+      const tdsZoho = zohoByPair.get(`${vid}|${norm(customer)}`) ?? 0;
+      const tdsOther = tdsZoho - mine.reduce((s, i) => s + i.tdsZoho, 0);
       // 26AS carries the vertical only where the deductor was matched to one; a
       // customer matched to this vertical's name counts, whichever it was tagged to.
       const tds26as = form26as
@@ -390,6 +445,7 @@ export async function buildWeeklyReceivables(opts: {
           .reduce((s, r) => s + Number(r.balance), 0),
         invoices: mine,
         tdsZoho,
+        tdsOther: Math.abs(tdsOther) >= TDS_TOLERANCE ? tdsOther : 0,
         tds26as,
         difference: tdsZoho - tds26as,
         reflected,
@@ -425,5 +481,13 @@ export async function buildWeeklyReceivables(opts: {
   verticals.sort((a, b) => order(a.verticalId) - order(b.verticalId) || b.total - a.total);
 
   void addDays;
-  return { weekEnd, arAsOf, entityTotal, tdsFrom, verticals };
+  return {
+    weekEnd,
+    arAsOf,
+    entityTotal,
+    tdsFrom,
+    // a vertical head's slice has no "unallocated" of its own to show
+    tdsUnallocated: entity.verticalIds === null ? tdsUnallocated : 0,
+    verticals,
+  };
 }
