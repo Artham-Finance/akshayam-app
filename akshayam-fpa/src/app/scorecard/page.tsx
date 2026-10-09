@@ -677,8 +677,17 @@ export default async function ScorecardPage({
                 weighted average (weights above).
               </li>
               <li>
-                Budgets are the annual figure × {data.window.months}/12; revenue and collection
-                actuals are the ledger&rsquo;s, net of credit notes. Cost is shown in two parts —
+                {data.revisedBudgetSource ? (
+                  <>
+                    Budgets are the {data.revisedBudgetSource}: each vertical&rsquo;s quarterly
+                    revenue budget, spread evenly over the quarter&rsquo;s three months, summed over
+                    the {data.window.months} month{data.window.months === 1 ? "" : "s"} shown;
+                    the collection budget is 108% of it. This applies to the scorecard only.
+                  </>
+                ) : (
+                  <>Budgets are the annual figure × {data.window.months}/12.</>
+                )}{" "}
+                Revenue and collection actuals are the ledger&rsquo;s, net of credit notes. Cost is shown in two parts —
                 the vertical&rsquo;s own directly-tagged cost, and its apportioned share of
                 Common&rsquo;s cost and of ACC and HRCM&rsquo;s cost, spread on head count across
                 the six verticals exactly as in the P&amp;L&rsquo;s cost apportionment card, so

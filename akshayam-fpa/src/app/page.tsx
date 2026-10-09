@@ -133,12 +133,14 @@ export default async function OverviewPage({
         fyStartYear: fy,
         measure: "revenue",
         period: { start, end, fraction: period.fraction, monthAligned: period.monthAligned },
+        revised: true,
       }),
       buildBudgetVsActual({
         entity,
         fyStartYear: fy,
         measure: "collection",
         period: { start, end, fraction: period.fraction, monthAligned: period.monthAligned },
+        revised: true,
       }),
       buildBudgetTrend({
         entity,
@@ -146,6 +148,7 @@ export default async function OverviewPage({
         measure: "revenue",
         verticalId: trendVerticalId,
         asOf: end,
+        revised: true,
       }),
       buildBudgetTrend({
         entity,
@@ -153,6 +156,7 @@ export default async function OverviewPage({
         measure: "collection",
         verticalId: trendVerticalId,
         asOf: end,
+        revised: true,
       }),
     ]);
 

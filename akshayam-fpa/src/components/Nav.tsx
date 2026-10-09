@@ -47,6 +47,7 @@ const GROUPS: { title: string; items: { href: string; label: string }[] }[] = [
       { href: "/revenue", label: "Revenue" },
       { href: "/receivables", label: "Receivables" },
       { href: "/collections", label: "Collections" },
+      { href: "/weekly-ratings", label: "Weekly ratings" },
       { href: "/scorecard", label: "Vertical Performance Scorecard" },
     ],
   },

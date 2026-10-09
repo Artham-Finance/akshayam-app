@@ -1,5 +1,6 @@
 import { query } from "@/lib/db";
 import { verticalScope, type Entity } from "@/lib/entity";
+import { hasRevisedBudget, revisedBudgetForVertical } from "@/lib/reports/scorecard-budget";
 
 /**
  * Budget versus actual, by vertical.
@@ -171,6 +172,10 @@ async function actualsByVertical(
  * Negative by construction, unioned into actualsByVertical's own totals the
  * same way OSB revenue is added: as a plain row the caller sums in, not a
  * special case it has to know about.
+ *
+ * Akshayam's own entries only: it is a deduction from Akshayam's revenue, so
+ * RBJV's views never subtract it (and never grow a GIFT line for it). The
+ * group, which includes Akshayam, still does.
  */
 async function revenueTransferByVertical(
   entityIds: number[],
@@ -184,7 +189,7 @@ async function revenueTransferByVertical(
             -sum(t.amount)::numeric as actual
        from revenue_transfer_entries t
        left join verticals v on v.id = t.vertical_id
-      where t.entity_id = any($1::int[]) and t.invoice_date between $2 and $3
+      where t.entity_id = any($1::int[]) and t.entity_id in (select id from entities where slug = 'akshayam') and t.invoice_date between $2 and $3
         and (not $6::boolean or lower(coalesce(t.status, '')) = 'paid')
         ${verticalScope("$4", "t.vertical_id")}
         and ($5::int is null or t.vertical_id = $5)
@@ -198,8 +203,10 @@ function cells(
   actual: number,
   fraction: number,
   retainership: number | null,
+  /** the window's budget where it is not simply annual x fraction (the revised quarterly budget) */
+  budgetOverride?: number,
 ): BudgetCells {
-  const periodBudget = annual * fraction;
+  const periodBudget = budgetOverride ?? annual * fraction;
   return {
     periodBudget,
     actual,
@@ -249,8 +256,15 @@ export async function buildBudgetVsActual(opts: {
   period: BudgetWindow;
   /** the year to date up to the end of that period, when it differs */
   cumulative?: BudgetWindow | null;
+  /**
+   * Read the budgets from the revised quarterly budget (30 Sep 2026) instead of
+   * the annual figures held per vertical, where one exists for the year. For the
+   * Overview only - every other page keeps the budgets already loaded.
+   */
+  revised?: boolean;
 }): Promise<BudgetVsActual> {
   const { entity, fyStartYear, measure, period, cumulative, verticalId = null } = opts;
+  const useRevised = !!opts.revised && hasRevisedBudget(fyStartYear);
   const ids = entity.memberIds;
   /**
    * Only revenue splits. A retainer is an invoice, not a receipt: the cash for
@@ -286,8 +300,10 @@ export async function buildBudgetVsActual(opts: {
         group by b.vertical_id, v.code, v.name`,
       [ids, fyStartYear, measure, entity.verticalIds, verticalId],
     ),
-    query<{ id: number; code: string }>(
-      "select id, code from verticals where entity_id = any($1::int[])",
+    query<{ id: number; code: string; name: string; sort_order: number; slug: string }>(
+      `select v.id, v.code, v.name, v.sort_order, e.slug
+         from verticals v join entities e on e.id = v.entity_id
+        where v.entity_id = any($1::int[])`,
       [ids],
     ),
     actualsByVertical(ids, entity.verticalIds, verticalId, measure, period),
@@ -322,6 +338,8 @@ export async function buildBudgetVsActual(opts: {
     cumulativeActual: number;
     periodRetainer: number;
     cumulativeRetainer: number;
+    /** the revised quarterly budget over each window, when it is in use */
+    revised?: { annual: number; period: number; cumulative: number };
   }
   const drafts = new Map<string, Draft>();
 
@@ -341,6 +359,63 @@ export async function buildBudgetVsActual(opts: {
         periodRetainer: 0,
         cumulativeRetainer: 0,
       });
+  }
+
+  /**
+   * The revised quarterly budget, in place of the annual figures: each vertical's
+   * budget over the window is its own quarters spread over the months and days
+   * the window covers. A window of whole months is struck on whole months, the
+   * way the rest of the app counts a part-month in full. A vertical with no
+   * revised figure has none.
+   */
+  if (useRevised) {
+    const scoped = verticals.filter(
+      (v) =>
+        (!entity.verticalIds || entity.verticalIds.includes(v.id)) &&
+        (verticalId === null || v.id === verticalId),
+    );
+    const slugOf = new Map(verticals.map((v) => [v.code, v.slug]));
+    const wholeMonths = (w: BudgetWindow) => {
+      if (!w.monthAligned) return { start: w.start, end: w.end };
+      const [y, m] = w.end.split("-").map(Number);
+      const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      return {
+        start: `${w.start.slice(0, 7)}-01`,
+        end: `${w.end.slice(0, 7)}-${String(last).padStart(2, "0")}`,
+      };
+    };
+    const over = (code: string | null, w: { start: string; end: string }) => {
+      const slug = code ? slugOf.get(code) : undefined;
+      if (!code || !slug) return 0;
+      const b = revisedBudgetForVertical(slug, code, w.start, w.end);
+      return b ? (measure === "revenue" ? b.revenue : b.collection) : 0;
+    };
+    const fy = { start: `${fyStartYear}-04-01`, end: `${fyStartYear + 1}-03-31` };
+    // A vertical the revised budget carries but the old table did not still gets a row.
+    for (const v of scoped) {
+      const key = keyOf(v.code, v.id);
+      if (!drafts.has(key) && over(v.code, fy) > 0) {
+        drafts.set(key, {
+          code: v.code,
+          name: v.name,
+          unattributed: false,
+          order: Number(v.sort_order),
+          annual: 0,
+          periodActual: 0,
+          cumulativeActual: 0,
+          periodRetainer: 0,
+          cumulativeRetainer: 0,
+        });
+      }
+    }
+    for (const d of drafts.values()) {
+      d.annual = over(d.code, fy);
+      d.revised = {
+        annual: d.annual,
+        period: over(d.code, wholeMonths(period)),
+        cumulative: cumulative ? over(d.code, wholeMonths(cumulative)) : 0,
+      };
+    }
   }
 
   let hasUnbudgeted = false;
@@ -404,6 +479,7 @@ export async function buildBudgetVsActual(opts: {
         d.periodActual,
         period.fraction,
         splits && period.monthAligned ? d.periodRetainer : null,
+        d.revised?.period,
       ),
       ...(cumulative
         ? {
@@ -412,6 +488,7 @@ export async function buildBudgetVsActual(opts: {
               d.cumulativeActual,
               cumulative.fraction,
               splits && cumulative.monthAligned ? d.cumulativeRetainer : null,
+              d.revised?.cumulative,
             ),
           }
         : {}),
@@ -433,6 +510,7 @@ export async function buildBudgetVsActual(opts: {
       sum((r) => r.period),
       period.fraction,
       splits && period.monthAligned ? sumRetainer((r) => r.period) : null,
+      useRevised ? rows.reduce((t, r) => t + (r.period?.periodBudget ?? 0), 0) : undefined,
     ),
     ...(cumulative
       ? {
@@ -441,6 +519,7 @@ export async function buildBudgetVsActual(opts: {
             sum((r) => r.cumulative),
             cumulative.fraction,
             splits && cumulative.monthAligned ? sumRetainer((r) => r.cumulative) : null,
+            useRevised ? rows.reduce((t, r) => t + (r.cumulative?.periodBudget ?? 0), 0) : undefined,
           ),
         }
       : {}),

@@ -4,6 +4,11 @@ import { useRouter } from "next/navigation";
 import { useId, useState, useTransition } from "react";
 import clsx from "clsx";
 import { money, moneySigned, percent } from "@/lib/format";
+import {
+  UnitemisedRow,
+  withUnitemised,
+  type Unitemised,
+} from "@/components/UnitemisedRow";
 import type { ExpenseDetailLine, ExpenseEntry } from "@/lib/reports/expense-detail";
 
 /**
@@ -42,7 +47,10 @@ export function ExpenseDetailTable({
   periodLabel,
   ytdLabel,
   vendors,
+  unitemised = null,
 }: {
+  /** budget the statement's Overheads line carries that the lines below do not */
+  unitemised?: Unitemised | null;
   lines: ExpenseDetailLine[];
   fy: number;
   /** 'YYYY-MM-01', or null when the period spans more than one month */
@@ -60,7 +68,7 @@ export function ExpenseDetailTable({
   const subhead = "mt-0.5 block text-[10px] font-normal normal-case tracking-normal text-ink-faint";
   const vendorListId = useId();
 
-  const totals = lines.reduce(
+  const rawTotals = lines.reduce(
     (acc, l) => {
       // A deduction line (reimbursement income) subtracts from the total.
       const periodActual = l.isDeduction ? -l.periodActual : l.periodActual;
@@ -75,7 +83,9 @@ export function ExpenseDetailTable({
     },
     { periodBudget: 0, periodActual: 0, ytdBudget: 0, ytdActual: 0, ytdVariance: 0 },
   );
-  const ytdVariancePct = totals.ytdBudget ? (totals.ytdVariance / totals.ytdBudget) * 100 : null;
+  // Added back in so the footer is the statement's own Overheads line.
+  const totals = { ...rawTotals, ...withUnitemised(rawTotals, unitemised) };
+  const ytdVariancePct = totals.ytdVariancePct;
 
   // One group per head, in the order the lines already carry. A group of one
   // line whose label repeats the head (isHeadOnly) has nothing to collapse.
@@ -200,6 +210,7 @@ export function ExpenseDetailTable({
               />
             );
           })}
+          {unitemised && <UnitemisedRow gap={unitemised} extraCells={1} />}
         </tbody>
         <tfoot>
           <tr className="bg-surface-sunk font-semibold">

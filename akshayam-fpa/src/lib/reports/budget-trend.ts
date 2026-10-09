@@ -2,6 +2,7 @@ import { query } from "@/lib/db";
 import { verticalScope, type Entity } from "@/lib/entity";
 import { fyBounds, fyMonths, groupByQuarter, monthsElapsed, type QuarterNo } from "@/lib/period";
 import type { Measure } from "@/lib/reports/budget";
+import { hasRevisedBudget, revisedBudgetForVertical } from "@/lib/reports/scorecard-budget";
 
 /**
  * Budget against actual, laid out as a year's schedule: year to date,
@@ -109,7 +110,7 @@ export async function revenueActualsByMonthParts(
     query<MonthActualRow>(
       `select to_char(t.invoice_date, 'YYYY-MM') as month_key, -sum(t.amount)::numeric as actual
          from revenue_transfer_entries t
-        where t.entity_id = any($1::int[]) and t.invoice_date between $2 and $3
+        where t.entity_id = any($1::int[]) and t.entity_id in (select id from entities where slug = 'akshayam') and t.invoice_date between $2 and $3
           ${verticalScope("$4", "t.vertical_id")}
           and ($5::int is null or t.vertical_id = $5)
         group by 1`,
@@ -172,7 +173,7 @@ async function actualsByMonth(
     query<MonthActualRow>(
       `select to_char(t.invoice_date, 'YYYY-MM') as month_key, -sum(t.amount)::numeric as actual
          from revenue_transfer_entries t
-        where t.entity_id = any($1::int[]) and t.invoice_date between $2 and $3
+        where t.entity_id = any($1::int[]) and t.entity_id in (select id from entities where slug = 'akshayam') and t.invoice_date between $2 and $3
           and lower(coalesce(t.status, '')) = 'paid'
           ${verticalScope("$4", "t.vertical_id")}
           and ($5::int is null or t.vertical_id = $5)
@@ -191,8 +192,15 @@ export async function buildBudgetTrend(opts: {
   verticalId?: number | null;
   /** how far to call the year "to date" - the same ledger cutoff every other report uses */
   asOf: string;
+  /**
+   * Budget each month from the revised quarterly budget (30 Sep 2026) rather
+   * than a flat twelfth of the annual figure, where one exists for the year.
+   * For the Overview only.
+   */
+  revised?: boolean;
 }): Promise<BudgetTrend> {
   const { entity, fyStartYear, measure, verticalId = null, asOf } = opts;
+  const useRevised = !!opts.revised && hasRevisedBudget(fyStartYear);
   const ids = entity.memberIds;
   const { start: fyStart } = fyBounds(fyStartYear, entity.fy_start_month);
   const months = fyMonths(fyStartYear, entity.fy_start_month);
@@ -212,6 +220,25 @@ export async function buildBudgetTrend(opts: {
   const annual = Number(budgetRow[0]?.annual ?? 0);
   const monthlyBudget = annual / 12;
 
+  // Each month's budget is the sum, over the verticals in scope, of that
+  // vertical's revised quarter spread over the month's days.
+  let monthBudgetOf: (m: { start: string; end: string }) => number = () => monthlyBudget;
+  if (useRevised) {
+    const scoped = await query<{ code: string; slug: string }>(
+      `select v.code, e.slug
+         from verticals v join entities e on e.id = v.entity_id
+        where v.entity_id = any($1::int[])
+          and ($2::int[] is null or v.id = any($2::int[]))
+          and ($3::int is null or v.id = $3)`,
+      [ids, entity.verticalIds, verticalId],
+    );
+    monthBudgetOf = (m) =>
+      scoped.reduce((sum, v) => {
+        const b = revisedBudgetForVertical(v.slug, v.code, m.start, m.end);
+        return sum + (b ? (measure === "revenue" ? b.revenue : b.collection) : 0);
+      }, 0);
+  }
+
   const actualByMonth = new Map<string, number>();
   for (const r of actualRows) {
     actualByMonth.set(r.month_key, (actualByMonth.get(r.month_key) ?? 0) + Number(r.actual));
@@ -220,7 +247,7 @@ export async function buildBudgetTrend(opts: {
   const monthRows: TrendMonthRow[] = months.map((m) => ({
     key: m.key,
     label: m.label,
-    cells: cellsOf(monthlyBudget, actualByMonth.get(m.key) ?? 0),
+    cells: cellsOf(monthBudgetOf(m), actualByMonth.get(m.key) ?? 0),
   }));
   const monthRowByKey = new Map(monthRows.map((m) => [m.key, m]));
 
