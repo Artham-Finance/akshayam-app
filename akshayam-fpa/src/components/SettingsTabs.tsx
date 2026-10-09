@@ -20,7 +20,11 @@ const TABS = [
 export function SettingsTabs({ canManageUsers = false }: { canManageUsers?: boolean }) {
   const pathname = usePathname();
   const tabs = canManageUsers
-    ? [...TABS, { href: "/settings/users", label: "People" }]
+    ? [
+        ...TABS,
+        { href: "/settings/users", label: "People" },
+        { href: "/settings/data-checks", label: "Data checks" },
+      ]
     : TABS;
   return (
     <div className="no-print mb-6 flex gap-1 border-b border-line">

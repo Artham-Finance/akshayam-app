@@ -2,12 +2,14 @@ import Link from "next/link";
 import clsx from "clsx";
 import { SetupRequired } from "@/components/SetupRequired";
 import { WeeklyControls } from "@/components/WeeklyControls";
+import { WeeklyReceivables } from "@/components/WeeklyReceivables";
 import { WeeklyRatingsTable } from "@/components/WeeklyRatingsTable";
 import { Card, CardTitle, EmptyState, Notice, PageHeader } from "@/components/ui";
 import { getEntity } from "@/lib/entity";
 import { dateLabel } from "@/lib/format";
 import { getCurrentUser, requireEntityAccess, requireReportAccess } from "@/lib/auth/dal";
 import { buildWeeklyRatings } from "@/lib/reports/weekly-ratings";
+import { buildWeeklyReceivables } from "@/lib/reports/weekly-receivables";
 import {
   WEEKLY_MEASURES,
   WEEKLY_MEASURE_LABEL,
@@ -61,7 +63,10 @@ export default async function WeeklyRatingsPage({
       ? (requestedMeasure as WeeklyMeasure)
       : "revenue";
 
-    const data = await buildWeeklyRatings({ entity, measure, weekEnd });
+    // Receivables is a tab of its own, not a measure a commitment is rated on.
+    const isReceivables = requestedMeasure === "receivables";
+    const data = isReceivables ? null : await buildWeeklyRatings({ entity, measure, weekEnd });
+    const receivables = isReceivables ? await buildWeeklyReceivables({ entity, weekEnd }) : null;
 
     // Whoever may commit: a role that carries the permission, or a team lead
     // signed in to their own vertical's slice.
@@ -70,8 +75,13 @@ export default async function WeeklyRatingsPage({
     const isAdmin = !!user && user.permissions.includes("users.manage");
     const week = weeks.find((w) => w.end === weekEnd)!;
 
-    const tab = (m: WeeklyMeasure) =>
+    const tab = (m: string) =>
       `/weekly-ratings?measure=${m}&week=${weekEnd}&meeting=${meetingDate}`;
+    const tabs: { key: string; label: string }[] = [
+      ...WEEKLY_MEASURES.map((m) => ({ key: m, label: WEEKLY_MEASURE_LABEL[m] })),
+      { key: "receivables", label: "Receivables" },
+    ];
+    const activeTab = isReceivables ? "receivables" : measure;
 
     return (
       <>
@@ -86,33 +96,42 @@ export default async function WeeklyRatingsPage({
               weeks={weeks}
               weekEnd={weekEnd}
               meetingDate={meetingDate}
-              measure={measure}
+              measure={isReceivables ? "receivables" : measure}
             />
           </Card>
 
           <div className="flex flex-wrap gap-2">
-            {WEEKLY_MEASURES.map((m) => (
+            {tabs.map((t) => (
               <Link
-                key={m}
-                href={tab(m)}
+                key={t.key}
+                href={tab(t.key)}
                 className={clsx(
                   "rounded-md border px-3 py-1.5 text-[12.5px] font-medium transition-colors",
-                  m === measure
+                  t.key === activeTab
                     ? "border-navy bg-navy text-ink-invert"
                     : "border-line text-ink-muted hover:border-line-strong hover:text-ink",
                 )}
               >
-                {WEEKLY_MEASURE_LABEL[m]}
+                {t.label}
               </Link>
             ))}
           </div>
 
-          {data.rows.length === 0 ? (
+          {receivables ? (
+            <Card padded={false}>
+              <div className="px-4 pt-4 sm:px-5">
+                <CardTitle hint={`as at ${receivables.arAsOf ? dateLabel(receivables.arAsOf) : "—"}`}>
+                  Receivables — week ended {dateLabel(weekEnd)}
+                </CardTitle>
+              </div>
+              <WeeklyReceivables data={receivables} canCommit={canCommit} />
+            </Card>
+          ) : data && data.rows.length === 0 ? (
             <EmptyState title="Nothing to rate this week">
               No vertical in this view carries a weekly budget, a commitment or activity for the week
               ended {dateLabel(weekEnd)}.
             </EmptyState>
-          ) : (
+          ) : data ? (
             <Card padded={false}>
               <div className="px-4 pt-4 sm:px-5">
                 <CardTitle hint={`${dateLabel(data.weekStart)} - ${dateLabel(data.weekEnd)}`}>
@@ -129,8 +148,35 @@ export default async function WeeklyRatingsPage({
                 arAsOf={data.arAsOf}
               />
             </Card>
-          )}
+          ) : null}
 
+          {receivables ? (
+            <Notice tone="info" title="How to read this">
+              <ul className="ml-4 list-disc space-y-1">
+                <li>
+                  Receivables are read from the latest receivables snapshot on or before the week&rsquo;s
+                  end. A receivable is over 180 days when it is more than 180 days past its due date at
+                  the snapshot.
+                </li>
+                <li>
+                  For each customer over 180 days, write what is committed for the week; it can be edited
+                  until the end of the day it is first keyed. In the weeks that follow, the same row shows
+                  last week&rsquo;s commitment, for the review and follow-up and whether it was achieved.
+                </li>
+                <li>
+                  The top 10 customers are the ten who owe the vertical the most, with their share of the
+                  vertical&rsquo;s receivables and of the whole entity&rsquo;s.
+                </li>
+                <li>
+                  TDS per Zoho is the TDS receivable booked on each invoice raised this financial year. Form
+                  26AS records tax deducted by customer and quarter, not by invoice, so it is compared with
+                  the customer&rsquo;s total over the same stretch: the difference, and whether 26AS reflects
+                  the TDS (Yes when it covers it, Partly when it shows some, No when it shows none). The
+                  follow-up action is yours to write.
+                </li>
+              </ul>
+            </Notice>
+          ) : (
           <Notice tone="info" title="How to read this">
             <ul className="ml-4 list-disc space-y-1">
               <li>
@@ -139,8 +185,8 @@ export default async function WeeklyRatingsPage({
                 figure the week is rated against. Open a row to key or read it.
               </li>
               <li>
-                The commitment freezes at the end of the day it is first keyed. An admin can reopen
-                one for a day. &ldquo;Achieved?&rdquo; and the remarks are said afterwards, so they
+                A commitment can be edited until the end of the day it is first keyed, and freezes
+                then. An admin can reopen one for a day. &ldquo;Achieved?&rdquo; and the remarks are said afterwards, so they
                 stay open.
               </li>
               <li>
@@ -166,6 +212,7 @@ export default async function WeeklyRatingsPage({
               </li>
             </ul>
           </Notice>
+          )}
         </div>
       </>
     );

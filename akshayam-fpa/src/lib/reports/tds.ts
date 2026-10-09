@@ -53,7 +53,7 @@ import { fyMonths, quarterLabel as quarterLabelOf, type QuarterNo } from "@/lib/
  *                        are dropped - the general "TDS Receivable" and the
  *                        current-year "TDS-2627-<CUSTOMER>" ledgers stay.
  */
-const TDS_ACCOUNTS = `
+export const TDS_ACCOUNTS = `
   a.name ~* '^\\s*TDS'
   and a.name !~* 'payable'
   and a.name !~* '(c|s|i)gst'

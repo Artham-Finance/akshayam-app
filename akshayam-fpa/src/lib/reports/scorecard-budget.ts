@@ -146,6 +146,21 @@ export function revisedQuarterlyTable(
   return out;
 }
 
+/**
+ * What the revised budget file says each company's year comes to - typed in once
+ * from the file's own totals ("RBJV" and "Akshayam" rows), so the Data checks
+ * page can tell when a figure on screen, or the table above, no longer agrees.
+ */
+export const REVISED_CONTROL_TOTALS: Record<number, Record<string, number>> = {
+  2026: { rbjv: 63_702_123, akshayam: 15_500_000 },
+};
+
+/** What the revised table holds for a company's year: the sum of every row's four quarters. */
+export function revisedCompanyTotal(fyStartYear: number, companySlug: string): number {
+  const rows = REVISED[fyStartYear]?.byCompany[companySlug] ?? {};
+  return Object.values(rows).reduce((s, q) => s + q[0] + q[1] + q[2] + q[3], 0);
+}
+
 /** Whether a revised quarterly budget is held for the year. */
 export function hasRevisedBudget(fyStartYear: number): boolean {
   return REVISED[fyStartYear] !== undefined;

@@ -277,7 +277,20 @@ export async function resolveVerticals(
       [entityId, rawCode, inserted.rows[0].id],
     );
     ids.set(rawCode, inserted.rows[0].id);
-    created.push(rawCode);
+    // The same code under the other company is usually a stray tag, not a new line
+    // of business - a GIFT in RBJV's books, say. It is still created (the figures
+    // must land somewhere), but the upload says so, so it is looked at at once.
+    const elsewhere = await client.query<{ slug: string }>(
+      `select distinct e.slug
+         from verticals v join entities e on e.id = v.entity_id
+        where upper(v.code) = upper($1) and v.entity_id <> $2 and v.id <> $3`,
+      [rawCode, entityId, inserted.rows[0].id],
+    );
+    created.push(
+      elsewhere.rows.length > 0
+        ? `${rawCode} (the same code already exists under ${elsewhere.rows.map((r) => r.slug).join(" and ")} - check this is not that company's vertical, in Settings → Verticals)`
+        : rawCode,
+    );
   }
 
   return { ids, created };
