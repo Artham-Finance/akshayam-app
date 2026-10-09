@@ -5,6 +5,8 @@ import { query } from "@/lib/db";
 import { fyLabel } from "@/lib/period";
 import { buildScorecard, resolveScorecardScope } from "@/lib/reports/scorecard";
 import { buildScorecardWorkbook } from "@/lib/reports/scorecard-export";
+import { buildApportionmentWorkbook } from "@/lib/reports/apportionment-export";
+import { costApportionmentKeyFor } from "@/lib/reports/vertical-cost-apportionment";
 import { fyMonths } from "@/lib/period";
 import {
   getReportingPeriod,
@@ -115,6 +117,42 @@ export async function GET(request: Request) {
       });
       const buffer = await workbook.xlsx.writeBuffer();
       return spreadsheet(buffer, exportFilename(benchmark.name, "Vertical Performance Scorecard workings"));
+    }
+
+    /* ---------- the vertical-wise P&L after cost apportionment ---------- */
+
+    if (kind === "pnl-apportionment") {
+      // The card is the P&L's; the same per-person grant opens it.
+      if (!user.reportAccess.includes("pnl")) {
+        return NextResponse.json({ error: "You have not been given access to the P&L." }, { status: 403 });
+      }
+      // A team lead's slice sees only its own vertical(s), as on screen - the spread
+      // is still struck across all six, then narrowed.
+      const mine = entity.verticalIds
+        ? new Set(
+            (await getVerticals(entity))
+              .map((v) => costApportionmentKeyFor(v.code))
+              .filter((k): k is string => k !== null),
+          )
+        : null;
+      // A head whose vertical is outside the six (AIF, GIFT, Common...) has no share.
+      const workbook =
+        mine && mine.size === 0
+          ? null
+          : await buildApportionmentWorkbook({
+              entity,
+              fyStartYear: fy,
+              through: end,
+              only: mine,
+            });
+      if (!workbook) {
+        return NextResponse.json(
+          { error: "There is nothing to apportion for this view - the card applies to RBJV's six verticals." },
+          { status: 404 },
+        );
+      }
+      const buffer = await workbook.xlsx.writeBuffer();
+      return spreadsheet(buffer, exportFilename(entity.name, "Vertical P&L after cost apportionment"));
     }
 
     /* ---------- statements ---------- */

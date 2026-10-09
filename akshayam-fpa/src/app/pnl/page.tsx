@@ -359,14 +359,20 @@ export default async function ProfitAndLossPage({
                 <CardTitle hint={`${shownCostApportionment.label} · for VPP`}>
                   Vertical-wise P&amp;L, after cost apportionment
                 </CardTitle>
-                <QuarterTabs
-                  current={quarter}
-                  currentMonth={apportionMonth}
-                  reached={reachedQuarter}
-                  months={months}
-                  writtenTo={writtenTo}
-                  hrefFor={(q, m) => withParams("/pnl", params, { q: `q${q}`, qm: m })}
-                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <DownloadExcel
+                    href="/api/export?kind=pnl-apportionment"
+                    label="Download month-wise (Excel, both ways)"
+                  />
+                  <QuarterTabs
+                    current={quarter}
+                    currentMonth={apportionMonth}
+                    reached={reachedQuarter}
+                    months={months}
+                    writtenTo={writtenTo}
+                    hrefFor={(q, m) => withParams("/pnl", params, { q: `q${q}`, qm: m })}
+                  />
+                </div>
               </div>
               <VerticalCostApportionmentTable
                 data={shownCostApportionment}
