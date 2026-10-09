@@ -25,7 +25,8 @@ export const dynamic = "force-dynamic";
  * MAK meeting (weekly ratings) - the Saturday meeting's commitments and how they landed.
  *
  * Each vertical head commits, before the week begins, what they will bring in:
- * revenue, collection, or receivables recovered, customer by customer. The
+ * revenue or collection, customer by customer - a collection out of the
+ * customers who owe, with their receivables on the same screen. The
  * week is then rated on what was actually achieved against that commitment, on
  * the Vertical Performance Scorecard's own bands, beside the weekly budget, the
  * ledger's actual, and the vertical's scorecard for the quarter. The amounts
@@ -125,6 +126,7 @@ export default async function WeeklyRatingsPage({
                 meetingDate={meetingDate}
                 canCommit={canCommit}
                 isAdmin={isAdmin}
+                arAsOf={data.arAsOf}
               />
             </Card>
           )}
@@ -143,15 +145,12 @@ export default async function WeeklyRatingsPage({
               </li>
               <li>
                 Weekly budget is the revised quarterly budget (30 Sep 2026), a third of it for each
-                month, spread over the days of the month; collection is 108% of it. Receivables has
-                no budget - the commitment is the target.
+                month, spread over the days of the month; collection is 108% of it.
               </li>
               <li>
                 {measure === "revenue"
                   ? "Actual revenue is the ledger's Revenue from Operations for the vertical in the week, the same figure the Revenue tab's Actual is made of. Under each customer, what they were billed."
-                  : measure === "collection"
-                    ? "Actual collection is fee receipts allocated to the vertical in the week. Under each customer, what they paid."
-                    : "Recovered is what the customers named in the commitment actually paid in the week, against the overdue the head committed to recover."}
+                  : "Actual collection is fee receipts allocated to the vertical in the week. A collection is committed out of what customers owe: the picker lists the customers on the receivables snapshot with what each owes, and the Receivable outstanding column is the vertical's total. Under each customer, what they paid."}
               </li>
               <li>
                 Both weekly ratings are 0-4 on the Vertical Performance Scorecard&rsquo;s bands,
@@ -160,9 +159,7 @@ export default async function WeeklyRatingsPage({
                 undertook to achieve (the committed amount &divide; the weekly budget), so it is
                 there from the moment the commitment is keyed. <strong>Based on actuals</strong>{" "}
                 rates what was achieved (the actual &divide; the weekly budget), and is there every
-                week, committed or not. For Receivables, which has no budget, the commitment is the
-                target: there is no rating on commitments, and the rating on actuals is the amount
-                recovered &divide; the amount committed.
+                week, committed or not.
               </li>
               <li>
                 <strong>% of commitment achieved</strong> is the actual &divide; the committed amount.

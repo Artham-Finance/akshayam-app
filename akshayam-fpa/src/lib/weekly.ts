@@ -13,13 +13,12 @@ export const WEEKLY_FIRST_WEEK_END = "2026-10-03";
 /** the last week offered: the one ending on the last Saturday of the financial year, plus the one after */
 const WEEKLY_LAST_WEEK_END = "2027-04-03";
 
-export const WEEKLY_MEASURES = ["revenue", "collection", "receivables"] as const;
+export const WEEKLY_MEASURES = ["revenue", "collection"] as const;
 export type WeeklyMeasure = (typeof WEEKLY_MEASURES)[number];
 
 export const WEEKLY_MEASURE_LABEL: Record<WeeklyMeasure, string> = {
   revenue: "Revenue",
   collection: "Collection",
-  receivables: "Receivables",
 };
 
 const DAY = 86_400_000;
