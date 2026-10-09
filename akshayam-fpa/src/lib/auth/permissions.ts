@@ -22,6 +22,7 @@ export const PERMISSIONS = [
   "accounts.map",
   "verticals.manage",
   "expenses.record",
+  "weekly.commit",
   "users.manage",
   "entities.manage",
 ] as const;
@@ -35,6 +36,7 @@ const CONTRIBUTOR: Permission[] = [
   "accounts.map",
   "verticals.manage",
   "expenses.record",
+  "weekly.commit",
 ];
 
 // Removing an upload takes its rows with it, so it sits with the admin. A

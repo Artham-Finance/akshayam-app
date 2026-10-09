@@ -2,6 +2,7 @@ import { query } from "@/lib/db";
 import { getVerticals, listAllEntities, type Entity } from "@/lib/entity";
 import { fyMonths, type QuarterNo } from "@/lib/period";
 import { buildBudgetVsActual } from "@/lib/reports/budget";
+import { scorecardBudgetFor, scorecardBudgetSource } from "@/lib/reports/scorecard-budget";
 import { buildVerticalCostApportionment } from "@/lib/reports/vertical-cost-apportionment";
 import {
   MGMT_APPRAISAL_DEFAULT,
@@ -163,6 +164,12 @@ export interface ScorecardResult {
   cumulative: boolean;
   window: { start: string; end: string; months: number; label: string };
   arAsOf: string | null;
+  /**
+   * Where the budgets rated against come from: the revised quarterly budget
+   * (named, for the note on the page), or null when the usual annual budgets
+   * were read.
+   */
+  revisedBudgetSource: string | null;
   rows: ScorecardRow[];
 }
 
@@ -209,6 +216,13 @@ export async function buildScorecard(opts: {
   const quartersInRange = (
     pickedMonth ? [pickedMonth.quarter] : cumulative ? [1, 2, 3, 4].filter((q) => q <= quarter) : [quarter]
   ) as QuarterNo[];
+
+  // The companies in scope, by slug - the revised budget is held per company.
+  const companySlugs = (
+    await query<{ slug: string }>("select slug from entities where id = any($1::int[])", [
+      entity.memberIds,
+    ])
+  ).map((r) => r.slug);
 
   const [revenueBva, collectionBva, apportionments, ageingRows] = await Promise.all([
     buildBudgetVsActual({
@@ -302,9 +316,16 @@ export async function buildScorecard(opts: {
   type Draft = ScorecardRow & { _hasData: boolean };
   const drafts: Draft[] = ROWS.map((def) => {
     const rev = def.codes.reduce((s, c) => s + (revByCode.get(c)?.period.actual ?? 0), 0);
-    const revBud = def.codes.reduce((s, c) => s + (revByCode.get(c)?.period.periodBudget ?? 0), 0);
+    // The revised quarterly budget, where there is one for the year - for this
+    // scorecard only; every other report keeps the budgets already loaded.
+    const revised = scorecardBudgetFor(fyStartYear, companySlugs, def.code, months);
+    const revBud =
+      revised?.revenue ??
+      def.codes.reduce((s, c) => s + (revByCode.get(c)?.period.periodBudget ?? 0), 0);
     const coll = def.codes.reduce((s, c) => s + (collByCode.get(c)?.period.actual ?? 0), 0);
-    const collBud = def.codes.reduce((s, c) => s + (collByCode.get(c)?.period.periodBudget ?? 0), 0);
+    const collBud =
+      revised?.collection ??
+      def.codes.reduce((s, c) => s + (collByCode.get(c)?.period.periodBudget ?? 0), 0);
 
     // Cost = the vertical's direct + apportioned cost, from the same engine as
     // the P&L's cost apportionment card. One of the six reads its row there;
@@ -423,5 +444,12 @@ export async function buildScorecard(opts: {
       };
     });
 
-  return { quarter, cumulative, window, arAsOf, rows };
+  return {
+    quarter,
+    cumulative,
+    window,
+    arAsOf,
+    revisedBudgetSource: scorecardBudgetSource(fyStartYear),
+    rows,
+  };
 }
