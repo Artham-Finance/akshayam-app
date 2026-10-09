@@ -125,6 +125,27 @@ export function weeklyBudgetFor(
   return any ? { revenue, collection: revenue * COLLECTION_BUDGET_RATIO } : null;
 }
 
+/** Whether a revised quarterly budget is held for the year. */
+export function hasRevisedBudget(fyStartYear: number): boolean {
+  return REVISED[fyStartYear] !== undefined;
+}
+
+/**
+ * The revised budget for a ledger vertical in a company over any date range -
+ * the Overview's budget. The scorecard names AIF and GIFT as one row, so both
+ * read that row; every other vertical reads its own, so a company's verticals
+ * add up to the revised file's total for it.
+ */
+export function revisedBudgetForVertical(
+  companySlug: string,
+  verticalCode: string,
+  start: string,
+  end: string,
+): ScorecardBudget | null {
+  const rowCode = verticalCode === "AIF" || verticalCode === "GIFT" ? "AIF_GIFT" : verticalCode;
+  return weeklyBudgetFor(companySlug, rowCode, start, end);
+}
+
 /** The note for the page, or null where the year has no revised table. */
 export function scorecardBudgetSource(fyStartYear: number): string | null {
   return REVISED[fyStartYear]?.source ?? null;
