@@ -78,7 +78,7 @@ export async function POST(request: Request) {
     // The tab is a per-person grant like the other report pages; without it the
     // person has no business writing to it either.
     if (!user.reportAccess.includes("weekly")) {
-      return fail("You have not been given access to Weekly ratings.", 403);
+      return fail("You have not been given access to the MAK meeting.", 403);
     }
     const entity = await getEntity();
     const isAdmin = roleCan(user.role, "users.manage");

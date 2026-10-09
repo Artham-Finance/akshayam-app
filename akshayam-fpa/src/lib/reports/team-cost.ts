@@ -358,7 +358,28 @@ export async function buildTeamCost(opts: {
   // In scope, not just the picker list - so the group sees both companies'
   // verticals and a slice (RAJA) sees the two it is cut from.
   const verticals = await getVerticalsInScope(entity);
-  if (verticals.every((v) => !TEAM_COST_ANNUAL_BUDGET[v.code])) {
+
+  /**
+   * A budget table belongs to a company: GIFT's is Akshayam's, every other code's
+   * is RBJV's. A vertical of the same code sitting under the other company - a
+   * stray GIFT tag in RBJV's books - is not that company's, and must not pick
+   * up its budget: Akshayam's team cost is on Akshayam's statement, and would
+   * only make RBJV's card add up to a figure RBJV's statement does not carry.
+   */
+  const companyOf = new Map(
+    (
+      await query<{ id: number; slug: string }>(
+        `select v.id, e.slug from verticals v join entities e on e.id = v.entity_id
+          where v.id = any($1::int[])`,
+        [verticals.map((v) => v.id)],
+      )
+    ).map((r) => [r.id, r.slug]),
+  );
+  const hasBudget = (v: { id: number; code: string }) =>
+    !!TEAM_COST_ANNUAL_BUDGET[v.code] &&
+    companyOf.get(v.id) === (v.code === "GIFT" ? "akshayam" : "rbjv");
+
+  if (verticals.every((v) => !hasBudget(v))) {
     return {
       hasData: false,
       monthsInPeriod,
@@ -450,15 +471,15 @@ export async function buildTeamCost(opts: {
   // either window - so the whole-company total always ties to the statement.
   const shown = verticals.filter(
     (v) =>
-      TEAM_COST_ANNUAL_BUDGET[v.code] ||
+      hasBudget(v) ||
       TEAM_ROLES.some(
         ({ key }) => periodActualBy.has(`${v.id}|${key}`) || ytdActualBy.has(`${v.id}|${key}`),
       ),
   );
 
   const verticalScopes: TeamCostScope[] = shown.map((v) => {
-    const table = TEAM_COST_ANNUAL_BUDGET[v.code] ?? {};
-    const monthly = TEAM_COST_MONTHLY_BUDGET[v.code] ?? {};
+    const table = hasBudget(v) ? (TEAM_COST_ANNUAL_BUDGET[v.code] ?? {}) : {};
+    const monthly = hasBudget(v) ? (TEAM_COST_MONTHLY_BUDGET[v.code] ?? {}) : {};
     const roles: TeamCostRoleLine[] = TEAM_ROLES.map(({ key, label, hint, budgetKeys }) => {
       // Each workbook row is spread on its own schedule where one is known,
       // otherwise on the statement's curve.

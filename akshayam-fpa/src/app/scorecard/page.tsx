@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import clsx from "clsx";
 import { SetupRequired } from "@/components/SetupRequired";
-import { Card, CardTitle, EmptyState, Notice, PageHeader } from "@/components/ui";
+import { Card, CardTitle, DownloadExcel, EmptyState, Notice, PageHeader } from "@/components/ui";
 import { RatingScaleCard } from "@/components/RatingScaleCard";
 import { getAvailableFinancialYears, getEntity } from "@/lib/entity";
 import { moneySigned, percent, scaled, scaleLabel, type Scale } from "@/lib/format";
@@ -306,6 +306,17 @@ export default async function ScorecardPage({
             ledgerAsOfLabel(writtenTo) ? ` · ${ledgerAsOfLabel(writtenTo)}` : ""
           }`}
           actions={
+            <div className="flex flex-wrap items-center gap-2">
+              <DownloadExcel
+                href={`/api/export?${new URLSearchParams({
+                  kind: "scorecard",
+                  fy: String(fy),
+                  q: String(q),
+                  basis: cumulative ? "cumulative" : "quarter",
+                  ...(month ? { m: month } : {}),
+                }).toString()}`}
+                label="Download workings (Excel, Rs)"
+              />
             <ScorecardControls
               financialYears={availableYears}
               currentFy={fy}
@@ -321,6 +332,7 @@ export default async function ScorecardPage({
               currentScale={scale}
               alwaysShowMonths={singleVertical}
             />
+            </div>
           }
         />
 

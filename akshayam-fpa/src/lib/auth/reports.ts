@@ -19,7 +19,7 @@ export const REPORT_LABEL: Record<ReportCode, string> = {
   revenue: "Revenue",
   receivables: "Receivables",
   collections: "Collections",
-  weekly: "Weekly ratings",
+  weekly: "MAK meeting",
   scorecard: "Vertical Performance Scorecard",
 };
 

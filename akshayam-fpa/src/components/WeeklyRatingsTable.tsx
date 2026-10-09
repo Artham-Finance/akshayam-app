@@ -49,23 +49,24 @@ export function WeeklyRatingsTable({
   meetingDate,
   canCommit,
   isAdmin,
-  quarterLabel,
+  arAsOf,
 }: {
   rows: WeeklyRow[];
-  measure: "revenue" | "collection" | "receivables";
+  measure: "revenue" | "collection";
   weekEnd: string;
   meetingDate: string;
   canCommit: boolean;
   isAdmin: boolean;
-  quarterLabel: string;
+  /** the receivables snapshot a collection is committed out of */
+  arAsOf: string | null;
 }) {
   const [open, setOpen] = useState<number | null>(null);
   const head =
     "border-y border-line px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-faint";
   const cell = "border-b border-line px-3 py-2";
-  const actualLabel = measure === "revenue" ? "Actual revenue (GL)" : measure === "collection" ? "Actual collection" : "Recovered from committed";
-  const committedLabel =
-    measure === "revenue" ? "Revenue committed" : measure === "collection" ? "Collection committed" : "Overdue to recover";
+  const actualLabel = measure === "revenue" ? "Actual revenue (GL)" : "Actual collection";
+  const committedLabel = measure === "revenue" ? "Revenue committed" : "Collection committed";
+  const showReceivable = measure === "collection";
 
   return (
     <div className="table-frame">
@@ -74,11 +75,14 @@ export function WeeklyRatingsTable({
           <tr>
             <th scope="col" className={clsx(head, "text-left")}>Vertical</th>
             <th scope="col" className={clsx(head, "text-right")}>Weekly budget</th>
+            {showReceivable && (
+              <th scope="col" className={clsx(head, "text-right")}>Receivable outstanding</th>
+            )}
             <th scope="col" className={clsx(head, "text-right")}>{committedLabel}</th>
-            <th scope="col" className={clsx(head, "text-center")}>Weekly rating</th>
+            <th scope="col" className={clsx(head, "text-center")}>Weekly rating based on commitments</th>
             <th scope="col" className={clsx(head, "text-right")}>{actualLabel}</th>
-            <th scope="col" className={clsx(head, "text-right")}>% of commitment</th>
-            <th scope="col" className={clsx(head, "text-center")}>Scorecard {quarterLabel}</th>
+            <th scope="col" className={clsx(head, "text-right")}>% of commitment achieved</th>
+            <th scope="col" className={clsx(head, "text-center")}>Weekly rating based on actuals</th>
             <th scope="col" className={clsx(head, "text-center")}>Achieved?</th>
             <th scope="col" className={head} />
           </tr>
@@ -100,18 +104,28 @@ export function WeeklyRatingsTable({
                   <td className={clsx(cell, "num text-right text-ink-muted")}>
                     {row.budget === null ? "—" : money(row.budget)}
                   </td>
+                  {showReceivable && (
+                    <td className={clsx(cell, "num text-right text-ink-muted")}>
+                      {row.receivableTotal ? money(row.receivableTotal) : "—"}
+                      {row.receivableOverdue > 0 && (
+                        <span className="block text-[10.5px] text-caution">
+                          {money(row.receivableOverdue)} overdue
+                        </span>
+                      )}
+                    </td>
+                  )}
                   <td className={clsx(cell, "num text-right text-ink")}>
                     {row.hasCommitment ? money(row.committed) : <span className="text-ink-faint">not keyed</span>}
                   </td>
                   <td className={clsx(cell, "text-center")}>
-                    <Rating value={row.rating} />
+                    <Rating value={row.commitmentRating} />
                   </td>
                   <td className={clsx(cell, "num text-right text-ink")}>{money(row.actual)}</td>
                   <td className={clsx(cell, "num text-right text-ink-muted")}>
                     {row.pctOfCommitment === null ? "—" : percent(row.pctOfCommitment * 100, 0)}
                   </td>
-                  <td className={clsx(cell, "num text-center text-ink-muted")}>
-                    {row.quarterComposite === null ? "—" : row.quarterComposite.toFixed(2)}
+                  <td className={clsx(cell, "text-center")}>
+                    <Rating value={row.actualRating} />
                   </td>
                   <td className={clsx(cell, "text-center text-ink")}>
                     {row.achieved ? ACHIEVED_LABEL[row.achieved] : <span className="text-ink-faint">—</span>}
@@ -128,7 +142,7 @@ export function WeeklyRatingsTable({
                 </tr>
                 {isOpen && (
                   <tr>
-                    <td colSpan={9} className="border-b border-line bg-surface-sunk/30 px-3 py-3 sm:px-6">
+                    <td colSpan={showReceivable ? 10 : 9} className="border-b border-line bg-surface-sunk/30 px-3 py-3 sm:px-6">
                       <CommitmentPanel
                         row={row}
                         measure={measure}
@@ -136,6 +150,7 @@ export function WeeklyRatingsTable({
                         meetingDate={meetingDate}
                         canCommit={canCommit}
                         isAdmin={isAdmin}
+                        arAsOf={arAsOf}
                       />
                     </td>
                   </tr>
@@ -161,13 +176,15 @@ function CommitmentPanel({
   meetingDate,
   canCommit,
   isAdmin,
+  arAsOf,
 }: {
   row: WeeklyRow;
-  measure: "revenue" | "collection" | "receivables";
+  measure: "revenue" | "collection";
   weekEnd: string;
   meetingDate: string;
   canCommit: boolean;
   isAdmin: boolean;
+  arAsOf: string | null;
 }) {
   const router = useRouter();
   const listId = useId();
@@ -184,6 +201,12 @@ function CommitmentPanel({
   const [remarks, setRemarks] = useState(row.remarks ?? "");
 
   const editable = canCommit && !row.locked;
+  // A collection is committed out of what customers owe, so the picker is the
+  // customers on the receivables snapshot and shows what each owes. With no
+  // snapshot for the vertical it falls back to its invoiced customers.
+  const fromReceivables = measure === "collection" && row.receivableCustomers.length > 0;
+  const owesOf = (customer: string) =>
+    row.receivableCustomers.find((c) => c.customer.trim().toLowerCase() === customer.trim().toLowerCase()) ?? null;
   const field =
     "rounded-md border border-line bg-surface px-2 py-1 text-[12px] text-ink placeholder:text-ink-faint";
 
@@ -251,6 +274,26 @@ function CommitmentPanel({
         </p>
       )}
 
+      {measure === "collection" && (
+        <p className="text-[12px] text-ink-muted">
+          {fromReceivables ? (
+            <>
+              Collections are committed out of what customers owe:{" "}
+              <span className="num font-medium text-ink">{money(row.receivableTotal)}</span> is outstanding
+              {row.receivableOverdue > 0 && (
+                <>
+                  , <span className="num font-medium text-caution">{money(row.receivableOverdue)}</span> of it
+                  overdue
+                </>
+              )}
+              {arAsOf ? ` (receivables as at ${arAsOf})` : ""}.
+            </>
+          ) : (
+            "No receivables are on file for this vertical, so any invoiced customer can be picked."
+          )}
+        </p>
+      )}
+
       {editable ? (
         <div className="space-y-2">
           <datalist id={listId}>
@@ -262,25 +305,56 @@ function CommitmentPanel({
             <thead>
               <tr className="text-ink-faint">
                 <th scope="col" className="px-1 py-1 text-left font-medium">Customer</th>
+                {fromReceivables && (
+                  <th scope="col" className="px-1 py-1 text-right font-medium">Owes</th>
+                )}
                 <th scope="col" className="px-1 py-1 text-right font-medium">Amount committed</th>
                 <th scope="col" className="px-1 py-1" />
               </tr>
             </thead>
             <tbody>
-              {lines.map((l, i) => (
+              {lines.map((l, i) => {
+                const owed = fromReceivables ? owesOf(l.customer) : null;
+                const amount = Number(l.amount.replace(/[,\s₹]/g, ""));
+                const over = owed !== null && Number.isFinite(amount) && amount > owed.outstanding;
+                return (
                 <tr key={i}>
                   <td className="px-1 py-1">
-                    <input
-                      value={l.customer}
-                      onChange={(e) =>
-                        setLines((cur) => cur.map((x, j) => (j === i ? { ...x, customer: e.target.value } : x)))
-                      }
-                      list={listId}
-                      placeholder="Pick or type a customer"
-                      className={clsx(field, "w-full")}
-                      aria-label="Customer"
-                    />
+                    {fromReceivables ? (
+                      <select
+                        value={l.customer}
+                        onChange={(e) =>
+                          setLines((cur) => cur.map((x, j) => (j === i ? { ...x, customer: e.target.value } : x)))
+                        }
+                        className={clsx(field, "w-full")}
+                        aria-label="Customer"
+                      >
+                        <option value="">Pick a customer who owes…</option>
+                        {row.receivableCustomers.map((c) => (
+                          <option key={c.customer} value={c.customer}>
+                            {c.customer} — owes {money(c.outstanding)}
+                            {c.overdue > 0 ? ` (${money(c.overdue)} overdue)` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        value={l.customer}
+                        onChange={(e) =>
+                          setLines((cur) => cur.map((x, j) => (j === i ? { ...x, customer: e.target.value } : x)))
+                        }
+                        list={listId}
+                        placeholder="Pick or type a customer"
+                        className={clsx(field, "w-full")}
+                        aria-label="Customer"
+                      />
+                    )}
                   </td>
+                  {fromReceivables && (
+                    <td className="num px-1 py-1 text-right text-ink-muted">
+                      {owed ? money(owed.outstanding) : "—"}
+                    </td>
+                  )}
                   <td className="px-1 py-1">
                     <input
                       value={l.amount}
@@ -289,9 +363,14 @@ function CommitmentPanel({
                       }
                       inputMode="decimal"
                       placeholder="0"
-                      className={clsx(field, "num w-36 text-right")}
+                      className={clsx(field, "num w-36 text-right", over && "border-caution")}
                       aria-label="Amount"
                     />
+                    {over && (
+                      <span className="mt-0.5 block text-right text-[10.5px] text-caution">
+                        more than they owe
+                      </span>
+                    )}
                   </td>
                   <td className="px-1 py-1 text-right">
                     {lines.length > 1 && (
@@ -306,7 +385,8 @@ function CommitmentPanel({
                     )}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
             <tfoot>
               <tr className="font-semibold text-ink">
@@ -319,6 +399,7 @@ function CommitmentPanel({
                     + Add a customer
                   </button>
                 </td>
+                {fromReceivables && <td />}
                 <td className="num px-1 py-1.5 text-right">{money(draftTotal)}</td>
                 <td />
               </tr>
@@ -349,6 +430,9 @@ function CommitmentPanel({
           <thead>
             <tr className="text-ink-faint">
               <th scope="col" className="px-1 py-1 text-left font-medium">Customer</th>
+              {measure === "collection" && (
+                <th scope="col" className="px-1 py-1 text-right font-medium">Owed</th>
+              )}
               <th scope="col" className="px-1 py-1 text-right font-medium">Committed</th>
               <th scope="col" className="px-1 py-1 text-right font-medium">
                 {measure === "revenue" ? "Billed in the week" : "Received in the week"}
@@ -359,6 +443,11 @@ function CommitmentPanel({
             {row.lines.map((l, i) => (
               <tr key={i} className="text-ink">
                 <td className="border-t border-line px-1 py-1.5">{l.customer}</td>
+                {measure === "collection" && (
+                  <td className="num border-t border-line px-1 py-1.5 text-right text-ink-muted">
+                    {l.outstanding === null ? "—" : money(l.outstanding)}
+                  </td>
+                )}
                 <td className="num border-t border-line px-1 py-1.5 text-right">{money(l.amount)}</td>
                 <td className="num border-t border-line px-1 py-1.5 text-right text-ink-muted">{money(l.actual)}</td>
               </tr>
@@ -367,6 +456,7 @@ function CommitmentPanel({
           <tfoot>
             <tr className="font-semibold text-ink">
               <td className="border-t border-line-strong px-1 py-1.5">Total</td>
+              {measure === "collection" && <td className="border-t border-line-strong" />}
               <td className="num border-t border-line-strong px-1 py-1.5 text-right">{money(row.committed)}</td>
               <td className="num border-t border-line-strong px-1 py-1.5 text-right">
                 {money(row.lines.reduce((s, l) => s + l.actual, 0))}

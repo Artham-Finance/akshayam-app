@@ -91,7 +91,7 @@ export function scorecardBudgetFor(
 
 /**
  * The revised budget for one vertical over a week (Sunday to Saturday) - the
- * Weekly ratings screen's budget. A month is a third of its quarter, and a day
+ * MAK meeting screen's budget. A month is a third of its quarter, and a day
  * is its month's share by calendar days, so a week that straddles two months
  * takes each month's rate for the days it spends in it. Collection is 108% of
  * revenue, as on the scorecard. Null where the year has no revised table.
@@ -123,6 +123,27 @@ export function weeklyBudgetFor(
     revenue += quarters[quarter] / 3 / daysInMonth;
   }
   return any ? { revenue, collection: revenue * COLLECTION_BUDGET_RATIO } : null;
+}
+
+/**
+ * The revised quarterly revenue budget by scorecard row, for the companies in
+ * scope (summed where more than one holds the same row - Raja's AIF and GIFT),
+ * or null where the year has no revised table. For the Scorecard's workbook.
+ */
+export function revisedQuarterlyTable(
+  fyStartYear: number,
+  companySlugs: string[],
+): Record<string, Quarters> | null {
+  const revised = REVISED[fyStartYear];
+  if (!revised) return null;
+  const out: Record<string, Quarters> = {};
+  for (const slug of companySlugs) {
+    for (const [rowCode, q] of Object.entries(revised.byCompany[slug] ?? {})) {
+      const cur = out[rowCode] ?? [0, 0, 0, 0];
+      out[rowCode] = [cur[0] + q[0], cur[1] + q[1], cur[2] + q[2], cur[3] + q[3]];
+    }
+  }
+  return out;
 }
 
 /** Whether a revised quarterly budget is held for the year. */
