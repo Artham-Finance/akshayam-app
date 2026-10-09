@@ -98,15 +98,18 @@ const FALLBACK_ROLE: TeamRole = "external_consultant";
  * that has no block at all) carry a nil budget. Figures are whole rupees; VPP
  * was rounded from the workbook's paise-level values.
  *
- * The RBJV columns come to 2,47,11,831 (V8) - the figure budget_pnl holds for
+ * The RBJV columns come to 2,35,11,831 (V8) - the figure budget_pnl holds for
  * RBJV's direct_cost for FY 2026-27: the vertical sheets' professional fees
- * 1,46,13,716 (a team lead, trainees and, for DLR and HRCM, a consultant) plus
- * VPP 76,98,115 plus Common's consultancy charges 24,00,000. V8 carries no
+ * 1,34,13,716 (a team lead, trainees and, for DLR, its consultant - HRCM's
+ * consultant was taken out of V8) plus VPP 76,98,115 plus Common's consultancy
+ * charges 24,00,000, which stays here as an external consultant and not in
+ * overheads. External consultant is therefore DLR 4,16,667 + Common 2,00,000 a
+ * month, 6,16,667 in all. V8 carries no
  * salary budget in RBJV's team cost, so Employee / trainee salaries read nil
  * where the ledger posts them. GIFT (Akshayam) adds 28,81,931 on top -
  * Professional fee 8,31,600 + Salaries and Stipend 9,27,240 + VPP 11,23,091,
  * "4 - Akshayam Monthly"'s own figures (V8) - which is also what budget_pnl
- * holds for Akshayam, so the Group ties to 2,75,93,762. AIF is deliberately nil - the workbook carries a
+ * holds for Akshayam, so the Group ties to 2,63,93,762. AIF is deliberately nil - the workbook carries a
  * zero column for it.
  */
 export const TEAM_COST_ANNUAL_BUDGET: Record<
@@ -122,7 +125,7 @@ export const TEAM_COST_ANNUAL_BUDGET: Record<
   AIF: {},
   // DSC and support - Vaithy is the team lead; no budget agreed, so nil.
   DSC: {},
-  HRCM: { team_lead: 352800, external_consultant: 1200000, vpp: 200000, employee: 120000 },
+  HRCM: { team_lead: 352800, vpp: 200000, employee: 120000 },
   ACC: { team_lead: 554400, vpp: 800000, trainee: 623280 },
   COMMON: {
     team_lead: 138600,

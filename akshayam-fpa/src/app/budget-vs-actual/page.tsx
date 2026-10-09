@@ -6,6 +6,12 @@ import { ReimbursementsTable } from "@/components/ReimbursementsTable";
 import { TeamCostTable } from "@/components/TeamCostTable";
 import { SetupRequired } from "@/components/SetupRequired";
 import {
+  UNITEMISED_HINT,
+  UNITEMISED_LABEL,
+  unitemisedGap,
+  type Unitemised,
+} from "@/components/UnitemisedRow";
+import {
   Card,
   CardTitle,
   CompanyOnly,
@@ -247,6 +253,60 @@ export default async function BudgetVsActualPage({
      * sub-line of its own (its actual is one keyed-in figure, not postings
      * to itemise), so it carries no entry here.
      */
+    /**
+     * The breakup cards must add up to the statement line above them. Where a
+     * breakup's budget is not the statement's - the plan was re-uploaded and a
+     * breakup behind it is out of date, or a line was never itemised - the
+     * difference is carried as its own "Not itemised in the plan" row, so the
+     * card and the line are never two different figures for one cost.
+     */
+    const statementBudgetOf = (code: BvaCode) => {
+      const line = statement?.lines.find((l) => l.code === code);
+      if (!line) return null;
+      const over = (ms: typeof months) => ms.reduce((s, m) => s + (line.budget[m.key] ?? 0), 0);
+      return { periodBudget: over(periodMonths), ytdBudget: over(ytdMonths) };
+    };
+    const teamGap =
+      !isSlice && teamCost.hasData
+        ? unitemisedGap(statementBudgetOf("direct_cost"), teamCost.company)
+        : null;
+    const establishmentGap =
+      !isSlice && !isAkshayam && establishment?.hasData
+        ? unitemisedGap(statementBudgetOf("establishment_cost"), establishment.totals)
+        : null;
+    const overheadsGap =
+      !isSlice && !isAkshayam && expenseDetail?.hasDetail
+        ? unitemisedGap(statementBudgetOf("overheads"), expenseDetail.totals)
+        : null;
+    // Akshayam's breakups sit inline on the statement, each from its own source.
+    const akshayamEstablishmentGap =
+      isAkshayam && akshayamEstablishment
+        ? unitemisedGap(statementBudgetOf("establishment_cost"), akshayamEstablishment.totals)
+        : null;
+    const akshayamOverheadsGap =
+      isAkshayam && akshayamOtherExpenses
+        ? unitemisedGap(statementBudgetOf("overheads"), akshayamOtherExpenses.totals)
+        : null;
+    const gapLine = (gap: Unitemised | null) =>
+      gap
+        ? [
+            {
+              label: UNITEMISED_LABEL,
+              hint: UNITEMISED_HINT,
+              periodBudget: gap.periodBudget,
+              periodActual: 0,
+              ytdBudget: gap.ytdBudget,
+              ytdActual: 0,
+              entries: [],
+            },
+          ]
+        : [];
+    const gapNotes = [
+      teamGap && "Team cost",
+      (establishmentGap || akshayamEstablishmentGap) && "Establishment cost",
+      (overheadsGap || akshayamOverheadsGap) && "Overheads",
+    ].filter((n): n is string => !!n);
+
     const canEditActuals = await can("expenses.record");
     const editableMonthKey = periodMonths.length === 1 ? periodMonths[0].key : null;
     const detail: Partial<Record<BvaCode, StatementDetailLine[]>> | undefined = isAkshayam
@@ -296,6 +356,16 @@ export default async function BudgetVsActualPage({
           })),
         }
       : undefined;
+    // The same rule on Akshayam's inline breakups: each carries what the
+    // statement budgets that its own lines do not.
+    if (detail) {
+      detail.direct_cost = [...(detail.direct_cost ?? []), ...gapLine(teamGap)];
+      detail.establishment_cost = [
+        ...(detail.establishment_cost ?? []),
+        ...gapLine(akshayamEstablishmentGap),
+      ];
+      detail.overheads = [...(detail.overheads ?? []), ...gapLine(akshayamOverheadsGap)];
+    }
     // Every other company's budget never carries this group code, so the row
     // would only ever read nil - left off their statement rather than shown
     // empty.
@@ -366,6 +436,18 @@ export default async function BudgetVsActualPage({
             </Notice>
           )}
 
+          {gapNotes.length > 0 && (
+            <Notice
+              tone="caution"
+              title={`${gapNotes.join(", ")}: the breakup does not add up to the statement`}
+            >
+              The budget under the statement line is not the same figure as the line itself. The
+              difference is shown as &ldquo;{UNITEMISED_LABEL}&rdquo; so the breakup still adds up to
+              the line above it. It usually means the planning workbook has been re-uploaded and the
+              breakup behind it has not caught up - the budget behind each card is the thing to check.
+            </Notice>
+          )}
+
           {notYetPosted.length > 0 && (
             <Notice
               tone="info"
@@ -415,6 +497,7 @@ export default async function BudgetVsActualPage({
               </div>
               <TeamCostTable
                 result={teamCost}
+                unitemised={teamGap}
                 periodLabel={periodColumnLabel}
                 ytdLabel={ytdLabel}
               />
@@ -428,6 +511,7 @@ export default async function BudgetVsActualPage({
               </div>
               <EstablishmentCostTable
                 result={establishment}
+                unitemised={establishmentGap}
                 periodLabel={periodColumnLabel}
                 ytdLabel={ytdLabel}
               />
@@ -485,6 +569,7 @@ export default async function BudgetVsActualPage({
               </div>
               <ExpenseDetailTable
                 lines={expenseDetail.lines}
+                unitemised={overheadsGap}
                 fy={fy}
                 month={editableMonth}
                 vendors={expenseDetail.vendors}

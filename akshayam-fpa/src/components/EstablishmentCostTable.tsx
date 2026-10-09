@@ -3,6 +3,11 @@
 import { useState } from "react";
 import clsx from "clsx";
 import { dateLabel, money, moneySigned, percent } from "@/lib/format";
+import {
+  UnitemisedRow,
+  withUnitemised,
+  type Unitemised,
+} from "@/components/UnitemisedRow";
 import type { EstablishmentLine, EstablishmentResult } from "@/lib/reports/establishment-detail";
 
 /**
@@ -20,7 +25,10 @@ export function EstablishmentCostTable({
   ytdLabel,
   caption,
   totalLabel = "Establishment cost",
+  unitemised = null,
 }: {
+  /** budget the statement's line carries that the lines below do not */
+  unitemised?: Unitemised | null;
   result: EstablishmentResult;
   /** short label for the period columns, e.g. "This month" or "Jul 26" */
   periodLabel: string;
@@ -36,7 +44,8 @@ export function EstablishmentCostTable({
   const head =
     "border-y border-line px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-faint";
   const subhead = "mt-0.5 block text-[10px] font-normal normal-case tracking-normal text-ink-faint";
-  const { totals } = result;
+  const foot = withUnitemised(result.totals, unitemised);
+  const totals = { ...result.totals, ...foot };
 
   return (
     <div className="table-frame">
@@ -91,6 +100,7 @@ export function EstablishmentCostTable({
               }
             />
           ))}
+          {unitemised && <UnitemisedRow gap={unitemised} />}
         </tbody>
         <tfoot>
           <tr className="bg-surface-sunk font-semibold">

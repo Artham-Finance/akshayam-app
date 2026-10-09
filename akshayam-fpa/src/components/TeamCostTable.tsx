@@ -3,6 +3,11 @@
 import { useMemo, useState } from "react";
 import clsx from "clsx";
 import { dateLabel, money, moneySigned, percent } from "@/lib/format";
+import {
+  UnitemisedRow,
+  withUnitemised,
+  type Unitemised,
+} from "@/components/UnitemisedRow";
 import type {
   TeamCostResult,
   TeamCostRoleLine,
@@ -25,8 +30,11 @@ export function TeamCostTable({
   result,
   periodLabel,
   ytdLabel,
+  unitemised = null,
 }: {
   result: TeamCostResult;
+  /** budget the statement's Team cost line carries that the roles below do not - whole company only */
+  unitemised?: Unitemised | null;
   /** short label for the period columns, e.g. "This month" or "Jul 26" */
   periodLabel: string;
   /** short label for the YTD columns, e.g. "to 27 Aug 26" */
@@ -41,6 +49,8 @@ export function TeamCostTable({
   }, [scopeCode, result]);
 
   const isCompany = scope.verticalId === null;
+  const gap = isCompany ? unitemised : null;
+  const foot = withUnitemised(scope, gap);
   const head =
     "border-y border-line px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-faint";
   const subhead = "mt-0.5 block text-[10px] font-normal normal-case tracking-normal text-ink-faint";
@@ -122,6 +132,7 @@ export function TeamCostTable({
               }
             />
           ))}
+          {gap && <UnitemisedRow gap={gap} />}
         </tbody>
         <tfoot>
           <tr className="bg-surface-sunk font-semibold">
@@ -129,13 +140,13 @@ export function TeamCostTable({
               Team cost — {scope.name}
             </th>
             <td className="num border-y border-line-strong px-3 py-2 text-right">
-              {money(scope.periodBudget)}
+              {money(foot.periodBudget)}
             </td>
             <td className="num border-y border-line-strong px-3 py-2 text-right">
               {money(scope.periodActual)}
             </td>
             <td className="num border-y border-line-strong px-3 py-2 text-right">
-              {money(scope.ytdBudget)}
+              {money(foot.ytdBudget)}
             </td>
             <td className="num border-y border-line-strong px-3 py-2 text-right">
               {money(scope.ytdActual)}
@@ -143,20 +154,20 @@ export function TeamCostTable({
             <td
               className={clsx(
                 "num border-y border-line-strong px-3 py-2 text-right",
-                scope.ytdVariance < 0 ? "text-negative" : "text-positive",
+                foot.ytdVariance < 0 ? "text-negative" : "text-positive",
               )}
             >
-              {moneySigned(scope.ytdVariance)}
+              {moneySigned(foot.ytdVariance)}
             </td>
             <td
               className={clsx(
                 "num border-y border-line-strong px-3 py-2 text-right",
-                scope.ytdVariancePct !== null && scope.ytdVariancePct < 0
+                foot.ytdVariancePct !== null && foot.ytdVariancePct < 0
                   ? "text-negative"
                   : "text-positive",
               )}
             >
-              {scope.ytdVariancePct === null ? "—" : percent(scope.ytdVariancePct)}
+              {foot.ytdVariancePct === null ? "—" : percent(foot.ytdVariancePct)}
             </td>
           </tr>
         </tfoot>
