@@ -6,7 +6,7 @@
  * client component, needs the same codes and labels to filter its tabs.
  */
 
-export const REPORT_CODES = ["pnl", "revenue", "receivables", "collections", "scorecard"] as const;
+export const REPORT_CODES = ["pnl", "revenue", "receivables", "collections", "weekly", "scorecard"] as const;
 
 export type ReportCode = (typeof REPORT_CODES)[number];
 
@@ -19,6 +19,7 @@ export const REPORT_LABEL: Record<ReportCode, string> = {
   revenue: "Revenue",
   receivables: "Receivables",
   collections: "Collections",
+  weekly: "Weekly ratings",
   scorecard: "Vertical Performance Scorecard",
 };
 
@@ -28,6 +29,7 @@ export const REPORT_HREF: Record<ReportCode, string> = {
   revenue: "/revenue",
   receivables: "/receivables",
   collections: "/collections",
+  weekly: "/weekly-ratings",
   scorecard: "/scorecard",
 };
 

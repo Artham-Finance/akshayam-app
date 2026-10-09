@@ -6,7 +6,7 @@ import { WeeklyRatingsTable } from "@/components/WeeklyRatingsTable";
 import { Card, CardTitle, EmptyState, Notice, PageHeader } from "@/components/ui";
 import { getEntity } from "@/lib/entity";
 import { dateLabel } from "@/lib/format";
-import { getCurrentUser, requireEntityAccess } from "@/lib/auth/dal";
+import { getCurrentUser, requireEntityAccess, requireReportAccess } from "@/lib/auth/dal";
 import { buildWeeklyRatings } from "@/lib/reports/weekly-ratings";
 import {
   WEEKLY_MEASURES,
@@ -37,6 +37,7 @@ export default async function WeeklyRatingsPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   await requireEntityAccess();
+  await requireReportAccess("weekly");
   const params = await searchParams;
   const pick = (v: string | string[] | undefined) => (typeof v === "string" ? v : null);
 

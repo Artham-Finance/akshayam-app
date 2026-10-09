@@ -75,6 +75,11 @@ export async function POST(request: Request) {
   const fail = (error: string, status = 400) => NextResponse.json({ error }, { status });
 
   try {
+    // The tab is a per-person grant like the other report pages; without it the
+    // person has no business writing to it either.
+    if (!user.reportAccess.includes("weekly")) {
+      return fail("You have not been given access to Weekly ratings.", 403);
+    }
     const entity = await getEntity();
     const isAdmin = roleCan(user.role, "users.manage");
     const canCommit = roleCan(user.role, "weekly.commit") || entity.verticalIds !== null;
