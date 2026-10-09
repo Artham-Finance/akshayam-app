@@ -156,6 +156,12 @@ export function hasRevisedBudget(fyStartYear: number): boolean {
  * the Overview's budget. The scorecard names AIF and GIFT as one row, so both
  * read that row; every other vertical reads its own, so a company's verticals
  * add up to the revised file's total for it.
+ *
+ * A budget belongs to a company's own vertical. The row is the sum of RBJV's AIF
+ * and Akshayam's GIFT, so a vertical coded GIFT that sits under RBJV (a stray tag
+ * in its books) must not read it - it would take RBJV's AIF budget a second time,
+ * and the code would then be read against the wrong company. Such a vertical has
+ * no budget of its own.
  */
 export function revisedBudgetForVertical(
   companySlug: string,
@@ -163,6 +169,8 @@ export function revisedBudgetForVertical(
   start: string,
   end: string,
 ): ScorecardBudget | null {
+  if (verticalCode === "GIFT" && companySlug !== "akshayam") return null;
+  if (verticalCode === "AIF" && companySlug !== "rbjv") return null;
   const rowCode = verticalCode === "AIF" || verticalCode === "GIFT" ? "AIF_GIFT" : verticalCode;
   return weeklyBudgetFor(companySlug, rowCode, start, end);
 }

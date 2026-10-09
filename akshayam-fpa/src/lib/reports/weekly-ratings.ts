@@ -1,7 +1,7 @@
 import { query } from "@/lib/db";
 import { getVerticalsInScope, type Entity } from "@/lib/entity";
 import { ROWS, scorecardRowCodeFor } from "@/lib/reports/scorecard";
-import { weeklyBudgetFor } from "@/lib/reports/scorecard-budget";
+import { revisedBudgetForVertical } from "@/lib/reports/scorecard-budget";
 import { addDays, isLocked, ratingVsBudget, todayIst, type WeeklyMeasure } from "@/lib/weekly";
 
 /**
@@ -314,7 +314,9 @@ export async function buildWeeklyRatings(opts: {
         : [];
       const committed = lines.reduce((s, l) => s + l.amount, 0);
       const actual = actualByVertical.get(v.id) ?? 0;
-      const weeklyBudget = weeklyBudgetFor(slugOf.get(v.id) ?? "", rowCode, weekStart, weekEnd);
+      // By the vertical's own company, so a stray same-coded vertical under the
+      // other company takes no budget (see revisedBudgetForVertical).
+      const weeklyBudget = revisedBudgetForVertical(slugOf.get(v.id) ?? "", v.code, weekStart, weekEnd);
       const budget = !weeklyBudget
         ? null
         : measure === "revenue"
