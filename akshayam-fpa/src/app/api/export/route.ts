@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { getAvailableFinancialYears, getEntity, getVerticals } from "@/lib/entity";
 import { apiGuard } from "@/lib/auth/dal";
+import { query } from "@/lib/db";
+import { fyLabel } from "@/lib/period";
+import { buildScorecard, resolveScorecardScope } from "@/lib/reports/scorecard";
+import { buildScorecardWorkbook } from "@/lib/reports/scorecard-export";
 import { fyMonths } from "@/lib/period";
 import {
   getReportingPeriod,
@@ -32,7 +36,7 @@ export const runtime = "nodejs";
 const DRILL_KINDS: DrillKind[] = ["collections", "receivables", "revenue"];
 
 export async function GET(request: Request) {
-  const { denied } = await apiGuard("reports.export");
+  const { user, denied } = await apiGuard("reports.export");
   if (denied) return denied;
 
   const url = new URL(request.url);
@@ -60,6 +64,58 @@ export async function GET(request: Request) {
     const requestedVertical = Number(url.searchParams.get("vertical"));
     const verticalId =
       Number.isFinite(requestedVertical) && requestedVertical > 0 ? requestedVertical : null;
+
+    /* ---------- the Vertical Performance Scorecard ---------- */
+
+    if (kind === "scorecard") {
+      // The same per-person grant that opens the page.
+      if (!user.reportAccess.includes("scorecard")) {
+        return NextResponse.json({ error: "You have not been given access to the Scorecard." }, { status: 403 });
+      }
+      // A team lead's slice is struck across the company it is cut from, and
+      // sees just their own rows - exactly as on screen.
+      const { isSlice, benchmark, visibleCodes } = await resolveScorecardScope(entity);
+      const years = await getAvailableFinancialYears(benchmark.memberIds);
+      const requestedFy = Number(url.searchParams.get("fy"));
+      const scFy = years.includes(requestedFy) ? requestedFy : (years[0] ?? fy);
+      const scMonths = fyMonths(scFy, benchmark.fy_start_month);
+      const reached = ledgerWrittenTo ? await ledgerWrittenTo(benchmark.memberIds, scFy) : null;
+      const reachedMonths = scMonths.filter((m) => m.start <= (reached ?? scMonths[11].end));
+      const latestQuarter = reachedMonths.at(-1)?.quarter ?? 1;
+      const requestedQ = Number(url.searchParams.get("q"));
+      const quarter = ([1, 2, 3, 4].includes(requestedQ) ? requestedQ : latestQuarter) as 1 | 2 | 3 | 4;
+      const cumulative = url.searchParams.get("basis") !== "quarter";
+      const requestedMonth = url.searchParams.get("m");
+      const scMonth =
+        scMonths.find((m) => m.key === requestedMonth && m.quarter === quarter)?.key ?? null;
+
+      const data = await buildScorecard({
+        entity: benchmark,
+        fyStartYear: scFy,
+        quarter,
+        cumulative,
+        month: scMonth,
+      });
+      const shown = isSlice && visibleCodes ? data.rows.filter((r) => visibleCodes.has(r.code)) : data.rows;
+      const slugs = (
+        await query<{ slug: string }>("select slug from entities where id = any($1::int[])", [
+          benchmark.memberIds,
+        ])
+      ).map((r) => r.slug);
+
+      const workbook = buildScorecardWorkbook({
+        entityName: benchmark.name,
+        fyLabel: fyLabel(scFy),
+        data,
+        shown,
+        isPartial: isSlice,
+        fyStartYear: scFy,
+        companySlugs: slugs,
+        cumulativeNote: !scMonth && cumulative && quarter > 1 ? " (cumulative)" : "",
+      });
+      const buffer = await workbook.xlsx.writeBuffer();
+      return spreadsheet(buffer, exportFilename(benchmark.name, "Vertical Performance Scorecard workings"));
+    }
 
     /* ---------- statements ---------- */
 

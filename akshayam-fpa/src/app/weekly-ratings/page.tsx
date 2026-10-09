@@ -22,7 +22,7 @@ import {
 export const dynamic = "force-dynamic";
 
 /**
- * Weekly ratings - the Saturday meeting's commitments and how they landed.
+ * MAK meeting (weekly ratings) - the Saturday meeting's commitments and how they landed.
  *
  * Each vertical head commits, before the week begins, what they will bring in:
  * revenue, collection, or receivables recovered, customer by customer. The
@@ -75,7 +75,7 @@ export default async function WeeklyRatingsPage({
     return (
       <>
         <PageHeader
-          title="Weekly ratings"
+          title="MAK meeting"
           subtitle={`${entity.name} · ${week.label} · meeting of ${dateLabel(meetingDate)}`}
         />
 
@@ -125,7 +125,6 @@ export default async function WeeklyRatingsPage({
                 meetingDate={meetingDate}
                 canCommit={canCommit}
                 isAdmin={isAdmin}
-                quarterLabel={data.quarterLabel}
               />
             </Card>
           )}
@@ -155,10 +154,18 @@ export default async function WeeklyRatingsPage({
                     : "Recovered is what the customers named in the commitment actually paid in the week, against the overdue the head committed to recover."}
               </li>
               <li>
-                The weekly rating is 0-4 on the Scorecard&rsquo;s bands for actual against what was
-                committed: 4 at 100% or more, 3 above 80%, 2 above 60%, 1 above 40%, otherwise 0.
-                The scorecard figure is the vertical&rsquo;s composite for the quarter the week
-                falls in.
+                Both weekly ratings are 0-4 on the Vertical Performance Scorecard&rsquo;s bands,
+                measured against the weekly budget: 4 at 100% or more, 3 above 80%, 2 above 60%, 1
+                above 40%, otherwise 0. <strong>Based on commitments</strong> rates what the head
+                undertook to achieve (the committed amount &divide; the weekly budget), so it is
+                there from the moment the commitment is keyed. <strong>Based on actuals</strong>{" "}
+                rates what was achieved (the actual &divide; the weekly budget), and is there every
+                week, committed or not. For Receivables, which has no budget, the commitment is the
+                target: there is no rating on commitments, and the rating on actuals is the amount
+                recovered &divide; the amount committed.
+              </li>
+              <li>
+                <strong>% of commitment achieved</strong> is the actual &divide; the committed amount.
               </li>
             </ul>
           </Notice>

@@ -1,25 +1,27 @@
 import { query } from "@/lib/db";
 import { getVerticalsInScope, type Entity } from "@/lib/entity";
-import { fyMonths } from "@/lib/period";
-import {
-  buildScorecard,
-  resolveScorecardScope,
-  ROWS,
-  scorecardRowCodeFor,
-} from "@/lib/reports/scorecard";
+import { ROWS, scorecardRowCodeFor } from "@/lib/reports/scorecard";
 import { weeklyBudgetFor } from "@/lib/reports/scorecard-budget";
-import { addDays, isLocked, todayIst, weeklyRating, type WeeklyMeasure } from "@/lib/weekly";
+import {
+  addDays,
+  isLocked,
+  ratingVsBudget,
+  todayIst,
+  weeklyRating,
+  type WeeklyMeasure,
+} from "@/lib/weekly";
 
 /**
- * The Weekly ratings screen's figures, for one week and one measure.
+ * The MAK meeting screen's figures, for one week and one measure.
  *
  * Each vertical's head commits an amount before the week begins, customer by
- * customer; the week is then rated on what was actually achieved against that
- * commitment, on the Vertical Performance Scorecard's own bands. Nothing here
- * is stored but the commitment itself - the budget is the revised quarterly
- * budget spread over the week's days, the actual is read from the ledger, the
- * payments and the invoices every time, and the quarter's scorecard is struck
- * by the scorecard's own builder so the two never disagree.
+ * customer. Two ratings, both on the Vertical Performance Scorecard's own bands
+ * (4 at 100% of budget or more, then over 80%, 60%, 40%): one on what was
+ * committed against the weekly budget - how ambitious the head's undertaking
+ * is - and one on what was actually achieved against that same budget. Nothing
+ * here is stored but the commitment itself - the budget is the revised
+ * quarterly budget spread over the week's days, and the actual is read from the
+ * ledger, the payments and the invoices every time.
  *
  * The three measures:
  *  - Revenue: the ledger's revenue for the vertical in the week (the figure the
@@ -28,7 +30,8 @@ import { addDays, isLocked, todayIst, weeklyRating, type WeeklyMeasure } from "@
  *    108% of the weekly revenue budget.
  *  - Receivables: how much of the committed overdue was actually recovered -
  *    what was received in the week from the customers named in the commitment.
- *    There is no budget behind it; the commitment is the target.
+ *    There is no budget behind it, so the commitment is the target: there is no
+ *    rating on the commitment, and the rating on actuals is recovered against it.
  */
 
 export interface WeeklyLine {
@@ -51,7 +54,10 @@ export interface WeeklyRow {
   actual: number;
   /** actual as a fraction of the commitment, or null where nothing was committed */
   pctOfCommitment: number | null;
-  rating: number | null;
+  /** the commitment rated against the weekly budget - what the head undertook */
+  commitmentRating: number | null;
+  /** the actual rated against the weekly budget (against the commitment, for receivables) */
+  actualRating: number | null;
   achieved: "yes" | "partly" | "no" | null;
   remarks: string | null;
   meetingDate: string | null;
@@ -59,8 +65,6 @@ export interface WeeklyRow {
   /** the amounts can no longer be changed (the outcome still can) */
   locked: boolean;
   reopenedOn: string | null;
-  /** the vertical's composite for the quarter the week falls in, from the scorecard */
-  quarterComposite: number | null;
   /** customers a line can be picked from */
   customers: string[];
 }
@@ -69,7 +73,6 @@ export interface WeeklyRatingsResult {
   measure: WeeklyMeasure;
   weekStart: string;
   weekEnd: string;
-  quarterLabel: string;
   today: string;
   rows: WeeklyRow[];
 }
@@ -235,21 +238,6 @@ export async function buildWeeklyRatings(opts: {
     }
   }
 
-  // ---- the quarter's scorecard, for the figure beside the week ----
-  const year = Number(weekEnd.slice(0, 4));
-  const month = Number(weekEnd.slice(5, 7));
-  const fy = month >= 4 ? year : year - 1;
-  const fyMonth = fyMonths(fy).find((m) => m.key === weekEnd.slice(0, 7));
-  const quarter = fyMonth?.quarter ?? 1;
-  const compositeByRow = new Map<string, number>();
-  try {
-    const { benchmark } = await resolveScorecardScope(entity);
-    const card = await buildScorecard({ entity: benchmark, fyStartYear: fy, quarter, cumulative: false });
-    for (const r of card.rows) compositeByRow.set(r.code, r.composite);
-  } catch {
-    // the scorecard is a companion figure; the week is still worth showing without it
-  }
-
   const duplicateRowCodes = new Set(
     candidates
       .map((c) => c.rowCode)
@@ -295,14 +283,15 @@ export async function buildWeeklyRatings(opts: {
         lines,
         actual,
         pctOfCommitment: committed > 0 ? actual / committed : null,
-        rating: weeklyRating(actual, committed),
+        commitmentRating: measure === "receivables" ? null : ratingVsBudget(committed, budget),
+        actualRating:
+          measure === "receivables" ? weeklyRating(actual, committed) : ratingVsBudget(actual, budget),
         achieved: commit?.achieved ?? null,
         remarks: commit?.remarks ?? null,
         meetingDate: commit?.meeting_date ?? null,
         enteredOn: commit?.entered_on ?? null,
         locked: commit ? isLocked(commit.entered_on, commit.reopened_on, today) : false,
         reopenedOn: commit?.reopened_on ?? null,
-        quarterComposite: compositeByRow.get(rowCode) ?? null,
         customers: customersByVertical.get(v.id) ?? [],
         budgeted,
       };
@@ -322,7 +311,6 @@ export async function buildWeeklyRatings(opts: {
     measure,
     weekStart,
     weekEnd,
-    quarterLabel: `Q${quarter}`,
     today,
     rows,
   };

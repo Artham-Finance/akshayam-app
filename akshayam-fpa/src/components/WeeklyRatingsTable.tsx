@@ -49,7 +49,6 @@ export function WeeklyRatingsTable({
   meetingDate,
   canCommit,
   isAdmin,
-  quarterLabel,
 }: {
   rows: WeeklyRow[];
   measure: "revenue" | "collection" | "receivables";
@@ -57,7 +56,6 @@ export function WeeklyRatingsTable({
   meetingDate: string;
   canCommit: boolean;
   isAdmin: boolean;
-  quarterLabel: string;
 }) {
   const [open, setOpen] = useState<number | null>(null);
   const head =
@@ -75,10 +73,10 @@ export function WeeklyRatingsTable({
             <th scope="col" className={clsx(head, "text-left")}>Vertical</th>
             <th scope="col" className={clsx(head, "text-right")}>Weekly budget</th>
             <th scope="col" className={clsx(head, "text-right")}>{committedLabel}</th>
-            <th scope="col" className={clsx(head, "text-center")}>Weekly rating</th>
+            <th scope="col" className={clsx(head, "text-center")}>Weekly rating based on commitments</th>
             <th scope="col" className={clsx(head, "text-right")}>{actualLabel}</th>
-            <th scope="col" className={clsx(head, "text-right")}>% of commitment</th>
-            <th scope="col" className={clsx(head, "text-center")}>Scorecard {quarterLabel}</th>
+            <th scope="col" className={clsx(head, "text-right")}>% of commitment achieved</th>
+            <th scope="col" className={clsx(head, "text-center")}>Weekly rating based on actuals</th>
             <th scope="col" className={clsx(head, "text-center")}>Achieved?</th>
             <th scope="col" className={head} />
           </tr>
@@ -104,14 +102,14 @@ export function WeeklyRatingsTable({
                     {row.hasCommitment ? money(row.committed) : <span className="text-ink-faint">not keyed</span>}
                   </td>
                   <td className={clsx(cell, "text-center")}>
-                    <Rating value={row.rating} />
+                    <Rating value={row.commitmentRating} />
                   </td>
                   <td className={clsx(cell, "num text-right text-ink")}>{money(row.actual)}</td>
                   <td className={clsx(cell, "num text-right text-ink-muted")}>
                     {row.pctOfCommitment === null ? "—" : percent(row.pctOfCommitment * 100, 0)}
                   </td>
-                  <td className={clsx(cell, "num text-center text-ink-muted")}>
-                    {row.quarterComposite === null ? "—" : row.quarterComposite.toFixed(2)}
+                  <td className={clsx(cell, "text-center")}>
+                    <Rating value={row.actualRating} />
                   </td>
                   <td className={clsx(cell, "text-center text-ink")}>
                     {row.achieved ? ACHIEVED_LABEL[row.achieved] : <span className="text-ink-faint">—</span>}

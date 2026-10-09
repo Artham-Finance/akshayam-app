@@ -5,7 +5,7 @@ import { rateBudgetAchievement } from "@/lib/reports/scorecard-rating";
  * page, the API and a script can all read the same ones.
  *
  * A week runs Sunday to Saturday and is named by the Saturday it ends on, the
- * day of the weekly meeting. Weekly ratings start with the first week that ends
+ * day of the weekly meeting. The MAK meeting starts with the first week that ends
  * in October 2026; nothing before it is offered.
  */
 
@@ -96,7 +96,17 @@ export function isLocked(enteredOn: string, reopenedOn: string | null, today: st
 }
 
 /**
- * The weekly rating: what was actually achieved against what was committed, on
+ * A figure rated against the weekly budget, on the Vertical Performance
+ * Scorecard's bands: 100% or more is 4, over 80% is 3, over 60% is 2, over 40%
+ * is 1, otherwise 0. Null where there is no budget to measure against.
+ */
+export function ratingVsBudget(value: number, budget: number | null): number | null {
+  if (budget === null || !(budget > 0)) return null;
+  return rateBudgetAchievement(value / budget);
+}
+
+/**
+ * What was actually achieved against what was committed, on
  * the Vertical Performance Scorecard's own bands (4 at 100% or more, then
  * above 80%, 60%, 40%). Null where nothing was committed - there is nothing to
  * rate against.
