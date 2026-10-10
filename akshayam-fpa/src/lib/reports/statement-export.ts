@@ -1,4 +1,4 @@
-import type { Entity } from "@/lib/entity";
+import { getVerticals, type Entity } from "@/lib/entity";
 import { fyLabel, fyMonths, groupByQuarter, quarterLabel, type FyMonth } from "@/lib/period";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
 import { buildEstablishmentDetail } from "@/lib/reports/establishment-detail";
@@ -56,6 +56,8 @@ function statementSheet(
     aggregate: "sum" | "closing";
     /** lines whose own aggregation differs, e.g. opening and closing cash */
     perLine?: boolean;
+    /** the heading of the closing column, where "FY Total" is not what it is */
+    totalLabel?: string;
   },
 ): SheetSpec {
   const { months } = statement;
@@ -68,7 +70,11 @@ function statementSheet(
       header: quarterLabel(q.quarter, months),
       type: "money" as const,
     })),
-    { header: opts.aggregate === "closing" ? "Year end" : "FY Total", type: "money", strong: true },
+    {
+      header: opts.totalLabel ?? (opts.aggregate === "closing" ? "Year end" : "FY Total"),
+      type: "money",
+      strong: true,
+    },
   ];
 
   const combine = (
@@ -138,15 +144,58 @@ export async function buildStatementWorkbook(opts: {
   if (verticalName) context.push(verticalName);
 
   if (kind === "pnl") {
-    const statement = await buildProfitAndLoss({ entity, fyStartYear, verticalId, window });
-    addSheet(workbook, {
-      ...statementSheet(statement, {
-        name: "Profit and Loss",
-        title: "Profit and Loss",
-        context,
-        aggregate: "sum",
-      }),
-    });
+    /*
+      A pack: the company's consolidated P&L on the first sheet, then one sheet for
+      each vertical - every month in its own column, then each quarter's total, then
+      the year-to-date total, in rupees as the ledger has them. It is the same
+      statement the page shows, struck once for the company and once per vertical,
+      so the vertical sheets add up to the consolidated one (less any cost not
+      tagged to a vertical, which sits in the consolidated figure only).
+
+      The pack does not depend on the page's vertical picker: whichever vertical is
+      on screen, the file carries all of them. A group has no verticals of its own
+      to list, so it gets the one consolidated sheet; a team lead's slice gets its
+      own verticals.
+    */
+    const verticals = await getVerticals(entity);
+    const partial = (statement: StatementResult) => statement.months.length < 12;
+    const totalLabel = (statement: StatementResult) => (partial(statement) ? "YTD total" : "FY total");
+    const short = entity.name.split(/[\s&]/)[0] || entity.name;
+
+    // A vertical head's login holds one vertical: its consolidated figure is that
+    // vertical's own sheet, so it is not written twice.
+    const single = entity.verticalIds !== null && verticals.length === 1;
+    if (!single) {
+      const consolidated = await buildProfitAndLoss({ entity, fyStartYear, verticalId: null, window });
+      addSheet(workbook, {
+        ...statementSheet(consolidated, {
+          name: `${short} consolidated`,
+          title: `Profit and Loss - ${short} consolidated`,
+          context: [entity.name, periodLabel ?? fyLabel(fyStartYear), "all verticals", "in rupees"],
+          aggregate: "sum",
+          totalLabel: totalLabel(consolidated),
+        }),
+      });
+    }
+
+    for (const v of verticals) {
+      const statement = await buildProfitAndLoss({ entity, fyStartYear, verticalId: v.id, window });
+      // A vertical with nothing in the period has no P&L to read - left out rather
+      // than adding an empty sheet.
+      const active = statement.lines.some((l) =>
+        statement.months.some((m) => Math.abs(l.values[m.key] ?? 0) >= 0.5),
+      );
+      if (!active && !single) continue;
+      addSheet(workbook, {
+        ...statementSheet(statement, {
+          name: `${v.code} ${v.name}`,
+          title: `Profit and Loss - ${v.name}`,
+          context: [entity.name, periodLabel ?? fyLabel(fyStartYear), v.name, "in rupees"],
+          aggregate: "sum",
+          totalLabel: totalLabel(statement),
+        }),
+      });
+    }
     return workbook;
   }
 

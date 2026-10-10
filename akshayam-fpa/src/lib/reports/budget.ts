@@ -374,7 +374,10 @@ export async function buildBudgetVsActual(opts: {
         (!entity.verticalIds || entity.verticalIds.includes(v.id)) &&
         (verticalId === null || v.id === verticalId),
     );
-    const slugOf = new Map(verticals.map((v) => [v.code, v.slug]));
+    // A code can sit under both companies (a stray GIFT in RBJV's books), so a
+    // code reads every company that holds it - each vertical only its own budget.
+    const slugsOf = new Map<string, string[]>();
+    for (const v of verticals) slugsOf.set(v.code, [...(slugsOf.get(v.code) ?? []), v.slug]);
     const wholeMonths = (w: BudgetWindow) => {
       if (!w.monthAligned) return { start: w.start, end: w.end };
       const [y, m] = w.end.split("-").map(Number);
@@ -385,10 +388,11 @@ export async function buildBudgetVsActual(opts: {
       };
     };
     const over = (code: string | null, w: { start: string; end: string }) => {
-      const slug = code ? slugOf.get(code) : undefined;
-      if (!code || !slug) return 0;
-      const b = revisedBudgetForVertical(slug, code, w.start, w.end);
-      return b ? (measure === "revenue" ? b.revenue : b.collection) : 0;
+      if (!code) return 0;
+      return (slugsOf.get(code) ?? []).reduce((sum, slug) => {
+        const b = revisedBudgetForVertical(slug, code, w.start, w.end);
+        return sum + (b ? (measure === "revenue" ? b.revenue : b.collection) : 0);
+      }, 0);
     };
     const fy = { start: `${fyStartYear}-04-01`, end: `${fyStartYear + 1}-03-31` };
     // A vertical the revised budget carries but the old table did not still gets a row.

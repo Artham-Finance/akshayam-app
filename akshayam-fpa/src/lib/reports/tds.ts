@@ -53,7 +53,7 @@ import { fyMonths, quarterLabel as quarterLabelOf, type QuarterNo } from "@/lib/
  *                        are dropped - the general "TDS Receivable" and the
  *                        current-year "TDS-2627-<CUSTOMER>" ledgers stay.
  */
-const TDS_ACCOUNTS = `
+export const TDS_ACCOUNTS = `
   a.name ~* '^\\s*TDS'
   and a.name !~* 'payable'
   and a.name !~* '(c|s|i)gst'
@@ -66,7 +66,7 @@ const TDS_ACCOUNTS = `
  *   2. the customer named in a "TDS-2627-<CUSTOMER>" ledger
  *   3. the line's own description, which Zoho fills with the customer name
  */
-const BOOKS_CUSTOMER = `
+export const BOOKS_CUSTOMER = `
   coalesce(
     inv.customer_name,
     nullif(btrim(g.description), ''),
@@ -276,7 +276,7 @@ export async function buildTdsReco({
            select i.customer_name, i.vertical_id
              from invoice_lines i
             where i.entity_id = g.entity_id and i.invoice_number = g.txn_number
-            limit 1
+            order by i.id limit 1
          ) inv on true
         where g.entity_id = any($1::int[])
           and g.txn_date between $2 and $3
@@ -460,7 +460,7 @@ export async function buildTdsReco({
                select i.customer_name, i.vertical_id, i.invoice_date
                  from invoice_lines i
                 where i.entity_id = g.entity_id and i.invoice_number = g.txn_number
-                limit 1
+                order by i.id limit 1
              ) inv on true
              left join verticals v on v.id = coalesce(inv.vertical_id, g.vertical_id)
             where g.entity_id = any($1::int[])
@@ -504,7 +504,7 @@ export async function buildTdsReco({
        join accounts a on a.id = g.account_id
        left join lateral (
          select i.vertical_id from invoice_lines i
-          where i.entity_id = g.entity_id and i.invoice_number = g.txn_number limit 1
+          where i.entity_id = g.entity_id and i.invoice_number = g.txn_number order by i.id limit 1
        ) inv on true
       where g.entity_id = any($1::int[])
         and g.txn_date between $2 and $3
@@ -653,7 +653,7 @@ export async function buildTdsRecoExport(
          select i.customer_name, i.vertical_id, i.invoice_date
            from invoice_lines i
           where i.entity_id = g.entity_id and i.invoice_number = g.txn_number
-          limit 1
+          order by i.id limit 1
        ) inv on true
        left join verticals v on v.id = coalesce(inv.vertical_id, g.vertical_id)
       where g.entity_id = any($1::int[])
@@ -858,7 +858,7 @@ export async function tdsDrill(
        join accounts a on a.id = g.account_id
        left join lateral (
          select i.customer_name from invoice_lines i
-          where i.entity_id = g.entity_id and i.invoice_number = g.txn_number limit 1
+          where i.entity_id = g.entity_id and i.invoice_number = g.txn_number order by i.id limit 1
        ) inv on true
       where g.entity_id = any($1::int[])
         and g.txn_date between $2 and $3
