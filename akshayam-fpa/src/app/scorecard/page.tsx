@@ -10,7 +10,8 @@ import { ledgerAsOfLabel, ledgerWrittenTo } from "@/lib/reporting-period";
 import {
   buildScorecard,
   resolveScorecardScope,
-  ROWS,
+  scorecardCompanySlugs,
+  scorecardRowsFor,
   WEIGHTS,
   MGMT_APPRAISAL_DEFAULT,
   type ScorecardRow,
@@ -97,9 +98,11 @@ export default async function ScorecardPage({
     // A partner picking one team lead's row from the picker below, to read it
     // the way that TL would - a slice's own login already narrows to its own
     // row without one, so the picker is not offered there.
+    // The rows as this company reads them: Raja's is AIF on RBJV's, GIFT on Akshayam's.
+    const rowDefs = scorecardRowsFor(await scorecardCompanySlugs(benchmark));
     const requestedVertical = typeof params.v === "string" ? params.v : null;
     const pickedCode =
-      !isSlice && ROWS.some((r) => r.code === requestedVertical) ? requestedVertical : null;
+      !isSlice && rowDefs.some((r) => r.code === requestedVertical) ? requestedVertical : null;
 
     const data = await buildScorecard({
       entity: benchmark,
@@ -159,7 +162,7 @@ export default async function ScorecardPage({
           )
         : null;
 
-    const targetLabel = targetCode ? (ROWS.find((r) => r.code === targetCode)?.label ?? targetCode) : "";
+    const targetLabel = targetCode ? (rowDefs.find((r) => r.code === targetCode)?.label ?? targetCode) : "";
     const zeroRow = (code: string, label: string): ScorecardRow => ({
       code,
       label,
@@ -171,6 +174,7 @@ export default async function ScorecardPage({
       collectionAchievement: null,
       directCost: 0,
       apportionedCost: 0,
+      financeCost: 0,
       cost: 0,
       contributionRevenue: 0,
       revenueContribution: 0,
@@ -265,6 +269,7 @@ export default async function ScorecardPage({
     const collActTot = sum((r) => r.collectionActual);
     const directCostTot = sum((r) => r.directCost);
     const apportCostTot = sum((r) => r.apportionedCost);
+    const financeCostTot = sum((r) => r.financeCost);
     const contribRevTot = sum((r) => r.contributionRevenue);
     const revContribTot = sum((r) => r.revenueContribution);
 
@@ -274,12 +279,19 @@ export default async function ScorecardPage({
     const vertCollActTot = ownSum((r) => r.collectionActual);
     const vertDirectCostTot = ownSum((r) => r.directCost);
     const vertApportCostTot = ownSum((r) => r.apportionedCost);
+    const vertFinanceCostTot = ownSum((r) => r.financeCost);
+    // Finance cost has a column only where a vertical bears it (Raja's AIF and GIFT) -
+    // Akshayam's view, Raja's own, and the group's. Elsewhere it would be a column of dashes.
+    const showFinance = sum((r) => Math.abs(r.financeCost)) > 0;
+    /** inserts the finance-cost cell after "Apportioned cost" (the fourth), when the column is shown */
+    const withFinance = (cells: string[], finance: string): string[] =>
+      showFinance ? [...cells.slice(0, 4), finance, ...cells.slice(4)] : cells;
     const vertContribRevTot = ownSum((r) => r.contributionRevenue);
     const vertRevContribTot = ownSum((r) => r.revenueContribution);
 
     // The Revenue-vs-budget card counts out-of-books billing; contribution is
     // struck on the ledger only. Their difference is the whole gap between the
-    // two firm-total revenue figures, so it is named under the contribution card.
+    // two group-total revenue figures, so it is named under the contribution card.
     const osbRows = data.rows
       .map((r) => ({ code: r.label.split(" - ").pop() ?? r.label, osb: r.revenueActual - r.contributionRevenue }))
       .filter((x) => x.osb > 0.5);
@@ -327,7 +339,7 @@ export default async function ScorecardPage({
               reachedQuarter={latestQuarter}
               writtenTo={writtenTo}
               params={params}
-              verticalOptions={isSlice ? [] : ROWS.map((r) => ({ code: r.code, label: r.label }))}
+              verticalOptions={isSlice ? [] : rowDefs.map((r) => ({ code: r.code, label: r.label }))}
               currentVertical={pickedCode}
               currentScale={scale}
               alwaysShowMonths={singleVertical}
@@ -340,16 +352,16 @@ export default async function ScorecardPage({
           {isSlice && (
             <Notice tone="info" title="Your vertical only">
               {shown.length > 0
-                ? `Every card below is narrowed to your vertical${trend ? ", one row per month" : ""}; the footer row is the whole firm, as a benchmark.`
-                : "Your vertical is not rated on the partners’ scorecard this quarter — it carries no budget or activity in the period, or is not a rated line. The footer rows below are the whole firm."}
+                ? `Every card below is narrowed to your vertical${trend ? ", one row per month" : ""}; the footer row is the whole group, as a benchmark.`
+                : "Your vertical is not rated on the partners’ scorecard this quarter — it carries no budget or activity in the period, or is not a rated line. The footer rows below are the whole group."}
             </Notice>
           )}
 
           {pickedCode && (
-            <Notice tone="info" title={`Reading as ${ROWS.find((r) => r.code === pickedCode)?.label}`}>
+            <Notice tone="info" title={`Reading as ${rowDefs.find((r) => r.code === pickedCode)?.label}`}>
               {shown.length > 0
-                ? `Every card below is narrowed to this vertical${trend ? ", one row per month" : ""}, the same view its team lead sees; the footer row is the whole firm, as a benchmark.`
-                : "This vertical is not rated on the partners’ scorecard this period — it carries no budget or activity, or is not a rated line. The footer rows below are the whole firm."}
+                ? `Every card below is narrowed to this vertical${trend ? ", one row per month" : ""}, the same view its team lead sees; the footer row is the whole group, as a benchmark.`
+                : "This vertical is not rated on the partners’ scorecard this period — it carries no budget or activity, or is not a rated line. The footer rows below are the whole group."}
             </Notice>
           )}
 
@@ -458,7 +470,7 @@ export default async function ScorecardPage({
                       "",
                     ],
                     [
-                      "% of firm total",
+                      "% of group total",
                       pctOf(vertRevBudTot, revBudTot),
                       pctOf(vertRevActTot, revActTot),
                       "–",
@@ -468,7 +480,7 @@ export default async function ScorecardPage({
                 : undefined
             }
             foot={[
-              singleVertical ? "Firm total" : "Total",
+              singleVertical ? "Group total" : "Total",
               fig(revBudTot),
               fig(revActTot),
               revBudTot > 0 ? percent((revActTot / revBudTot) * 100, 1) : "–",
@@ -500,7 +512,7 @@ export default async function ScorecardPage({
                       "",
                     ],
                     [
-                      "% of firm total",
+                      "% of group total",
                       pctOf(vertCollBudTot, collBudTot),
                       pctOf(vertCollActTot, collActTot),
                       "–",
@@ -510,7 +522,7 @@ export default async function ScorecardPage({
                 : undefined
             }
             foot={[
-              singleVertical ? "Firm total" : "Total",
+              singleVertical ? "Group total" : "Total",
               fig(collBudTot),
               fig(collActTot),
               collBudTot > 0 ? percent((collActTot / collBudTot) * 100, 1) : "–",
@@ -521,59 +533,74 @@ export default async function ScorecardPage({
             title="Net revenue contribution"
             hint={unitHint}
             accent="border-positive"
-            head={[
-              firstColHead,
-              "Revenue",
-              "Direct cost",
-              "Apportioned cost",
-              "Contribution",
-              "% of total",
-              "Rating",
-            ]}
-            rows={rowSource.map(({ label, row }) => ({
-              cells: [
-                label,
-                fig(row.contributionRevenue),
-                fig(row.directCost),
-                fig(row.apportionedCost),
-                fig(row.revenueContribution),
-                row.revenueContributionShare === null ? "–" : percent(row.revenueContributionShare * 100, 1),
+            head={withFinance(
+              [
+                firstColHead,
+                "Revenue",
+                "Direct cost",
+                "Apportioned cost",
+                "Contribution",
+                "% of total",
+                "Rating",
               ],
+              "Finance cost",
+            )}
+            rows={rowSource.map(({ label, row }) => ({
+              cells: withFinance(
+                [
+                  label,
+                  fig(row.contributionRevenue),
+                  fig(row.directCost),
+                  fig(row.apportionedCost),
+                  fig(row.revenueContribution),
+                  row.revenueContributionShare === null ? "–" : percent(row.revenueContributionShare * 100, 1),
+                ],
+                row.financeCost ? fig(row.financeCost) : "–",
+              ),
               rating: row.ratings.netRevContrib,
             }))}
             subFoot={
               singleVertical
                 ? [
-                    [
-                      "Vertical total",
-                      fig(vertContribRevTot),
-                      fig(vertDirectCostTot),
-                      fig(vertApportCostTot),
-                      fig(vertRevContribTot),
-                      pctOf(vertRevContribTot, revContribTot),
-                      "",
-                    ],
-                    [
-                      "% of firm total",
-                      pctOf(vertContribRevTot, contribRevTot),
-                      pctOf(vertDirectCostTot, directCostTot),
-                      pctOf(vertApportCostTot, apportCostTot),
-                      pctOf(vertRevContribTot, revContribTot),
-                      "–",
-                      "",
-                    ],
+                    withFinance(
+                      [
+                        "Vertical total",
+                        fig(vertContribRevTot),
+                        fig(vertDirectCostTot),
+                        fig(vertApportCostTot),
+                        fig(vertRevContribTot),
+                        pctOf(vertRevContribTot, revContribTot),
+                        "",
+                      ],
+                      fig(vertFinanceCostTot),
+                    ),
+                    withFinance(
+                      [
+                        "% of group total",
+                        pctOf(vertContribRevTot, contribRevTot),
+                        pctOf(vertDirectCostTot, directCostTot),
+                        pctOf(vertApportCostTot, apportCostTot),
+                        pctOf(vertRevContribTot, revContribTot),
+                        "–",
+                        "",
+                      ],
+                      pctOf(vertFinanceCostTot, financeCostTot),
+                    ),
                   ]
                 : undefined
             }
-            foot={[
-              singleVertical ? "Firm total" : "Total",
-              fig(contribRevTot),
-              fig(directCostTot),
-              fig(apportCostTot),
-              fig(revContribTot),
-              percent(100, 0),
-              "",
-            ]}
+            foot={withFinance(
+              [
+                singleVertical ? "Group total" : "Total",
+                fig(contribRevTot),
+                fig(directCostTot),
+                fig(apportCostTot),
+                fig(revContribTot),
+                percent(100, 0),
+                "",
+              ],
+              fig(financeCostTot),
+            )}
             note={
               osbTotal > 0.5 ? (
                 <>
@@ -582,7 +609,7 @@ export default async function ScorecardPage({
                   out-of-books billing ({osbRows.map((x) => x.code).join(", ")}) is rated
                   against budget in the Revenue card above but left out here — it carries
                   no cost, so counting it would overstate contribution. That is the whole
-                  of the difference between the two firm-total revenue figures{" "}
+                  of the difference between the two group-total revenue figures{" "}
                   ({fig(revActTot)} vs {fig(contribRevTot)}).
                 </>
               ) : undefined
@@ -592,59 +619,74 @@ export default async function ScorecardPage({
             title="Net collection contribution"
             hint={unitHint}
             accent="border-positive"
-            head={[
-              firstColHead,
-              "Collection",
-              "Direct cost",
-              "Apportioned cost",
-              "Contribution",
-              "% of total",
-              "Rating",
-            ]}
-            rows={rowSource.map(({ label, row }) => ({
-              cells: [
-                label,
-                fig(row.collectionActual),
-                fig(row.directCost),
-                fig(row.apportionedCost),
-                fig(row.collectionContribution),
-                row.collectionContributionShare === null ? "–" : percent(row.collectionContributionShare * 100, 1),
+            head={withFinance(
+              [
+                firstColHead,
+                "Collection",
+                "Direct cost",
+                "Apportioned cost",
+                "Contribution",
+                "% of total",
+                "Rating",
               ],
+              "Finance cost",
+            )}
+            rows={rowSource.map(({ label, row }) => ({
+              cells: withFinance(
+                [
+                  label,
+                  fig(row.collectionActual),
+                  fig(row.directCost),
+                  fig(row.apportionedCost),
+                  fig(row.collectionContribution),
+                  row.collectionContributionShare === null ? "–" : percent(row.collectionContributionShare * 100, 1),
+                ],
+                row.financeCost ? fig(row.financeCost) : "–",
+              ),
               rating: row.ratings.netCollContrib,
             }))}
             subFoot={
               singleVertical
                 ? [
-                    [
-                      "Vertical total",
-                      fig(vertCollActTot),
-                      fig(vertDirectCostTot),
-                      fig(vertApportCostTot),
-                      fig(vertCollContribTot),
-                      pctOf(vertCollContribTot, collContribTot),
-                      "",
-                    ],
-                    [
-                      "% of firm total",
-                      pctOf(vertCollActTot, collActTot),
-                      pctOf(vertDirectCostTot, directCostTot),
-                      pctOf(vertApportCostTot, apportCostTot),
-                      pctOf(vertCollContribTot, collContribTot),
-                      "–",
-                      "",
-                    ],
+                    withFinance(
+                      [
+                        "Vertical total",
+                        fig(vertCollActTot),
+                        fig(vertDirectCostTot),
+                        fig(vertApportCostTot),
+                        fig(vertCollContribTot),
+                        pctOf(vertCollContribTot, collContribTot),
+                        "",
+                      ],
+                      fig(vertFinanceCostTot),
+                    ),
+                    withFinance(
+                      [
+                        "% of group total",
+                        pctOf(vertCollActTot, collActTot),
+                        pctOf(vertDirectCostTot, directCostTot),
+                        pctOf(vertApportCostTot, apportCostTot),
+                        pctOf(vertCollContribTot, collContribTot),
+                        "–",
+                        "",
+                      ],
+                      pctOf(vertFinanceCostTot, financeCostTot),
+                    ),
                   ]
                 : undefined
             }
-            foot={[
-              singleVertical ? "Firm total" : "Total",
-              fig(collActTot),
-              fig(directCostTot),
-              fig(apportCostTot),
-              fig(collContribTot),
-              percent(100, 0),
-              "",
-            ]}
+            foot={withFinance(
+              [
+                singleVertical ? "Group total" : "Total",
+                fig(collActTot),
+                fig(directCostTot),
+                fig(apportCostTot),
+                fig(collContribTot),
+                percent(100, 0),
+                "",
+              ],
+              fig(financeCostTot),
+            )}
           />
           <WorkingCard
             title={`Receivables ageing${data.arAsOf ? ` — as at ${data.arAsOf}` : ""}`}
@@ -664,7 +706,7 @@ export default async function ScorecardPage({
               singleVertical && ageingRowSource[0]
                 ? [
                     [
-                      "% of firm total",
+                      "% of group total",
                       ...ageingRowSource[0].row.ageingBuckets.map((b, i) => pctOf(b, ageBucketTot[i] ?? 0)),
                       pctOf(ageingRowSource[0].row.ageingTotal, ageGrandTot),
                       "–",
@@ -674,7 +716,7 @@ export default async function ScorecardPage({
                 : undefined
             }
             foot={[
-              singleVertical ? "Firm total" : "Total",
+              singleVertical ? "Group total" : "Total",
               ...ageBucketTot.map((b) => (b ? fig(b) : "–")),
               fig(ageGrandTot),
               ageBlendedDays === null ? "–" : ageBlendedDays.toFixed(0),

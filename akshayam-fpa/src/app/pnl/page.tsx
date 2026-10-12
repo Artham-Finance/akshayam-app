@@ -166,9 +166,8 @@ export default async function ProfitAndLossPage({
      * ACC, HRCM, GIFT/AIF, DSC - resolves to nothing, and the table is left
      * out rather than shown empty.
      */
-    const focusCode = scope.isSlice
-      ? (verticals[0]?.code ?? null)
-      : (verticals.find((v) => v.id === verticalId)?.code ?? null);
+    const focusCode =
+      verticals.find((v) => v.id === verticalId)?.code ?? (scope.isSlice ? (verticals[0]?.code ?? null) : null);
     const costFocusKey = costApportionmentKeyFor(focusCode);
     const narrowToFocus = verticalId !== null || scope.isSlice;
     const shownCostApportionment =
@@ -237,7 +236,10 @@ export default async function ProfitAndLossPage({
               <PeriodControls
                 financialYears={[]}
                 currentFy={0}
-                verticals={scope.isSlice ? [] : verticals.map((v) => ({ id: v.id, name: v.name }))}
+                verticals={
+                  // A login for one vertical needs no picker; one for several (Raja's AIF and GIFT) does.
+                  scope.isSlice && verticals.length < 2 ? [] : verticals.map((v) => ({ id: v.id, name: v.name }))
+                }
                 currentVerticalId={verticalId}
               />
               <DownloadExcel

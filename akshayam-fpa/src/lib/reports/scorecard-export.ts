@@ -167,6 +167,15 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
   const all = data.rows;
   const sum = (pick: (r: ScorecardRow) => number) => all.reduce((s, r) => s + pick(r), 0);
   const table = revisedQuarterlyTable(input.fyStartYear, input.companySlugs);
+  // Finance cost has a column on the contribution sheet only where a vertical bears it
+  // (Raja's AIF and GIFT) - which moves the columns after it along by one.
+  const withFinance = all.some((r) => r.financeCost !== 0);
+  const C = {
+    total: withFinance ? "F" : "E",
+    contribution: withFinance ? "G" : "F",
+    share: withFinance ? "H" : "G",
+    rating: withFinance ? "I" : "H",
+  };
 
   // The main sheet is created first so it opens first; its cells are filled in
   // once the parameter sheets are laid out and their rows are known.
@@ -288,9 +297,10 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
       { header: "Ledger revenue (Rs)", width: 18, fmt: RS },
       { header: "Direct cost (Rs)", width: 16, fmt: RS },
       { header: "Apportioned cost (Rs)", width: 17, fmt: RS },
+      ...(withFinance ? [{ header: "Finance cost (Rs)", width: 16, fmt: RS }] : []),
       { header: "Total cost (Rs)", width: 16, fmt: RS },
       { header: "Net revenue contribution (Rs)", width: 18, fmt: RS },
-      { header: "Share of firm contribution", width: 14, fmt: PCT },
+      { header: "Share of group contribution", width: 14, fmt: PCT },
       { header: "Rating (0-4)", width: 11 },
     ];
     const sheet = parameterSheet(
@@ -300,41 +310,52 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
       "Net revenue contribution",
       [
         "Net contribution = ledger revenue less the vertical's own direct cost and its head-count share of Common's and ACC/HRCM's cost " +
-          "(the same figures as the P&L's cost apportionment card). Share = the vertical's contribution ÷ the firm's positive contributions.",
+          "(the same figures as the P&L's cost apportionment card)" +
+          (withFinance ? ", and, for Raja (AIF and GIFT), its finance cost" : "") +
+          ". Share = the vertical's contribution ÷ the group's positive contributions.",
         "Rating: 4 at a 20% share or more, 3 from 15%, 2 from 10%, 1 from 5%, otherwise 0.",
       ],
       cols,
     );
     shown.forEach((r, i) => {
       const rowNo = FIRST + i;
-      const range = `$F$${FIRST}:$F$${last}`;
+      const range = `${C.contribution}${FIRST}:${C.contribution}${last}`;
       put(sheet, cols, rowNo, [
         r.label,
         r.contributionRevenue,
         r.directCost,
         r.apportionedCost,
-        { formula: `C${rowNo}+D${rowNo}`, result: r.cost },
-        { formula: `B${rowNo}-E${rowNo}`, result: r.revenueContribution },
+        ...(withFinance ? [r.financeCost] : []),
+        {
+          formula: withFinance ? `C${rowNo}+D${rowNo}+E${rowNo}` : `C${rowNo}+D${rowNo}`,
+          result: r.cost,
+        },
+        { formula: `B${rowNo}-${C.total}${rowNo}`, result: r.revenueContribution },
         isPartial
           ? (r.revenueContributionShare ?? "")
           : {
-              formula: `IF(SUMIF(${range},">0")>0,F${rowNo}/SUMIF(${range},">0"),"")`,
+              formula: `IF(SUMIF(${range},">0")>0,${C.contribution}${rowNo}/SUMIF(${range},">0"),"")`,
               result: r.revenueContributionShare ?? "",
             },
-        { formula: contributionRating(`G${rowNo}`), result: r.ratings.netRevContrib },
+        { formula: contributionRating(`${C.share}${rowNo}`), result: r.ratings.netRevContrib },
       ]);
     });
     const lr = sum((r) => r.contributionRevenue);
     const dc = sum((r) => r.directCost);
     const ac = sum((r) => r.apportionedCost);
+    const fc = sum((r) => r.financeCost);
     boldTotal(
       put(sheet, cols, totalRow, [
         isPartial ? "Entity as a whole (all rated verticals)" : "Entity as a whole",
         isPartial ? lr : { formula: `SUM(B${FIRST}:B${last})`, result: lr },
         isPartial ? dc : { formula: `SUM(C${FIRST}:C${last})`, result: dc },
         isPartial ? ac : { formula: `SUM(D${FIRST}:D${last})`, result: ac },
-        { formula: `C${totalRow}+D${totalRow}`, result: dc + ac },
-        { formula: `B${totalRow}-E${totalRow}`, result: lr - dc - ac },
+        ...(withFinance ? [isPartial ? fc : { formula: `SUM(E${FIRST}:E${last})`, result: fc }] : []),
+        {
+          formula: withFinance ? `C${totalRow}+D${totalRow}+E${totalRow}` : `C${totalRow}+D${totalRow}`,
+          result: dc + ac + fc,
+        },
+        { formula: `B${totalRow}-${C.total}${totalRow}`, result: lr - dc - ac - fc },
         null,
         null,
       ]),
@@ -348,7 +369,7 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
       { header: "Collection actual (Rs)", width: 18, fmt: RS },
       { header: "Total cost (Rs)", width: 16, fmt: RS },
       { header: "Net collection contribution (Rs)", width: 18, fmt: RS },
-      { header: "Share of firm contribution", width: 14, fmt: PCT },
+      { header: "Share of group contribution", width: 14, fmt: PCT },
       { header: "Rating (0-4)", width: 11 },
     ];
     const sheet = parameterSheet(
@@ -358,7 +379,7 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
       "Net collection contribution",
       [
         `Net contribution = collections (from "${S.collection}") less the same total cost used for revenue contribution (from "${S.revContribution}"). ` +
-          "Share = the vertical's contribution ÷ the firm's positive contributions.",
+          "Share = the vertical's contribution ÷ the group's positive contributions.",
         "Rating: 4 at a 20% share or more, 3 from 15%, 2 from 10%, 1 from 5%, otherwise 0.",
       ],
       cols,
@@ -369,7 +390,7 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
       put(sheet, cols, rowNo, [
         r.label,
         { formula: ref(S.collection, "C", rowNo), result: r.collectionActual },
-        { formula: ref(S.revContribution, "E", rowNo), result: r.cost },
+        { formula: ref(S.revContribution, C.total, rowNo), result: r.cost },
         { formula: `B${rowNo}-C${rowNo}`, result: r.collectionContribution },
         isPartial
           ? (r.collectionContributionShare ?? "")
@@ -386,7 +407,7 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
       put(sheet, cols, totalRow, [
         isPartial ? "Entity as a whole (all rated verticals)" : "Entity as a whole",
         { formula: ref(S.collection, "C", totalRow), result: act },
-        { formula: ref(S.revContribution, "E", totalRow), result: cost },
+        { formula: ref(S.revContribution, C.total, totalRow), result: cost },
         { formula: `B${totalRow}-C${totalRow}`, result: act - cost },
         null,
         null,
@@ -477,7 +498,7 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
       r.label,
       { formula: ref(S.revenue, "E", rowNo), result: r.ratings.revenue },
       { formula: ref(S.collection, "E", rowNo), result: r.ratings.collection },
-      { formula: ref(S.revContribution, "H", rowNo), result: r.ratings.netRevContrib },
+      { formula: ref(S.revContribution, C.rating, rowNo), result: r.ratings.netRevContrib },
       { formula: ref(S.collContribution, "F", rowNo), result: r.ratings.netCollContrib },
       r.ageingDays === null
         ? ""
