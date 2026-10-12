@@ -73,6 +73,17 @@ export default async function WeeklyRatingsPage({
     const canCommit =
       !!user && (user.permissions.includes("weekly.commit") || entity.verticalIds !== null);
     const isAdmin = !!user && user.permissions.includes("users.manage");
+    // An admin can always edit: nothing is frozen to them, whatever day it was keyed.
+    if (isAdmin) {
+      data?.rows.forEach((r) => {
+        r.locked = false;
+      });
+      receivables?.verticals.forEach((v) =>
+        v.over180.forEach((c) => {
+          c.locked = false;
+        }),
+      );
+    }
     const week = weeks.find((w) => w.end === weekEnd)!;
 
     const tab = (m: string) =>

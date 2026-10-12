@@ -271,6 +271,7 @@ function CommitmentPanel({
           {row.locked
             ? "The amounts froze at the end of that day."
             : "The amounts freeze at the end of the day they were first keyed."}
+          {isAdmin && " As an admin you can always edit them."}
         </p>
       )}
 

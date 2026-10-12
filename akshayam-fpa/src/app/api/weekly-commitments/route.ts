@@ -131,7 +131,7 @@ export async function POST(request: Request) {
     }
 
     // save
-    if (existing && isLocked(existing.entered_on, existing.reopened_on, today)) {
+    if (existing && !isAdmin && isLocked(existing.entered_on, existing.reopened_on, today)) {
       return fail(
         `This commitment was keyed on ${existing.entered_on} and froze at the end of that day. ` +
           "An admin can reopen it.",
