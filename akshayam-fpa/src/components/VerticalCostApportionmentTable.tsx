@@ -117,11 +117,12 @@ export function VerticalCostApportionmentTable({
       </div>
 
       <p className="px-3 pb-3 text-[11.5px] text-ink-muted">
-        {show(data.poolTotal)} of common cost and {show(data.accHrcmPoolTotal)} of ACC and HRCM
-        cost spread over {data.label}, on head count only, across the six verticals below. Cost
-        already tagged to a vertical is its own and is never re-spread; only Common&rsquo;s and ACC
-        and HRCM&rsquo;s activity is pooled and spread this way — any other vertical&rsquo;s
-        activity plays no part in this card.
+        {show(data.poolTotal)} of common cost (including {show(data.dscPoolTotal)} of DSC support
+        cost) and {show(data.accHrcmPoolTotal)} of ACC and HRCM cost spread over {data.label}, on
+        head count only, across the six verticals below. Cost already tagged to a vertical is its
+        own and is never re-spread; only Common&rsquo;s, DSC&rsquo;s and ACC and HRCM&rsquo;s
+        activity is pooled and spread this way — any other vertical&rsquo;s activity plays no part
+        in this card.
         {scale !== "abs" && ` All figures ${scaleLabel[scale].toLowerCase()}.`}
       </p>
       <p className="px-3 pb-3 text-[11.5px] text-ink-faint">
@@ -227,7 +228,7 @@ export function VerticalCostApportionmentTable({
               showTotal={showTotal}
               show={show}
               showDetail={showDetail}
-              label="Common cost — apportioned"
+              label="Common cost (incl DSC cost) — apportioned"
               pick={(v) => v.commonApportioned}
               lines={data.commonCostLines}
             />

@@ -164,8 +164,18 @@ export function BudgetTable({
     <div className="table-frame">
       <table className="w-full min-w-max border-collapse text-[13px]">
         <caption className="px-4 pb-3 text-left text-[11.5px] text-ink-muted">
-          Period budget is the annual budget × {twin ? cumulativeBasis : periodBasis}
-          {twin ? `, and ${periodLabel} alone × ${periodBasis}` : ""}.
+          {data.revised ? (
+            <>
+              Period budget is the revised quarterly budget over {twin ? cumulativeBasis : periodBasis} - a
+              month is a third of its quarter
+              {twin ? `, and ${periodLabel} alone over ${periodBasis}` : ""}.
+            </>
+          ) : (
+            <>
+              Period budget is the annual budget × {twin ? cumulativeBasis : periodBasis}
+              {twin ? `, and ${periodLabel} alone × ${periodBasis}` : ""}.
+            </>
+          )}
         </caption>
         <thead>
           {twin && (

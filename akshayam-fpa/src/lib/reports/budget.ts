@@ -64,6 +64,8 @@ export interface BudgetVsActual {
   hasUnbudgeted: boolean;
   /** column heading for the cumulative group, when there is one */
   cumulativeLabel: string | null;
+  /** the budgets are the revised quarterly budget, not the annual figures spread by month */
+  revised: boolean;
 }
 
 /** A date range and the share of the annual budget it earns. */
@@ -258,8 +260,9 @@ export async function buildBudgetVsActual(opts: {
   cumulative?: BudgetWindow | null;
   /**
    * Read the budgets from the revised quarterly budget (30 Sep 2026) instead of
-   * the annual figures held per vertical, where one exists for the year. For the
-   * Overview only - every other page keeps the budgets already loaded.
+   * the annual figures held per vertical, where one exists for the year. The
+   * Overview, Revenue and Collections pages read it, so a period's budget is the
+   * same on every page; a period's budget is then the quarters it touches.
    */
   revised?: boolean;
 }): Promise<BudgetVsActual> {
@@ -529,5 +532,5 @@ export async function buildBudgetVsActual(opts: {
       : {}),
   };
 
-  return { rows, total, hasUnbudgeted, cumulativeLabel: cumulative?.label ?? null };
+  return { rows, total, hasUnbudgeted, cumulativeLabel: cumulative?.label ?? null, revised: useRevised };
 }

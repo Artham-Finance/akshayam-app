@@ -300,6 +300,7 @@ export default async function RevenuePage({
       fyStartYear: fy,
       verticalId,
       measure: "revenue",
+      revised: true,
       period: { start, end, fraction: period.fraction, monthAligned: period.monthAligned },
       cumulative: period.cumulative
         ? {

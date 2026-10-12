@@ -227,7 +227,7 @@ export function VerticalCostApportionmentWideTable({
               showTotal={showTotal}
               show={show}
               showDetail={showDetail}
-              label="Common cost — apportioned (company-wide heads)"
+              label="Common cost (incl DSC cost) — apportioned (company-wide heads)"
               pick={(v) => v.commonApportionedWide}
               lines={data.wide.commonCostLines}
             />

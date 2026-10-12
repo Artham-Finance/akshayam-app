@@ -82,7 +82,8 @@ export async function POST(request: Request) {
     );
 
     if (parsed.action === "commitment") {
-      if (existing && isLocked(existing.entered_on, null, today)) {
+      // an admin can always edit; the freeze is for everyone else
+      if (existing && !roleCan(user.role, "users.manage") && isLocked(existing.entered_on, null, today)) {
         return fail(
           `This commitment was keyed on ${existing.entered_on} and froze at the end of that day.`,
           409,

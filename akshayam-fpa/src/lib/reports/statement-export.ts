@@ -350,7 +350,7 @@ export async function buildStatementWorkbook(opts: {
 
       emphasise.push(rows.length);
       rows.push([
-        "Common cost — apportioned",
+        "Common cost (incl DSC cost) — apportioned",
         ...a.verticals.map((v) => v.commonApportioned),
         total((v) => v.commonApportioned),
       ]);

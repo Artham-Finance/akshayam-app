@@ -1,14 +1,16 @@
 import type { FyMonth } from "@/lib/period";
 
 /**
- * The revised revenue budget the Vertical Performance Scorecard is rated on.
+ * The revised revenue budget: what the Scorecard, the Overview, the Revenue and
+ * Collections tabs, the MAK meeting and the Budget vs Actual statement's Revenue
+ * line are all measured against, so a period's budget is the same on every page.
  *
  * The company revised its revenue budget part-way through FY 2026-27 (the
  * "revenue change" workbook, sheet "latest -30-09-26") because the variable
- * performance pay (VPP) is struck on budget against actual. That file is for
- * the scorecard only: every other budget in the app - the Budget vs Actual
- * statement, the Overview, the Revenue and Collections tabs, the trend tables -
- * keeps reading the budgets already loaded, and is not touched by it.
+ * performance pay (VPP) is struck on budget against actual. A period's budget is
+ * the quarters it touches, not a flat share of the year. Every budget other than
+ * revenue and collection - the cost lines - keeps reading the budgets already
+ * loaded, and is not touched by it.
  *
  * It gives each vertical a figure per quarter, for both companies. A month is a
  * third of its quarter - the budgets for a month inside a quarter are the
@@ -141,6 +143,28 @@ export function revisedQuarterlyTable(
     for (const [rowCode, q] of Object.entries(revised.byCompany[slug] ?? {})) {
       const cur = out[rowCode] ?? [0, 0, 0, 0];
       out[rowCode] = [cur[0] + q[0], cur[1] + q[1], cur[2] + q[2], cur[3] + q[3]];
+    }
+  }
+  return out;
+}
+
+/**
+ * The revised revenue budget month by month, summed over every row of the
+ * companies named - the figure the Budget vs Actual statement's Revenue line
+ * carries, so its period budget is the sum of the quarters it touches rather
+ * than a flat twelfth a month. Null where the year has no revised table.
+ */
+export function revisedRevenueByMonth(
+  fyStartYear: number,
+  companySlugs: string[],
+  months: FyMonth[],
+): Record<string, number> | null {
+  const revised = REVISED[fyStartYear];
+  if (!revised) return null;
+  const out: Record<string, number> = Object.fromEntries(months.map((m) => [m.key, 0]));
+  for (const slug of companySlugs) {
+    for (const quarters of Object.values(revised.byCompany[slug] ?? {})) {
+      for (const m of months) out[m.key] += quarters[m.quarter - 1] / 3;
     }
   }
   return out;

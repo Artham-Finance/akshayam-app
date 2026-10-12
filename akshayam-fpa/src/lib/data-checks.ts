@@ -1,8 +1,20 @@
 import { query } from "@/lib/db";
 import { listAllEntities } from "@/lib/entity";
 import { buildBudgetVsActual } from "@/lib/reports/budget";
-import { REVISED_CONTROL_TOTALS, revisedCompanyTotal } from "@/lib/reports/scorecard-budget";
+import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
+import {
+  COLLECTION_BUDGET_RATIO,
+  REVISED_CONTROL_TOTALS,
+  revisedCompanyTotal,
+  revisedQuarterlyTable,
+} from "@/lib/reports/scorecard-budget";
+import { ROWS, buildScorecard } from "@/lib/reports/scorecard";
 import { TEAM_COST_ANNUAL_BUDGET } from "@/lib/reports/team-cost";
+import {
+  buildCumulativeCostApportionment,
+  buildVerticalCostApportionment,
+} from "@/lib/reports/vertical-cost-apportionment";
+import type { QuarterNo } from "@/lib/period";
 
 /**
  * Checks that the figures on screen still tie to the files they came from.
@@ -135,6 +147,112 @@ export async function runDataChecks(): Promise<DataCheck[]> {
       return problems.length === 0
         ? { status: "ok", detail: seen.join(" · ") }
         : { status: "fail", detail: problems.join("; ") };
+    }),
+  );
+
+  /*
+    A period's budget is the same on every page: the revised table's quarters it
+    covers. Struck here for each quarter and for the first half, on the Revenue
+    tab, the Collections tab and the P&L's Revenue line, against the table itself.
+  */
+  checks.push(
+    guarded("period-budgets", "A period's budget is the same on every page", async () => {
+      const table = (slug: string) => revisedQuarterlyTable(FY, [slug]);
+      const windows = [
+        { label: "Q1", months: [4, 5, 6], start: `${FY}-04-01`, end: `${FY}-06-30` },
+        { label: "Q2", months: [7, 8, 9], start: `${FY}-07-01`, end: `${FY}-09-30` },
+        { label: "Q3", months: [10, 11, 12], start: `${FY}-10-01`, end: `${FY}-12-31` },
+        { label: "Q4", months: [1, 2, 3], start: `${FY + 1}-01-01`, end: `${FY + 1}-03-31` },
+        { label: "Q1+Q2", months: [4, 5, 6, 7, 8, 9], start: `${FY}-04-01`, end: `${FY}-09-30` },
+      ];
+      const quarterOf = (month: number) => Math.floor(((month - 4 + 12) % 12) / 3);
+      const problems: string[] = [];
+      let compared = 0;
+      for (const company of companies) {
+        const rows = table(company.slug);
+        if (!rows) continue;
+        const pnl = await buildBudgetVsActualPnl({ entity: company, fyStartYear: FY });
+        const pnlRevenue = pnl.lines.find((l) => l.code === "revenue")!;
+        for (const w of windows) {
+          let expected = 0;
+          for (const q of Object.values(rows)) for (const m of w.months) expected += q[quarterOf(m)] / 3;
+          const period = { start: w.start, end: w.end, fraction: w.months.length / 12, monthAligned: true };
+          const revenue = await buildBudgetVsActual({ entity: company, fyStartYear: FY, measure: "revenue", period, revised: true });
+          const collection = await buildBudgetVsActual({ entity: company, fyStartYear: FY, measure: "collection", period, revised: true });
+          const inPnl = pnl.months
+            .filter((m) => m.start >= w.start && m.start <= w.end)
+            .reduce((sum, m) => sum + (pnlRevenue.budget[m.key] ?? 0), 0);
+          const shown: [string, number, number][] = [
+            ["Revenue tab", revenue.total.period.periodBudget, expected],
+            ["Collections tab", collection.total.period.periodBudget, expected * COLLECTION_BUDGET_RATIO],
+            ["P&L revenue line", inPnl, expected],
+          ];
+          for (const [where, got, want] of shown) {
+            compared++;
+            if (Math.abs(got - want) > 2) {
+              problems.push(`${company.slug} ${w.label} on the ${where}: ${rs(got)}, the table says ${rs(want)}`);
+            }
+          }
+        }
+      }
+      if (compared === 0) return { status: "skip", detail: "No revised budget is held for the year." };
+      return problems.length === 0
+        ? { status: "ok", detail: `Q1, Q2, Q3, Q4 and the first half agree on the Revenue tab, the Collections tab and the P&L (${compared} comparisons)` }
+        : { status: "fail", detail: problems.slice(0, 6).join("; ") };
+    }),
+  );
+
+  /*
+    The P&L's cost apportionment card and the Vertical Performance Scorecard are
+    meant to be one method: for each of the six verticals, the revenue, total cost
+    (direct plus apportioned) and contribution on the card are what the scorecard
+    rates. Struck here for every quarter and for the quarters added up, off both
+    builders, so a change to one that the other does not follow is found.
+  */
+  checks.push(
+    guarded("apportionment-scorecard", "Apportionment cost matches the Vertical Performance Scorecard, vertical-wise", async () => {
+      const problems: string[] = [];
+      let compared = 0;
+      const rowByKey = new Map(ROWS.filter((r) => r.apportKey).map((r) => [r.apportKey as string, r]));
+      for (const company of companies) {
+        const windows: { label: string; quarter: QuarterNo; cumulative: boolean }[] = [
+          ...([1, 2, 3, 4] as QuarterNo[]).map((q) => ({ label: `Q${q}`, quarter: q, cumulative: false })),
+          ...([2, 3, 4] as QuarterNo[]).map((q) => ({ label: `Q1–Q${q} cumulative`, quarter: q, cumulative: true })),
+        ];
+        for (const w of windows) {
+          const card = w.cumulative
+            ? await buildCumulativeCostApportionment({ entity: company, fyStartYear: FY, throughQuarter: w.quarter })
+            : await buildVerticalCostApportionment({ entity: company, fyStartYear: FY, quarter: w.quarter });
+          // the card only exists where the company has the six; nothing to compare otherwise
+          if (card.verticals.every((v) => v.revenue === 0 && v.totalCost === 0)) continue;
+          const sc = await buildScorecard({ entity: company, fyStartYear: FY, quarter: w.quarter, cumulative: w.cumulative });
+          for (const v of card.verticals) {
+            const row = sc.rows.find((r) => r.code === rowByKey.get(v.key)?.code);
+            if (!row) {
+              // a vertical with no activity is left off the scorecard, and has nothing on the card either
+              if (Math.abs(v.revenue) + Math.abs(v.totalCost) >= 2) {
+                problems.push(`${company.slug} ${w.label} ${v.key}: on the card, missing from the scorecard`);
+              }
+              continue;
+            }
+            const pairs: [string, number, number][] = [
+              ["revenue", v.revenue, row.contributionRevenue],
+              ["total cost", v.totalCost, row.cost],
+              ["contribution", v.contribution, row.revenueContribution],
+            ];
+            for (const [what, onCard, onScorecard] of pairs) {
+              compared++;
+              if (Math.abs(onCard - onScorecard) > 2) {
+                problems.push(`${company.slug} ${w.label} ${v.key} ${what}: card ${rs(onCard)}, scorecard ${rs(onScorecard)}`);
+              }
+            }
+          }
+        }
+      }
+      if (compared === 0 && problems.length === 0) return { status: "skip", detail: "There is no apportionment to compare yet." };
+      return problems.length === 0
+        ? { status: "ok", detail: `Revenue, total cost and contribution agree for the six verticals, in every quarter and cumulatively (${compared} comparisons)` }
+        : { status: "fail", detail: problems.slice(0, 6).join("; ") + (problems.length > 6 ? `; and ${problems.length - 6} more` : "") };
     }),
   );
 
