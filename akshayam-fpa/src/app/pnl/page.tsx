@@ -32,6 +32,7 @@ import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
 import { buildRevenueTransferCard } from "@/lib/reports/revenue-transfer-card";
 import { buildAccountEntries, type StatementEntry } from "@/lib/reports/statement-drill";
 import {
+  buildCumulativeCostApportionment,
   buildVerticalCostApportionment,
   costApportionmentKeyFor,
 } from "@/lib/reports/vertical-cost-apportionment";
@@ -131,6 +132,8 @@ export default async function ProfitAndLossPage({
     const reachedQuarter =
       period.periodMonths[period.periodMonths.length - 1]?.quarter ?? months[0].quarter;
 
+    // The cumulative tab: the quarters from the first up to the one the period reaches, added up.
+    const showCumulative = params.q === "cum" && reachedQuarter > 1;
     const requestedQuarter = /^q([1-4])$/.exec(String(params.q ?? ""));
     const quarter: QuarterNo = requestedQuarter
       ? (Number(requestedQuarter[1]) as QuarterNo)
@@ -151,7 +154,9 @@ export default async function ProfitAndLossPage({
        * the company's; only the columns shown narrow, below, to whichever one
        * vertical the picker or a team lead's own slice narrows to.
        */
-      buildVerticalCostApportionment({ entity, fyStartYear: fy, quarter, month: apportionMonth }),
+      showCumulative
+        ? buildCumulativeCostApportionment({ entity, fyStartYear: fy, throughQuarter: reachedQuarter })
+        : buildVerticalCostApportionment({ entity, fyStartYear: fy, quarter, month: apportionMonth }),
     ]);
 
     /**
@@ -371,6 +376,15 @@ export default async function ProfitAndLossPage({
                     months={months}
                     writtenTo={writtenTo}
                     hrefFor={(q, m) => withParams("/pnl", params, { q: `q${q}`, qm: m })}
+                    cumulative={
+                      reachedQuarter > 1
+                        ? {
+                            label: `Cumulative Q1–Q${reachedQuarter}`,
+                            href: withParams("/pnl", params, { q: "cum", qm: null }),
+                            active: showCumulative,
+                          }
+                        : undefined
+                    }
                   />
                 </div>
               </div>

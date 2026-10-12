@@ -5,6 +5,7 @@ import {
   PRESENTATIONAL_TAX_RATE,
   taxedMembers,
 } from "@/lib/reports/presentational-tax";
+import { hasRevisedBudget, revisedRevenueByMonth } from "@/lib/reports/scorecard-budget";
 
 /**
  * Budget versus actual, down the P&L.
@@ -271,6 +272,27 @@ export async function buildBudgetVsActualPnl(opts: {
     // group, which it holds as the recovery (income less expense) the line was
     // once shown as, so it is turned round into the cost it is now shown as.
     line.budget[row.month_key] += Number(row.amount) * (row.group_code === "reimbursements" ? -1 : 1);
+  }
+
+  /**
+   * The revenue budget is the revised quarterly budget (30 Sep 2026), a month
+   * being a third of its quarter - so the period budget here is the quarters it
+   * covers, the same figure the Overview, Revenue, Collections and Scorecard
+   * read, and not a flat twelfth. Only the Revenue line changes; every cost
+   * line keeps the budget already loaded. Whole companies only: a slice has no
+   * budget of its own here, and a single vertical is not struck on this page.
+   */
+  if (
+    verticalId === null &&
+    entity.verticalIds === null &&
+    hasRevisedBudget(fyStartYear) &&
+    budgetRows.some((r) => r.group_code === "revenue")
+  ) {
+    const slugs = (
+      await query<{ slug: string }>("select slug from entities where id = any($1::int[])", [entity.memberIds])
+    ).map((r) => r.slug);
+    const revisedRevenue = revisedRevenueByMonth(fyStartYear, slugs, months);
+    if (revisedRevenue) byCode.get("revenue")!.budget = revisedRevenue;
   }
 
   /**

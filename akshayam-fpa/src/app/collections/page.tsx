@@ -202,6 +202,7 @@ export default async function CollectionsPage({
       fyStartYear: fy,
       verticalId,
       measure: "collection",
+      revised: true,
       period: { start, end, fraction: period.fraction, monthAligned: period.monthAligned },
       cumulative: period.cumulative
         ? {

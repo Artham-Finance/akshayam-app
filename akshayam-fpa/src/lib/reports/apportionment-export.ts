@@ -18,6 +18,8 @@ import { createWorkbook } from "@/lib/reports/xlsx";
  * that month alone - laid side by side with each quarter's total and the year to
  * date at the end.
  *
+ * Common cost is Common's own cost plus the DSC support cost - one pool.
+ *
  * Two sheets, one for each way of spreading Common's and ACC & HRCM's cost:
  *   - on the head count of the six verticals, the figures VPP is struck on
  *   - on the company's whole head count (the comparison), which leaves part of the
@@ -60,7 +62,7 @@ const METRICS: Metric[] = [
   { key: "directTeamCost", label: "Direct team cost" },
   { key: "directOverheads", label: "Direct overheads" },
   { key: "otherIncome", label: "Other income (a credit)" },
-  { key: "common", label: "Common cost — apportioned" },
+  { key: "common", label: "Common cost (incl DSC cost) — apportioned" },
   { key: "accHrcm", label: "ACC and HRCM cost — apportioned" },
   { key: "totalCost", label: "Total cost", formula: "totalCost" },
   { key: "contribution", label: "Contribution", formula: "contribution" },
@@ -108,13 +110,21 @@ export async function buildApportionmentWorkbook(
   const listed = input.only ? keys.filter((k) => input.only!.has(k.key)) : keys;
   const showTotal = !input.only; // a slice is shown its own verticals only
   const quarters = groupByQuarter(months);
+  // The cumulative (quarter-to-date) columns: the quarters added up from the first,
+  // for each quarter after it - Q1-Q2, Q1-Q3, and so on - ahead of the year to date.
+  const cumulativeQuarters = quarters.slice(1);
+  const quarterEnd: number[] = []; // index of each quarter's last month
+  quarters.reduce((end, q) => {
+    quarterEnd.push(end + q.months.length - 1);
+    return end + q.months.length;
+  }, 0);
 
   const workbook = createWorkbook();
   workbook.calcProperties.fullCalcOnLoad = true;
 
   const monthCol = (i: number) => 2 + i; // B onward
   const quarterCol = (i: number) => 2 + months.length + i;
-  const ytdCol = 2 + months.length + quarters.length;
+  const ytdCol = 2 + months.length + quarters.length + cumulativeQuarters.length;
   const lastCol = ytdCol;
 
   for (const scenario of ["six", "wide"] as Scenario[]) {
@@ -123,6 +133,7 @@ export async function buildApportionmentWorkbook(
       { width: 38 },
       ...months.map(() => ({ width: 13 })),
       ...quarters.map(() => ({ width: 14 })),
+      ...cumulativeQuarters.map(() => ({ width: 17 })),
       { width: 15 },
     ];
 
@@ -136,8 +147,8 @@ export async function buildApportionmentWorkbook(
     };
     sheet.addRow([
       scenario === "six"
-        ? "Common's cost and ACC and HRCM's cost are each spread on head count across the six verticals - the basis VPP is struck on. Each month on its own head count; quarter and year-to-date columns are the sum of their months (head count, the average)."
-        : "The same pools spread on the company's whole head count, so part of each pool sits on heads outside the six and is not charged to any of them - shown on its own row at the foot. A comparison, not the VPP basis. Each month on its own head count; quarter and year-to-date columns are the sum of their months.",
+        ? "Common's cost and ACC and HRCM's cost are each spread on head count across the six verticals - the basis VPP is struck on. Each month on its own head count; quarter, cumulative and year-to-date columns are the sum of their months (head count, the average); a cumulative column adds the quarters up from the first. Common cost is Common's own cost plus the DSC support cost."
+        : "The same pools spread on the company's whole head count, so part of each pool sits on heads outside the six and is not charged to any of them - shown on its own row at the foot. A comparison, not the VPP basis. Each month on its own head count; quarter, cumulative and year-to-date columns are the sum of their months. Common cost is Common's own cost plus the DSC support cost.",
     ]).font = { size: 10, italic: true, color: { argb: GREY } };
     sheet.addRow([
       "Reimbursement income and expense are left out of every figure, as on the card. Other income is a credit and so reduces total cost; Direct overheads includes OSB expenses.",
@@ -148,6 +159,7 @@ export async function buildApportionmentWorkbook(
       "Particulars",
       ...months.map((m) => m.label),
       ...quarters.map((q) => quarterLabel(q.quarter, months)),
+      ...cumulativeQuarters.map((q) => `Cumulative Q1–Q${q.quarter}`),
       "YTD total",
     ]);
     header.height = 26;
@@ -236,6 +248,7 @@ export async function buildApportionmentWorkbook(
           cells.push(aggregate(offset, offset + q.months.length - 1));
           offset += q.months.length;
         }
+        cumulativeQuarters.forEach((_q, i) => cells.push(aggregate(0, quarterEnd[i + 1])));
         cells.push(aggregate(0, months.length - 1));
 
         const row = sheet.addRow(cells);
@@ -288,6 +301,13 @@ export async function buildApportionmentWorkbook(
           });
           offset += q.months.length;
         }
+        cumulativeQuarters.forEach((_q, i) => {
+          const end = quarterEnd[i + 1];
+          cells.push({
+            formula: `SUM(${letter(monthCol(0))}${rowNo}:${letter(monthCol(end))}${rowNo})`,
+            result: months.slice(0, end + 1).reduce((t, _m, j) => t + unalloc(j), 0),
+          });
+        });
         cells.push({
           formula: `SUM(${letter(monthCol(0))}${rowNo}:${letter(monthCol(months.length - 1))}${rowNo})`,
           result: months.reduce((s, _m, mi) => s + unalloc(mi), 0),

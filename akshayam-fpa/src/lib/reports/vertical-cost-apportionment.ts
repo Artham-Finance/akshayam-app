@@ -9,10 +9,12 @@ import { fyMonths, type QuarterNo } from "@/lib/period";
  * and the Vertical Performance Scorecard both read it, so the two always
  * agree. It is struck for exactly six verticals, on one rule only - head
  * count - over two pools: actual cost booked under "Common incl partners
- * contribution", and actual cost booked under ACC and HRCM (both their direct
+ * contribution" together with the cost booked under DSC (the DSC support
+ * cost is common cost, so the one pool is Common plus DSC), and actual cost
+ * booked under ACC and HRCM (both their direct
  * team cost and their overheads, combined into one pool). A cost already
  * tagged to one of the six is that vertical's own and is never re-spread;
- * cost under any other vertical (GIFT/AIF, DSC) or left untagged is outside
+ * cost under any other vertical (GIFT/AIF) or left untagged is outside
  * this card's arrangement entirely, not shown here and not pooled (`outside`
  * hands it back for a caller that rates those verticals itself). ACC's and
  * HRCM's own revenue plays no part here either - only their cost is spread,
@@ -36,6 +38,9 @@ const RECEIVERS: { key: string; label: string; code: string }[] = [
   { key: "RRG", label: "Dharshan — RRG", code: "RRG" },
   { key: "CFC", label: "Rekha — CFC", code: "CFC" },
 ];
+
+/** The common-cost row's name wherever it is shown - the pool is Common's cost plus DSC's. */
+export const COMMON_COST_LABEL = "Common cost (incl DSC cost) — apportioned";
 
 /** The apportionment column a ledger vertical belongs to, or null - only the six take part. */
 export function costApportionmentKeyFor(code: string | null | undefined): string | null {
@@ -101,8 +106,10 @@ export interface VerticalCostApportionmentResult {
   commonCostLines: CostAccountLine[];
   /** ACC's and HRCM's own cost, combined by account - spread across the six by head-count share */
   accHrcmCostLines: CostAccountLine[];
-  /** total cost booked under Common incl partners contribution, before spreading */
+  /** total cost booked under Common incl partners contribution and under DSC, before spreading */
   poolTotal: number;
+  /** the part of `poolTotal` that is DSC's own cost */
+  dscPoolTotal: number;
   /** total cost booked under ACC and HRCM combined, before spreading */
   accHrcmPoolTotal: number;
   /**
@@ -283,6 +290,7 @@ export async function buildVerticalCostApportionment(opts: {
   // account name -> pooled amount, ACC's and HRCM's own cost combined, before spreading.
   const accHrcmPool = new Map<string, number>();
   const outside: Record<string, { revenue: number; directCost: number }> = {};
+  let dscPoolTotal = 0;
 
   const addTo = (map: Map<string, Map<string, number>>, account: string, key: string, amount: number) => {
     const byVertical = map.get(account) ?? new Map<string, number>();
@@ -324,8 +332,10 @@ export async function buildVerticalCostApportionment(opts: {
     // booked cost (direct team cost and overheads together) is the other -
     // not untagged, unallocated, or any other vertical's activity. Their
     // revenue, and any other vertical's figures, play no part in this card.
-    if (row.code === "COMMON" && cost !== 0) {
+    // DSC's support cost is common cost: it goes into Common's pool, by account.
+    if ((row.code === "COMMON" || row.code === "DSC") && cost !== 0) {
       commonPool.set(row.name, (commonPool.get(row.name) ?? 0) + cost);
+      if (row.code === "DSC") dscPoolTotal += cost;
     } else if ((row.code === "ACC" || row.code === "HRCM") && cost !== 0) {
       accHrcmPool.set(row.name, (accHrcmPool.get(row.name) ?? 0) + cost);
     }
@@ -431,6 +441,7 @@ export async function buildVerticalCostApportionment(opts: {
     commonCostLines,
     accHrcmCostLines,
     poolTotal,
+    dscPoolTotal,
     accHrcmPoolTotal,
     outside,
     totalHeads,
@@ -442,6 +453,113 @@ export async function buildVerticalCostApportionment(opts: {
       accHrcmCostLines: accHrcmCostLinesWide,
       commonUnapportioned,
       accHrcmUnapportioned,
+    },
+  };
+}
+
+/**
+ * The quarters from the first up to and including `throughQuarter`, added up: each
+ * quarter struck on its own head count, exactly as its own tab shows it, and the
+ * figures then summed - the cumulative (quarter-to-date) view. Head count is the
+ * average of the quarters.
+ */
+export async function buildCumulativeCostApportionment(opts: {
+  entity: Entity;
+  fyStartYear: number;
+  throughQuarter: QuarterNo;
+}): Promise<VerticalCostApportionmentResult> {
+  const { entity, fyStartYear, throughQuarter } = opts;
+  const quarters = ([1, 2, 3, 4] as const).filter((q) => q <= throughQuarter);
+  const parts = await Promise.all(
+    quarters.map((quarter) => buildVerticalCostApportionment({ entity, fyStartYear, quarter })),
+  );
+  return combineApportionments(parts, throughQuarter);
+}
+
+const CUMULATIVE_END = ["Jun", "Sep", "Dec", "Mar"];
+
+function combineApportionments(
+  parts: VerticalCostApportionmentResult[],
+  throughQuarter: QuarterNo,
+): VerticalCostApportionmentResult {
+  const first = parts[0];
+  const last = parts[parts.length - 1];
+  const n = parts.length;
+  const round2 = (x: number) => Math.round(x * 100) / 100;
+
+  const verticals: ApportionedVerticalCost[] = first.verticals.map((v, i) => {
+    const sum = (pick: (x: ApportionedVerticalCost) => number) => parts.reduce((t, p) => t + pick(p.verticals[i]), 0);
+    return {
+      key: v.key,
+      label: v.label,
+      verticalId: v.verticalId,
+      heads: round2(sum((x) => x.heads) / n),
+      revenue: sum((x) => x.revenue),
+      directTeamCost: sum((x) => x.directTeamCost),
+      directOverheads: sum((x) => x.directOverheads),
+      otherIncome: sum((x) => x.otherIncome),
+      commonApportioned: sum((x) => x.commonApportioned),
+      accHrcmApportioned: sum((x) => x.accHrcmApportioned),
+      totalCost: sum((x) => x.totalCost),
+      contribution: sum((x) => x.contribution),
+      commonApportionedWide: sum((x) => x.commonApportionedWide),
+      accHrcmApportionedWide: sum((x) => x.accHrcmApportionedWide),
+      totalCostWide: sum((x) => x.totalCostWide),
+      contributionWide: sum((x) => x.contributionWide),
+    };
+  });
+
+  const mergeLines = (sets: CostAccountLine[][]): CostAccountLine[] => {
+    const by = new Map<string, CostAccountLine>();
+    for (const set of sets) {
+      for (const l of set) {
+        const cur = by.get(l.account) ?? { account: l.account, amountByKey: {}, total: 0 };
+        for (const [k, amount] of Object.entries(l.amountByKey)) cur.amountByKey[k] = (cur.amountByKey[k] ?? 0) + amount;
+        cur.total += l.total;
+        by.set(l.account, cur);
+      }
+    }
+    return [...by.values()];
+  };
+
+  const outside: Record<string, { revenue: number; directCost: number }> = {};
+  for (const p of parts) {
+    for (const [code, o] of Object.entries(p.outside)) {
+      const cur = outside[code] ?? { revenue: 0, directCost: 0 };
+      cur.revenue += o.revenue;
+      cur.directCost += o.directCost;
+      outside[code] = cur;
+    }
+  }
+  const total = (pick: (p: VerticalCostApportionmentResult) => number) => parts.reduce((t, p) => t + pick(p), 0);
+
+  return {
+    applicable: parts.some((p) => p.applicable),
+    quarter: throughQuarter,
+    month: null,
+    fyStartYear: first.fyStartYear,
+    label: n === 1 ? first.label : `Cumulative Q1–Q${throughQuarter} (Apr–${CUMULATIVE_END[throughQuarter - 1]})`,
+    start: first.start,
+    end: last.end,
+    verticals,
+    directTeamCostLines: mergeLines(parts.map((p) => p.directTeamCostLines)),
+    directOverheadLines: mergeLines(parts.map((p) => p.directOverheadLines)),
+    otherIncomeLines: mergeLines(parts.map((p) => p.otherIncomeLines)),
+    commonCostLines: mergeLines(parts.map((p) => p.commonCostLines)),
+    accHrcmCostLines: mergeLines(parts.map((p) => p.accHrcmCostLines)),
+    poolTotal: total((p) => p.poolTotal),
+    dscPoolTotal: total((p) => p.dscPoolTotal),
+    accHrcmPoolTotal: total((p) => p.accHrcmPoolTotal),
+    outside,
+    totalHeads: round2(total((p) => p.totalHeads) / n),
+    wide: {
+      totalCompanyHeads: round2(total((p) => p.wide.totalCompanyHeads) / n),
+      companyHeadsIsKeyed: parts.every((p) => p.wide.companyHeadsIsKeyed),
+      entityId: first.wide.entityId,
+      commonCostLines: mergeLines(parts.map((p) => p.wide.commonCostLines)),
+      accHrcmCostLines: mergeLines(parts.map((p) => p.wide.accHrcmCostLines)),
+      commonUnapportioned: total((p) => p.wide.commonUnapportioned),
+      accHrcmUnapportioned: total((p) => p.wide.accHrcmUnapportioned),
     },
   };
 }

@@ -23,6 +23,7 @@ export function QuarterTabs({
   writtenTo,
   hrefFor,
   alwaysShowMonths = false,
+  cumulative,
 }: {
   current: QuarterNo;
   /** the month key inside the quarter, when one is picked */
@@ -42,10 +43,19 @@ export function QuarterTabs({
    * cumulative-to-quarter) figure "no month picked" shows.
    */
   alwaysShowMonths?: boolean;
+  /**
+   * A tab beside the quarters for the quarters added up from the first (the
+   * quarter-to-date view). While it is the active one no single quarter or month
+   * is, and the months are not offered.
+   */
+  cumulative?: { label: string; href: string; active: boolean };
 }) {
   const labels = ["Q1 Apr-Jun", "Q2 Jul-Sep", "Q3 Oct-Dec", "Q4 Jan-Mar"];
   const inQuarter = months.filter(
-    (m) => (alwaysShowMonths || m.quarter === current) && (!writtenTo || m.start <= writtenTo),
+    (m) =>
+      !cumulative?.active &&
+      (alwaysShowMonths || m.quarter === current) &&
+      (!writtenTo || m.start <= writtenTo),
   );
 
   const chip =
@@ -65,7 +75,7 @@ export function QuarterTabs({
             </span>
           );
         }
-        const active = q === current;
+        const active = !cumulative?.active && q === current;
         return (
           <Link
             key={q}
@@ -84,6 +94,21 @@ export function QuarterTabs({
           </Link>
         );
       })}
+
+      {cumulative && (
+        <Link
+          href={cumulative.href}
+          scroll={false}
+          className={clsx(
+            chip,
+            cumulative.active
+              ? "bg-navy text-ink-invert"
+              : "border border-line text-ink-muted hover:bg-surface-sunk",
+          )}
+        >
+          {cumulative.label}
+        </Link>
+      )}
 
       {inQuarter.length > 0 && (
         <span className="ml-1 flex flex-wrap items-center gap-1 border-l border-line pl-2">
