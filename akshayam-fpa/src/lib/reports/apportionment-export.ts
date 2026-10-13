@@ -282,7 +282,7 @@ export async function buildApportionmentWorkbook(
         const result = ids.reduce((s, id) => s + figure(id, metric, mi), 0);
         return { formula: refs.join("+"), result };
       };
-      writeBlock("TOTAL", "Total — the six verticals", (metric, mi) => sumMetric(metric, mi));
+      writeBlock("TOTAL", "Total — all the verticals above", (metric, mi) => sumMetric(metric, mi));
 
       if (scenario === "wide") {
         const unalloc = (mi: number) => results[mi].wide.commonUnapportioned + results[mi].wide.accHrcmUnapportioned;

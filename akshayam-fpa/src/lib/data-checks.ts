@@ -2,13 +2,15 @@ import { query } from "@/lib/db";
 import { listAllEntities } from "@/lib/entity";
 import { buildBudgetVsActual } from "@/lib/reports/budget";
 import { buildBudgetVsActualPnl } from "@/lib/reports/budget-pnl";
+import { buildProfitAndLoss } from "@/lib/reports/statements";
+import { fyMonths } from "@/lib/period";
 import {
   COLLECTION_BUDGET_RATIO,
   REVISED_CONTROL_TOTALS,
   revisedCompanyTotal,
   revisedQuarterlyTable,
 } from "@/lib/reports/scorecard-budget";
-import { ROWS, buildScorecard } from "@/lib/reports/scorecard";
+import { ROWS, buildScorecard, resolveScorecardScope } from "@/lib/reports/scorecard";
 import { TEAM_COST_ANNUAL_BUDGET } from "@/lib/reports/team-cost";
 import {
   buildCumulativeCostApportionment,
@@ -227,6 +229,8 @@ export async function runDataChecks(): Promise<DataCheck[]> {
           if (card.verticals.every((v) => v.revenue === 0 && v.totalCost === 0)) continue;
           const sc = await buildScorecard({ entity: company, fyStartYear: FY, quarter: w.quarter, cumulative: w.cumulative });
           for (const v of card.verticals) {
+            // Raja's AIF is on the card with its own cost only; the scorecard's Raja row is AIF and GIFT
+            if (v.key === "AIF") continue;
             const row = sc.rows.find((r) => r.code === rowByKey.get(v.key)?.code);
             if (!row) {
               // a vertical with no activity is left off the scorecard, and has nothing on the card either
@@ -237,8 +241,9 @@ export async function runDataChecks(): Promise<DataCheck[]> {
             }
             const pairs: [string, number, number][] = [
               ["revenue", v.revenue, row.contributionRevenue],
-              ["total cost", v.totalCost, row.cost],
-              ["contribution", v.contribution, row.revenueContribution],
+              // the scorecard also carries each vertical's finance cost and out-of-books billing, which the card does not
+              ["total cost", v.totalCost, row.cost - row.financeCost],
+              ["contribution", v.contribution, row.revenueContribution + row.financeCost - row.osbRevenue],
             ];
             for (const [what, onCard, onScorecard] of pairs) {
               compared++;
@@ -252,6 +257,111 @@ export async function runDataChecks(): Promise<DataCheck[]> {
       if (compared === 0 && problems.length === 0) return { status: "skip", detail: "There is no apportionment to compare yet." };
       return problems.length === 0
         ? { status: "ok", detail: `Revenue, total cost and contribution agree for the six verticals, in every quarter and cumulatively (${compared} comparisons)` }
+        : { status: "fail", detail: problems.slice(0, 6).join("; ") + (problems.length > 6 ? `; and ${problems.length - 6} more` : "") };
+    }),
+  );
+
+  /*
+    The scorecard's net revenue contribution, in total, is the P&L's profit before tax
+    (EBITDA less finance cost) - each vertical's finance cost on its own row, DSC as
+    a line, and RE / RI and anything booked to no vertical on Common's direct cost.
+    Struck for each company and the group, for every quarter and for the year.
+  */
+  checks.push(
+    guarded("scorecard-pnl", "The scorecard's total contribution equals the P&L's profit before tax", async () => {
+      const problems: string[] = [];
+      let compared = 0;
+      const scopes = [...companies, ...(group ? [group] : [])];
+      for (const entity of scopes) {
+        const windows: { label: string; quarter: QuarterNo; cumulative: boolean }[] = [
+          ...([1, 2, 3, 4] as QuarterNo[]).map((q) => ({ label: `Q${q}`, quarter: q, cumulative: false })),
+          { label: "the year", quarter: 4 as QuarterNo, cumulative: true },
+        ];
+        for (const w of windows) {
+          const sc = await buildScorecard({ entity, fyStartYear: FY, quarter: w.quarter, cumulative: w.cumulative });
+          if (sc.rows.length === 0) continue;
+          compared++;
+          if (Math.abs(sc.unreconciled) > 2) {
+            problems.push(`${entity.slug} ${w.label}: ${rs(sc.unreconciled)} of the P&L is on no row`);
+          }
+        }
+      }
+      if (compared === 0) return { status: "skip", detail: "There is no scorecard to compare yet." };
+      return problems.length === 0
+        ? { status: "ok", detail: `Every window ties to the P&L (${compared} comparisons)` }
+        : {
+            status: "fail",
+            detail:
+              problems.slice(0, 6).join("; ") +
+              ". Something in the P&L is on a vertical the scorecard does not carry - open the Net revenue contribution card.",
+          };
+    }),
+  );
+
+  /*
+    Actual revenue and actual collection are one figure wherever they are read: the
+    Overview, the Vertical Performance Scorecard, the P&L and Budget vs Actual
+    (revenue only - they have no collection) agree for the group, RBJV, Akshayam
+    and Raja (AIF + GIFT). The P&L and Budget vs Actual show the revenue Akshayam
+    passed on to RBJV as its own line, and read as the Overview does on the net
+    revenue line beneath it. Struck for each quarter.
+  */
+  checks.push(
+    guarded("actuals-across-tabs", "Actual revenue and collection agree on the Overview, Scorecard, P&L and Budget vs Actual", async () => {
+      const scopes = [
+        ...(group ? [group] : []),
+        ...companies,
+        ...entities.filter((e) => e.slug === "raja"),
+      ];
+      const problems: string[] = [];
+      let compared = 0;
+      const months = fyMonths(FY);
+      for (const entity of scopes) {
+        for (const quarter of [1, 2, 3, 4] as QuarterNo[]) {
+          const qm = months.filter((m) => m.quarter === quarter);
+          const start = qm[0].start;
+          const end = qm[qm.length - 1].end;
+          const period = { start, end, fraction: 3 / 12, monthAligned: true };
+          const [ovRev, ovCol] = await Promise.all([
+            buildBudgetVsActual({ entity, fyStartYear: FY, measure: "revenue", period, revised: true }),
+            buildBudgetVsActual({ entity, fyStartYear: FY, measure: "collection", period, revised: true }),
+          ]);
+          if (Math.abs(ovRev.total.period.actual) < 1 && Math.abs(ovCol.total.period.actual) < 1) continue;
+
+          const scope = await resolveScorecardScope(entity);
+          const sc = await buildScorecard({ entity: scope.benchmark, fyStartYear: FY, quarter, cumulative: false });
+          const rows = scope.isSlice && scope.visibleCodes ? sc.rows.filter((r) => scope.visibleCodes!.has(r.code)) : sc.rows;
+          const unrated = scope.isSlice ? [] : sc.unrated;
+          const scRev = rows.reduce((t, r) => t + r.revenueActual, 0) + unrated.reduce((t, u) => t + u.revenueActual, 0);
+          const scCol = rows.reduce((t, r) => t + r.collectionActual, 0) + unrated.reduce((t, u) => t + u.collectionActual, 0);
+
+          const total = (values: Record<string, number>) =>
+            qm.reduce((t, m) => t + (values[m.key] ?? 0), 0);
+          const pl = await buildProfitAndLoss({ entity, fyStartYear: FY, verticalId: null, window: { start, end } });
+          const plLine = (code: string) => pl.lines.find((l) => l.level === 0 && l.groupCode === code);
+          const plRev = plLine("net_revenue")
+            ? total(plLine("net_revenue")!.values)
+            : total(plLine("revenue")?.values ?? {}) + total(plLine("osb_revenue")?.values ?? {});
+          const bva = await buildBudgetVsActualPnl({ entity, fyStartYear: FY, window: { start, end } });
+          const bvaLine = bva.lines.find((l) => l.code === "net_revenue") ?? bva.lines.find((l) => l.code === "revenue")!;
+          const bvaRev = total(bvaLine.actual);
+
+          const revenue: [string, number][] = [["Scorecard", scRev], ["P&L", plRev], ["Budget vs Actual", bvaRev]];
+          for (const [where, got] of revenue) {
+            compared++;
+            if (Math.abs(got - ovRev.total.period.actual) > 2) {
+              problems.push(`${entity.slug} Q${quarter} revenue on the ${where}: ${rs(got)}, the Overview ${rs(ovRev.total.period.actual)}`);
+            }
+          }
+          compared++;
+          if (Math.abs(scCol - ovCol.total.period.actual) > 2) {
+            problems.push(`${entity.slug} Q${quarter} collection on the Scorecard: ${rs(scCol)}, the Overview ${rs(ovCol.total.period.actual)}`);
+          }
+        }
+      }
+      if (compared === 0) return { status: "skip", detail: "There is no activity to compare yet." };
+      return problems.length === 0
+        ? { status: "ok", detail: `Group, RBJV, Akshayam and Raja agree in every quarter (${compared} comparisons)` }
         : { status: "fail", detail: problems.slice(0, 6).join("; ") + (problems.length > 6 ? `; and ${problems.length - 6} more` : "") };
     }),
   );

@@ -203,7 +203,82 @@ export async function buildProfitAndLoss(opts: {
     }
   }
 
+  await spliceRevenueTransfer(result, { entity, months, start, end, verticalId });
+
   return result;
+}
+
+/**
+ * The revenue Akshayam passed on to RBJV, shown under Revenue as its own line with the
+ * net revenue beneath it - the figure the Overview, Revenue, Collections and Scorecard
+ * report for Akshayam. It has no ledger entry (see 058_revenue_transfer_entries.sql), so
+ * these two lines are for reading only: no subtotal sums them, and EBITDA and profit are
+ * still the ledger's. Added only where there is something transferred in the period.
+ */
+async function spliceRevenueTransfer(
+  result: StatementResult,
+  opts: {
+    entity: Entity;
+    months: ReturnType<typeof fyMonths>;
+    start: string;
+    end: string;
+    verticalId: number | null;
+  },
+): Promise<void> {
+  const { entity, months, start, end, verticalId } = opts;
+  const transferred = await query<{ month_key: string; amount: number }>(
+    `select to_char(t.invoice_date, 'YYYY-MM') as month_key, sum(t.amount)::numeric as amount
+       from revenue_transfer_entries t
+      where t.entity_id = any($1::int[])
+        and t.entity_id in (select id from entities where slug = 'akshayam')
+        and t.invoice_date between $2 and $3
+        and ($4::int is null or t.vertical_id = $4)
+        ${verticalScope("$5", "t.vertical_id")}
+      group by 1`,
+    [entity.memberIds, start, end, verticalId, entity.verticalIds],
+  );
+  if (transferred.every((r) => Number(r.amount) === 0)) return;
+
+  const values = emptyValues(months);
+  for (const r of transferred) if (r.month_key in values) values[r.month_key] = -Number(r.amount);
+
+  // after the revenue block - the OSB revenue heading and its accounts, where there is one
+  let at = result.lines.findIndex((l) => l.level === 0 && l.groupCode === "osb_revenue");
+  if (at < 0) at = result.lines.findIndex((l) => l.level === 0 && l.groupCode === "revenue");
+  if (at < 0) return;
+  while (result.lines[at + 1]?.level === 1) at++;
+
+  const net = emptyValues(months);
+  for (const m of months) {
+    net[m.key] =
+      (result.lines.find((l) => l.level === 0 && l.groupCode === "revenue")?.values[m.key] ?? 0) +
+      (result.lines.find((l) => l.level === 0 && l.groupCode === "osb_revenue")?.values[m.key] ?? 0) +
+      values[m.key];
+  }
+  result.lines.splice(
+    at + 1,
+    0,
+    {
+      key: "revenue_transfer",
+      name: "Less: Revenue transferred to RBJV",
+      level: 0,
+      isSubtotal: false,
+      sign: -1,
+      groupCode: "revenue_transfer",
+      accountId: null,
+      values,
+    },
+    {
+      key: "net_revenue",
+      name: "Net Revenue (after transfer)",
+      level: 0,
+      isSubtotal: false,
+      sign: 1,
+      groupCode: "net_revenue",
+      accountId: null,
+      values: net,
+    },
+  );
 }
 
 /* ============================================================

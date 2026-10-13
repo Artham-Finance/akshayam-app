@@ -145,6 +145,11 @@ export function revisedQuarterlyTable(
       out[rowCode] = [cur[0] + q[0], cur[1] + q[1], cur[2] + q[2], cur[3] + q[3]];
     }
   }
+  // Across both companies Raja's AIF and GIFT are rows of their own, each on its own company's budget
+  if (companySlugs.includes("rbjv") && companySlugs.includes("akshayam")) {
+    out["AIF"] = revised.byCompany.rbjv?.AIF_GIFT ?? [0, 0, 0, 0];
+    out["GIFT"] = revised.byCompany.akshayam?.AIF_GIFT ?? [0, 0, 0, 0];
+  }
   return out;
 }
 
