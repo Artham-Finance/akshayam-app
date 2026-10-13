@@ -23,6 +23,8 @@ import { hasRevisedBudget, revisedRevenueByMonth } from "@/lib/reports/scorecard
 
 export type BvaCode =
   | "revenue"
+  | "revenue_transfer"
+  | "net_revenue"
   | "direct_cost"
   | "establishment_cost"
   | "overheads"
@@ -66,6 +68,11 @@ const LAYOUT: {
   subtotalOf?: BvaCode[];
 }[] = [
   { code: "revenue", name: "Revenue", sign: 1 },
+  // Revenue Akshayam passed on to RBJV, and the net beneath it - the revenue the Overview,
+  // Revenue, Collections and Scorecard report. Not in EBITDA (the ledger carries no entry for
+  // it), and left out of the statement altogether where nothing was transferred.
+  { code: "revenue_transfer", name: "Less: Revenue transferred to RBJV", sign: -1 },
+  { code: "net_revenue", name: "Net revenue (after transfer)", sign: 1, subtotalOf: ["revenue", "revenue_transfer"] },
   { code: "direct_cost", name: "Team cost", sign: -1 },
   { code: "establishment_cost", name: "Establishment cost", sign: -1 },
   // Named to match the account-mapping screen's own P&L group - there is no
@@ -264,6 +271,24 @@ export async function buildBudgetVsActualPnl(opts: {
     line.actual[row.month_key] += Number(row.amount) * (line.sign === -1 ? -1 : 1);
   }
 
+  // The revenue passed on to RBJV, by month, from Akshayam's own entries only.
+  const transferRows = await query<{ month_key: string; amount: number }>(
+    `select to_char(t.invoice_date, 'YYYY-MM') as month_key, sum(t.amount)::numeric as amount
+       from revenue_transfer_entries t
+      where t.entity_id = any($1::int[])
+        and t.entity_id in (select id from entities where slug = 'akshayam')
+        and t.invoice_date between $2 and $3
+        and ($4::int is null or t.vertical_id = $4)
+        ${verticalScope("$5", "t.vertical_id")}
+      group by 1`,
+    [entity.memberIds, start, end, verticalId, entity.verticalIds],
+  );
+  const transferLine = byCode.get("revenue_transfer")!;
+  for (const row of transferRows) {
+    if (valid.has(row.month_key)) transferLine.actual[row.month_key] += Number(row.amount);
+  }
+  const hasTransfer = transferRows.some((r) => Number(r.amount) !== 0);
+
   for (const row of budgetRows) {
     if (!valid.has(row.month_key)) continue;
     const line = byCode.get(row.group_code as BvaCode);
@@ -370,5 +395,10 @@ export async function buildBudgetVsActualPnl(opts: {
     recompute("retained");
   }
 
-  return { months, lines, hasBudget: budgetRows.length > 0 };
+  // Nothing transferred in the window: the two lines would be a row of dashes.
+  const shownLines = hasTransfer
+    ? lines
+    : lines.filter((l) => l.code !== "revenue_transfer" && l.code !== "net_revenue");
+
+  return { months, lines: shownLines, hasBudget: budgetRows.length > 0 };
 }

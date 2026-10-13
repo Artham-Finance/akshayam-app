@@ -265,9 +265,14 @@ export default async function ScorecardPage({
     const pctOf = (part: number, total: number) => (total > 0 ? percent((part / total) * 100, 1) : "–");
 
     const revBudTot = sum((r) => r.revenueBudget);
-    const revActTot = sum((r) => r.revenueActual);
+    // Lines the scorecard does not rate (DSC and support, what is booked to no vertical) are at the
+    // foot of the revenue and collection cards on the all-verticals view, so the totals are the Overview's.
+    const unratedLines = !trend && !singleVertical && !isSlice ? data.unrated : [];
+    const unratedRev = unratedLines.reduce((s, u) => s + u.revenueActual, 0);
+    const unratedCol = unratedLines.reduce((s, u) => s + u.collectionActual, 0);
+    const revActTot = sum((r) => r.revenueActual) + unratedRev;
     const collBudTot = sum((r) => r.collectionBudget);
-    const collActTot = sum((r) => r.collectionActual);
+    const collActTot = sum((r) => r.collectionActual) + unratedCol;
     const directCostTot = sum((r) => r.directCost);
     const apportCostTot = sum((r) => r.apportionedCost);
     const financeCostTot = sum((r) => r.financeCost);
@@ -317,13 +322,18 @@ export default async function ScorecardPage({
       six[4],
       six[5],
     ];
-    const collContribTot = sum((r) => r.collectionContribution);
+    const collContribTot =
+      sum((r) => r.collectionContribution) + unratedLines.reduce((t, u) => t + u.collectionContribution, 0);
     const vertCollContribTot = ownSum((r) => r.collectionContribution);
-    const ageBucketTot = [0, 1, 2, 3, 4, 5].map((i) => sum((r) => r.ageingBuckets[i] ?? 0));
+    const ageBucketTot = [0, 1, 2, 3, 4, 5].map(
+      (i) => sum((r) => r.ageingBuckets[i] ?? 0) + unratedLines.reduce((t, u) => t + (u.ageingBuckets[i] ?? 0), 0),
+    );
     const ageGrandTot = ageBucketTot.reduce((s, b) => s + b, 0);
     const ageBlendedDays =
       ageGrandTot > 0
-        ? sum((r) => (r.ageingDays ?? 0) * r.ageingTotal) / ageGrandTot
+        ? (sum((r) => (r.ageingDays ?? 0) * r.ageingTotal) +
+            unratedLines.reduce((t, u) => t + (u.ageingDays ?? 0) * u.ageingTotal, 0)) /
+          ageGrandTot
         : null;
 
     // The ageing snapshot is a single point in time, not a monthly figure -
@@ -471,15 +481,23 @@ export default async function ScorecardPage({
             hint={unitHint}
             accent="border-navy"
             head={[firstColHead, "Period budget", "Actual", "Achievement", "Rating"]}
-            rows={rowSource.map(({ label, row }) => ({
-              cells: [
-                label,
-                fig(row.revenueBudget),
-                fig(row.revenueActual),
-                row.revenueAchievement === null ? "–" : percent(row.revenueAchievement * 100, 1),
-              ],
-              rating: row.ratings.revenue,
-            }))}
+            rows={[
+              ...rowSource.map(({ label, row }) => ({
+                cells: [
+                  label,
+                  fig(row.revenueBudget),
+                  fig(row.revenueActual),
+                  row.revenueAchievement === null ? "–" : percent(row.revenueAchievement * 100, 1),
+                ],
+                rating: row.ratings.revenue as number | null,
+              })),
+              ...unratedLines
+                .filter((u) => Math.abs(u.revenueActual) >= 0.5)
+                .map((u) => ({
+                  cells: [u.label, "–", fig(u.revenueActual), "–"],
+                  rating: null as number | null,
+                })),
+            ]}
             subFoot={
               singleVertical
                 ? [
@@ -513,15 +531,23 @@ export default async function ScorecardPage({
             hint={unitHint}
             accent="border-navy"
             head={[firstColHead, "Period budget", "Actual", "Achievement", "Rating"]}
-            rows={rowSource.map(({ label, row }) => ({
-              cells: [
-                label,
-                fig(row.collectionBudget),
-                fig(row.collectionActual),
-                row.collectionAchievement === null ? "–" : percent(row.collectionAchievement * 100, 1),
-              ],
-              rating: row.ratings.collection,
-            }))}
+            rows={[
+              ...rowSource.map(({ label, row }) => ({
+                cells: [
+                  label,
+                  fig(row.collectionBudget),
+                  fig(row.collectionActual),
+                  row.collectionAchievement === null ? "–" : percent(row.collectionAchievement * 100, 1),
+                ],
+                rating: row.ratings.collection as number | null,
+              })),
+              ...unratedLines
+                .filter((u) => Math.abs(u.collectionActual) >= 0.5)
+                .map((u) => ({
+                  cells: [u.label, "–", fig(u.collectionActual), "–"],
+                  rating: null as number | null,
+                })),
+            ]}
             subFoot={
               singleVertical
                 ? [
@@ -684,20 +710,37 @@ export default async function ScorecardPage({
               ],
               "Finance cost",
             )}
-            rows={rowSource.map(({ label, row }) => ({
-              cells: withFinance(
-                [
-                  label,
-                  fig(row.collectionActual),
-                  fig(row.directCost),
-                  fig(row.apportionedCost),
-                  fig(row.collectionContribution),
-                  row.collectionContributionShare === null ? "–" : percent(row.collectionContributionShare * 100, 1),
-                ],
-                row.financeCost ? fig(row.financeCost) : "–",
-              ),
-              rating: row.ratings.netCollContrib,
-            }))}
+            rows={[
+              ...rowSource.map(({ label, row }) => ({
+                cells: withFinance(
+                  [
+                    label,
+                    fig(row.collectionActual),
+                    fig(row.directCost),
+                    fig(row.apportionedCost),
+                    fig(row.collectionContribution),
+                    row.collectionContributionShare === null ? "–" : percent(row.collectionContributionShare * 100, 1),
+                  ],
+                  row.financeCost ? fig(row.financeCost) : "–",
+                ),
+                rating: row.ratings.netCollContrib as number | null,
+              })),
+              // DSC and support, and what is booked to no vertical: not rated, but in the total
+              ...unratedLines.map((u) => ({
+                cells: withFinance(
+                  [
+                    u.label,
+                    fig(u.collectionActual),
+                    "–",
+                    "–",
+                    fig(u.collectionContribution),
+                    u.collectionContributionShare === null ? "–" : percent(u.collectionContributionShare * 100, 1),
+                  ],
+                  u.code === "DSC" && dscRow?.financeCost ? fig(dscRow.financeCost) : "–",
+                ),
+                rating: null as number | null,
+              })),
+            ]}
             subFoot={
               singleVertical
                 ? [
@@ -717,13 +760,13 @@ export default async function ScorecardPage({
                       [
                         "% of group total",
                         pctOf(vertCollActTot, collActTot),
-                        pctOf(vertDirectCostTot, directCostTot),
-                        pctOf(vertApportCostTot, apportCostTot),
+                        pctOf(vertDirectCostTot, cDirectTot),
+                        pctOf(vertApportCostTot, cApportTot),
                         pctOf(vertCollContribTot, collContribTot),
                         "–",
                         "",
                       ],
-                      pctOf(vertFinanceCostTot, financeCostTot),
+                      pctOf(vertFinanceCostTot, cFinanceTot),
                     ),
                   ]
                 : undefined
@@ -732,13 +775,13 @@ export default async function ScorecardPage({
               [
                 singleVertical ? "Group total" : "Total",
                 fig(collActTot),
-                fig(directCostTot),
-                fig(apportCostTot),
+                fig(cDirectTot),
+                fig(cApportTot),
                 fig(collContribTot),
                 percent(100, 0),
                 "",
               ],
-              fig(financeCostTot),
+              fig(cFinanceTot),
             )}
           />
           <WorkingCard
@@ -746,15 +789,28 @@ export default async function ScorecardPage({
             hint={unitHint}
             accent="border-caution"
             head={[firstColHead, ...BUCKET_LABELS, "Total", "Wtd avg days", "Rating"]}
-            rows={ageingRowSource.map(({ label, row }) => ({
-              cells: [
-                label,
-                ...row.ageingBuckets.map((b) => (b ? fig(b) : "–")),
-                fig(row.ageingTotal),
-                row.ageingDays === null ? "–" : row.ageingDays.toFixed(0),
-              ],
-              rating: row.ratings.ageing,
-            }))}
+            rows={[
+              ...ageingRowSource.map(({ label, row }) => ({
+                cells: [
+                  label,
+                  ...row.ageingBuckets.map((b) => (b ? fig(b) : "–")),
+                  fig(row.ageingTotal),
+                  row.ageingDays === null ? "–" : row.ageingDays.toFixed(0),
+                ],
+                rating: row.ratings.ageing as number | null,
+              })),
+              ...unratedLines
+                .filter((u) => Math.abs(u.ageingTotal) >= 0.5)
+                .map((u) => ({
+                  cells: [
+                    u.label,
+                    ...u.ageingBuckets.map((b) => (b ? fig(b) : "–")),
+                    fig(u.ageingTotal),
+                    u.ageingDays === null ? "–" : u.ageingDays.toFixed(0),
+                  ],
+                  rating: null as number | null,
+                })),
+            ]}
             subFoot={
               singleVertical && ageingRowSource[0]
                 ? [
@@ -794,19 +850,23 @@ export default async function ScorecardPage({
                 ) : (
                   <>Budgets are the annual figure × {data.window.months}/12.</>
                 )}{" "}
-                Revenue and collection actuals are the ledger&rsquo;s, net of credit notes. Cost is shown in two parts —
+                Revenue and collection actuals are the ledger&rsquo;s, net of credit notes. DSC and support, and
+                what is booked to no vertical (receipts with no invoice, for one), are lines of their own at the
+                foot of the revenue, collection, contribution and ageing cards — not rated, but in the totals, so
+                every total is the Overview&rsquo;s. Cost is shown in parts —
                 the vertical&rsquo;s own directly-tagged cost, and its apportioned share of
                 Common&rsquo;s cost and of ACC and HRCM&rsquo;s cost, spread on head count across
                 the six verticals exactly as in the P&amp;L&rsquo;s cost apportionment card, so
                 the two always agree. Raja carries his own directly-tagged cost and no share of
-                the pool. Contribution is struck after both. The revenue on the
-                contribution card is ledger revenue only; any out-of-books billing is rated
-                against budget above but has no cost beneath it, so it is left off here.
+                the pool, and each vertical carries its own finance cost. Contribution is struck after all
+                of them, and out-of-books billing is added to it, so the total is the P&amp;L&rsquo;s profit
+                before tax. Common&rsquo;s direct cost carries the net reimbursable cost (RE − RI) and anything
+                booked to no vertical.
               </li>
               <li>
-                Reimbursement income and expense are left out of every cost figure here — a
-                client cost recovered from the client is a pass-through, not overhead spend, so
-                it is neither a vertical&rsquo;s own cost nor part of the common pool.
+                Reimbursement income and expense are not in any vertical&rsquo;s own cost or in the common pool
+                — a client cost recovered from the client is a pass-through. Their net (RE − RI) is on Common&rsquo;s
+                direct cost, so the cards add up to the P&amp;L.
               </li>
               <li>
                 Management appraisal is fixed at {MGMT_APPRAISAL_DEFAULT} for every vertical — it

@@ -57,6 +57,9 @@ export const ROWS: {
   codes: string[];
   apportKey: string | null;
   ownCost?: boolean;
+  /** where the revised budget is held, when this row is one half of a shared one (Raja's AIF or GIFT) */
+  budgetCode?: string;
+  budgetCompanies?: string[];
 }[] = [
   { code: "DLR", label: "Vijay - DLR", codes: ["DLR"], apportKey: "DLR" },
   { code: "CMRGA", label: "Gayathri - CMRGA", codes: ["CMRGA"], apportKey: "CMRGA" },
@@ -74,17 +77,21 @@ export const ROWS: {
 /**
  * The rows as one scope reads them. Raja's row is AIF (RBJV) and GIFT (Akshayam):
  * on RBJV's own scorecard it is AIF alone - GIFT is Akshayam's, and a stray GIFT
- * tag in RBJV's books is not Raja's - and on Akshayam's it is GIFT alone. Only a
- * view across both companies (the group, or Raja's own login) carries both.
+ * tag in RBJV's books is not Raja's - and on Akshayam's it is GIFT alone. A view
+ * across both companies (the group, or Raja's own login) carries the two as rows of
+ * their own, "Raja - AIF" and "Raja - GIFT", each on its own company's budget.
  */
 export function scorecardRowsFor(companySlugs: string[]): typeof ROWS {
   const rbjv = companySlugs.includes("rbjv");
   const akshayam = companySlugs.includes("akshayam");
-  return ROWS.map((r) => {
-    if (r.code !== "AIF_GIFT") return r;
-    if (rbjv && !akshayam) return { ...r, label: "Raja - AIF", codes: ["AIF"] };
-    if (akshayam && !rbjv) return { ...r, label: "Raja - GIFT", codes: ["GIFT"] };
-    return r;
+  return ROWS.flatMap((r) => {
+    if (r.code !== "AIF_GIFT") return [r];
+    if (rbjv && !akshayam) return [{ ...r, label: "Raja - AIF", codes: ["AIF"] }];
+    if (akshayam && !rbjv) return [{ ...r, label: "Raja - GIFT", codes: ["GIFT"] }];
+    return [
+      { ...r, code: "AIF", label: "Raja - AIF", codes: ["AIF"], budgetCode: "AIF_GIFT", budgetCompanies: ["rbjv"] },
+      { ...r, code: "GIFT", label: "Raja - GIFT", codes: ["GIFT"], budgetCode: "AIF_GIFT", budgetCompanies: ["akshayam"] },
+    ];
   });
 }
 
@@ -140,6 +147,11 @@ export async function resolveScorecardScope(entity: Entity): Promise<ScorecardSc
       .map((v) => scorecardRowCodeFor(v.code))
       .filter((c): c is string => c !== null),
   );
+  // Raja's row is AIF and GIFT together, or each on its own where the scorecard splits them
+  if (visibleCodes.has("AIF_GIFT")) {
+    visibleCodes.add("AIF");
+    visibleCodes.add("GIFT");
+  }
   return { isSlice: true, benchmark, visibleCodes };
 }
 
@@ -197,6 +209,25 @@ export interface ScorecardRow {
   composite: number;
 }
 
+/**
+ * Actual revenue and collection on a line the scorecard does not rate - DSC and
+ * support, and what is booked to no vertical. Shown at the foot of the revenue and
+ * collection cards with no budget and no rating, so the totals are the Overview's.
+ */
+export interface UnratedLine {
+  code: string;
+  label: string;
+  revenueActual: number;
+  collectionActual: number;
+  /** collection less the finance cost booked to it - struck like a vertical's net collection contribution */
+  collectionContribution: number;
+  collectionContributionShare: number | null;
+  /** its open receivables by age, the same six buckets as a rated row's */
+  ageingBuckets: number[];
+  ageingTotal: number;
+  ageingDays: number | null;
+}
+
 export interface ScorecardResult {
   quarter: QuarterNo;
   cumulative: boolean;
@@ -209,6 +240,8 @@ export interface ScorecardResult {
    */
   revisedBudgetSource: string | null;
   rows: ScorecardRow[];
+  /** actual revenue and collection on lines that are not rated, so the totals match the Overview */
+  unrated: UnratedLine[];
   /**
    * DSC and support, shown in the contribution cards only: its revenue is part of
    * the P&L's, its cost is already in Common's pool, and it is not rated. Null
@@ -449,7 +482,7 @@ export async function buildScorecard(opts: {
     const rev = def.codes.reduce((s, c) => s + (revByCode.get(c)?.period.actual ?? 0), 0);
     // The revised quarterly budget, where there is one for the year - for this
     // scorecard only; every other report keeps the budgets already loaded.
-    const revised = scorecardBudgetFor(fyStartYear, companySlugs, def.code, months);
+    const revised = scorecardBudgetFor(fyStartYear, def.budgetCompanies ?? companySlugs, def.budgetCode ?? def.code, months);
     const revBud =
       revised?.revenue ??
       def.codes.reduce((s, c) => s + (revByCode.get(c)?.period.periodBudget ?? 0), 0);
@@ -548,6 +581,45 @@ export async function buildScorecard(opts: {
     };
   });
 
+  // Lines the rows above do not carry - DSC and support, what is booked to no vertical:
+  // not rated, but in the Overview's totals for revenue, collection and receivables.
+  const coveredCodes = new Set(rowDefs.flatMap((d) => d.codes));
+  const unratedKeys = new Set(
+    [...revByCode.keys(), ...collByCode.keys(), ...ageByCode.keys()].filter((c) => !coveredCodes.has(c)),
+  );
+  const unratedBase = [...unratedKeys]
+    .map((code) => {
+      const buckets = [0, 1, 2, 3, 4, 5].map((i) =>
+        Number(((ageByCode.get(code) as Record<string, number> | undefined) ?? {})[`b${i}`] ?? 0),
+      );
+      const ageingTotal = buckets.reduce((t, b) => t + b, 0);
+      const collection = collByCode.get(code)?.period.actual ?? 0;
+      // finance cost booked to no vertical is on Common's direct cost already, so not here again
+      const finance = code === "" ? 0 : (financeByCode.get(code) ?? 0);
+      return {
+        code: code || "UNATTRIBUTED",
+        label:
+          revByCode.get(code)?.name ??
+          collByCode.get(code)?.name ??
+          (code === "DSC" ? "DSC and support" : code || "Not attributed to a vertical"),
+        revenueActual: revByCode.get(code)?.period.actual ?? 0,
+        collectionActual: collection,
+        collectionContribution: collection - finance,
+        collectionContributionShare: null as number | null,
+        ageingBuckets: buckets,
+        ageingTotal,
+        ageingDays:
+          ageingTotal === 0 ? null : buckets.reduce((t, b, i) => t + b * AGE_BUCKETS[i].mid, 0) / ageingTotal,
+      };
+    })
+    .filter(
+      (u) =>
+        Math.abs(u.revenueActual) >= 0.5 || Math.abs(u.collectionActual) >= 0.5 || Math.abs(u.ageingTotal) >= 0.5,
+    )
+    // DSC and support first, then whatever else is on no row
+    .sort((a, b) => (a.code === "DSC" ? -1 : b.code === "DSC" ? 1 : 0));
+  const dscCollection = unratedBase.find((u) => u.code === "DSC")?.collectionActual ?? 0;
+
   // DSC and support: not a rated vertical, but its revenue is in the P&L, so it is a
   // line of the contribution cards (its cost is already in Common's pool).
   const dscRevenue = outside.get("DSC")?.revenue ?? 0;
@@ -555,7 +627,7 @@ export async function buildScorecard(opts: {
   const dscFinance = financeByCode.get("DSC") ?? 0;
   const dscContribution = dscRevenue + dscOsb - dscFinance;
   const dscDraft: ScorecardRow | null =
-    companySlugs.includes("rbjv") && (dscRevenue !== 0 || dscOsb !== 0 || dscFinance !== 0)
+    companySlugs.includes("rbjv") && (dscRevenue !== 0 || dscOsb !== 0 || dscFinance !== 0 || dscCollection !== 0)
       ? {
           code: "DSC",
           label: "DSC and support",
@@ -563,7 +635,7 @@ export async function buildScorecard(opts: {
           revenueActual: dscRevenue + dscOsb,
           revenueAchievement: null,
           collectionBudget: 0,
-          collectionActual: 0,
+          collectionActual: dscCollection,
           collectionAchievement: null,
           directCost: 0,
           apportionedCost: 0,
@@ -573,7 +645,7 @@ export async function buildScorecard(opts: {
           contributionRevenue: dscRevenue,
           revenueContribution: dscContribution,
           revenueContributionShare: null,
-          collectionContribution: 0,
+          collectionContribution: dscCollection - dscFinance,
           collectionContributionShare: null,
           ageingBuckets: [0, 0, 0, 0, 0, 0],
           ageingTotal: 0,
@@ -585,7 +657,9 @@ export async function buildScorecard(opts: {
 
   const totalRevContribution =
     drafts.reduce((s, d) => s + Math.max(0, d.revenueContribution), 0) + Math.max(0, dscDraft?.revenueContribution ?? 0);
-  const totalCollContribution = drafts.reduce((s, d) => s + Math.max(0, d.collectionContribution), 0);
+  const totalCollContribution =
+    drafts.reduce((s, d) => s + Math.max(0, d.collectionContribution), 0) +
+    unratedBase.reduce((s, u) => s + Math.max(0, u.collectionContribution), 0);
 
   const rows: ScorecardRow[] = drafts
     .filter((d) => d._hasData)
@@ -619,11 +693,18 @@ export async function buildScorecard(opts: {
       };
     });
 
+  const unrated: UnratedLine[] = unratedBase.map((u) => ({
+    ...u,
+    collectionContributionShare: totalCollContribution > 0 ? u.collectionContribution / totalCollContribution : null,
+  }));
+
   const dsc: ScorecardRow | null = dscDraft
     ? {
         ...dscDraft,
         revenueContributionShare:
           totalRevContribution > 0 ? dscDraft.revenueContribution / totalRevContribution : null,
+        collectionContributionShare:
+          totalCollContribution > 0 ? dscDraft.collectionContribution / totalCollContribution : null,
       }
     : null;
 
@@ -646,6 +727,7 @@ export async function buildScorecard(opts: {
     arAsOf,
     revisedBudgetSource: scorecardBudgetSource(fyStartYear),
     rows,
+    unrated,
     dsc,
     unreconciled,
   };

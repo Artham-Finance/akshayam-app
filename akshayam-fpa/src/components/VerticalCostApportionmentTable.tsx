@@ -122,7 +122,8 @@ export function VerticalCostApportionmentTable({
         head count only, across the six verticals below. Cost already tagged to a vertical is its
         own and is never re-spread; only Common&rsquo;s, DSC&rsquo;s and ACC and HRCM&rsquo;s
         activity is pooled and spread this way — any other vertical&rsquo;s activity plays no part
-        in this card.
+        in this card. Raja&rsquo;s AIF, where shown, carries its own revenue and cost only — it is not in the head
+        count and takes no share of the pools.
         {scale !== "abs" && ` All figures ${scaleLabel[scale].toLowerCase()}.`}
       </p>
       <p className="px-3 pb-3 text-[11.5px] text-ink-faint">

@@ -187,6 +187,10 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
     "rating",
   ];
   const L = Object.fromEntries(colKeys.map((k, i) => [k, String.fromCharCode(65 + i)])) as Record<string, string>;
+  // Revenue and collection on lines that are not rated (DSC, no vertical) take rows at the foot of those two sheets.
+  const unrated = isPartial ? [] : data.unrated;
+  const bLast = last + unrated.length;
+  const bTotal = totalRow + unrated.length;
   // the sheet's own total row is one lower where DSC takes a row of its own
   const cLast = last + (dscRow ? 1 : 0);
   const cTotal = totalRow + (dscRow ? 1 : 0);
@@ -246,6 +250,7 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
     pickAch: (r: ScorecardRow) => number | null,
     pickRating: (r: ScorecardRow) => number,
     budgetLinkCol: string,
+    pickUnrated: (u: (typeof unrated)[number]) => number,
   ) => {
     const cols = budgetCols(label);
     const sheet = parameterSheet(
@@ -274,16 +279,18 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
         { formula: budgetRating(`D${rowNo}`), result: pickRating(r) },
       ]);
     });
+    // lines that are not rated: actual only, no budget and no rating
+    unrated.forEach((u, i) => put(sheet, cols, last + 1 + i, [u.label, 0, pickUnrated(u), "", null]));
     const bud = sum(pickBudget);
-    const act = sum(pickActual);
+    const act = sum(pickActual) + unrated.reduce((s, u) => s + pickUnrated(u), 0);
     const totalCells: CellIn[] = [
       isPartial ? "Entity as a whole (all rated verticals)" : "Entity as a whole",
-      isPartial ? bud : { formula: `SUM(B${FIRST}:B${last})`, result: bud },
-      isPartial ? act : { formula: `SUM(C${FIRST}:C${last})`, result: act },
-      { formula: `IF(B${totalRow}>0,C${totalRow}/B${totalRow},"")`, result: bud > 0 ? act / bud : "" },
-      { formula: budgetRating(`D${totalRow}`), result: ratingOf(bud > 0 ? act / bud : null) },
+      isPartial ? bud : { formula: `SUM(B${FIRST}:B${bLast})`, result: bud },
+      isPartial ? act : { formula: `SUM(C${FIRST}:C${bLast})`, result: act },
+      { formula: `IF(B${bTotal}>0,C${bTotal}/B${bTotal},"")`, result: bud > 0 ? act / bud : "" },
+      { formula: budgetRating(`D${bTotal}`), result: ratingOf(bud > 0 ? act / bud : null) },
     ];
-    boldTotal(put(sheet, cols, totalRow, totalCells));
+    boldTotal(put(sheet, cols, bTotal, totalCells));
     return sheet;
   };
   budgetSheet(
@@ -294,6 +301,7 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
     (r) => r.revenueAchievement,
     (r) => r.ratings.revenue,
     "R",
+    (u) => u.revenueActual,
   );
   budgetSheet(
     S.collection,
@@ -303,6 +311,7 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
     (r) => r.collectionAchievement,
     (r) => r.ratings.collection,
     "S",
+    (u) => u.collectionActual,
   );
 
   /* ---------- net revenue contribution ---------- */
@@ -416,9 +425,9 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
       ],
       cols,
     );
+    const range = `$D${FIRST}:$D${bLast}`;
     shown.forEach((r, i) => {
       const rowNo = FIRST + i;
-      const range = `$D$${FIRST}:$D$${last}`;
       put(sheet, cols, rowNo, [
         r.label,
         { formula: ref(S.collection, "C", rowNo), result: r.collectionActual },
@@ -433,14 +442,30 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
         { formula: contributionRating(`E${rowNo}`), result: r.ratings.netCollContrib },
       ]);
     });
-    const act = sum((r) => r.collectionActual);
-    const cost = sum((r) => r.cost);
+    // DSC and support, and what is booked to no vertical: collection less the finance cost on it; not rated
+    unrated.forEach((u, i) => {
+      const rowNo = last + 1 + i;
+      const finance = u.collectionActual - u.collectionContribution;
+      put(sheet, cols, rowNo, [
+        u.label,
+        { formula: ref(S.collection, "C", rowNo), result: u.collectionActual },
+        finance,
+        { formula: `B${rowNo}-C${rowNo}`, result: u.collectionContribution },
+        {
+          formula: `IF(SUMIF(${range},">0")>0,D${rowNo}/SUMIF(${range},">0"),"")`,
+          result: u.collectionContributionShare ?? "",
+        },
+        null,
+      ]);
+    });
+    const act = sum((r) => r.collectionActual) + unrated.reduce((t, u) => t + u.collectionActual, 0);
+    const cost = sum((r) => r.cost) + unrated.reduce((t, u) => t + (u.collectionActual - u.collectionContribution), 0);
     boldTotal(
-      put(sheet, cols, totalRow, [
+      put(sheet, cols, bTotal, [
         isPartial ? "Entity as a whole (all rated verticals)" : "Entity as a whole",
-        { formula: ref(S.collection, "C", totalRow), result: act },
-        { formula: ref(S.revContribution, C.total, cTotal), result: cost + (dscRow?.cost ?? 0) },
-        { formula: `B${totalRow}-C${totalRow}`, result: act - cost },
+        { formula: `SUM(B${FIRST}:B${bLast})`, result: act },
+        { formula: `SUM(C${FIRST}:C${bLast})`, result: cost },
+        { formula: `B${bTotal}-C${bTotal}`, result: act - cost },
         null,
         null,
       ]),
@@ -487,18 +512,33 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
       ] as CellIn[];
     };
     shown.forEach((r, i) => put(sheet, cols, FIRST + i, rowFor(r, FIRST + i)));
-    const buckets = [0, 1, 2, 3, 4, 5].map((i) => sum((r) => r.ageingBuckets[i] ?? 0));
+    // lines that are not rated: the same buckets and days, no rating
+    unrated.forEach((u, i) => {
+      const rowNo = last + 1 + i;
+      put(sheet, cols, rowNo, [
+        u.label,
+        ...u.ageingBuckets,
+        { formula: `SUM(B${rowNo}:G${rowNo})`, result: u.ageingTotal },
+        u.ageingDays === null
+          ? ""
+          : { formula: `IF(H${rowNo}=0,0,SUMPRODUCT(B${rowNo}:G${rowNo},${MIDS})/H${rowNo})`, result: u.ageingDays },
+        "",
+      ] as CellIn[]);
+    });
+    const buckets = [0, 1, 2, 3, 4, 5].map(
+      (i) => sum((r) => r.ageingBuckets[i] ?? 0) + unrated.reduce((t, u) => t + (u.ageingBuckets[i] ?? 0), 0),
+    );
     const total = buckets.reduce((s, b) => s + b, 0);
     const days = total === 0 ? 0 : buckets.reduce((s, b, i) => s + b * AGE_MIDS[i], 0) / total;
     boldTotal(
-      put(sheet, cols, totalRow, [
+      put(sheet, cols, bTotal, [
         isPartial ? "Entity as a whole (all rated verticals)" : "Entity as a whole",
         ...buckets.map((b, i) =>
-          isPartial ? b : { formula: `SUM(${letter(2 + i)}${FIRST}:${letter(2 + i)}${last})`, result: b },
+          isPartial ? b : { formula: `SUM(${letter(2 + i)}${FIRST}:${letter(2 + i)}${bLast})`, result: b },
         ),
-        { formula: `SUM(B${totalRow}:G${totalRow})`, result: total },
-        { formula: `IF(H${totalRow}=0,0,SUMPRODUCT(B${totalRow}:G${totalRow},${MIDS})/H${totalRow})`, result: days },
-        { formula: ageingRatingFormula(`I${totalRow}`), result: ageingRatingOf(days) },
+        { formula: `SUM(B${bTotal}:G${bTotal})`, result: total },
+        { formula: `IF(H${bTotal}=0,0,SUMPRODUCT(B${bTotal}:G${bTotal},${MIDS})/H${bTotal})`, result: days },
+        { formula: ageingRatingFormula(`I${bTotal}`), result: ageingRatingOf(days) },
       ] as CellIn[]),
     );
   }
@@ -545,20 +585,22 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
     ]);
   });
   const revBud = sum((r) => r.revenueBudget);
-  const revAct = sum((r) => r.revenueActual);
+  const revAct = sum((r) => r.revenueActual) + unrated.reduce((s, u) => s + u.revenueActual, 0);
   const colBud = sum((r) => r.collectionBudget);
-  const colAct = sum((r) => r.collectionActual);
-  const bk = [0, 1, 2, 3, 4, 5].map((i) => sum((r) => r.ageingBuckets[i] ?? 0));
+  const colAct = sum((r) => r.collectionActual) + unrated.reduce((s, u) => s + u.collectionActual, 0);
+  const bk = [0, 1, 2, 3, 4, 5].map(
+    (i) => sum((r) => r.ageingBuckets[i] ?? 0) + unrated.reduce((t, u) => t + (u.ageingBuckets[i] ?? 0), 0),
+  );
   const bt = bk.reduce((s, b) => s + b, 0);
   const wd = bt === 0 ? 0 : bk.reduce((s, b, i) => s + b * AGE_MIDS[i], 0) / bt;
   boldTotal(
     put(overall, overallCols, totalRow, [
       isPartial ? "Entity as a whole (all rated verticals)" : "Entity as a whole",
-      { formula: ref(S.revenue, "E", totalRow), result: ratingOf(revBud > 0 ? revAct / revBud : null) },
-      { formula: ref(S.collection, "E", totalRow), result: ratingOf(colBud > 0 ? colAct / colBud : null) },
+      { formula: ref(S.revenue, "E", bTotal), result: ratingOf(revBud > 0 ? revAct / revBud : null) },
+      { formula: ref(S.collection, "E", bTotal), result: ratingOf(colBud > 0 ? colAct / colBud : null) },
       "—",
       "—",
-      { formula: ref(S.ageing, "J", totalRow), result: ageingRatingOf(wd) },
+      { formula: ref(S.ageing, "J", bTotal), result: ageingRatingOf(wd) },
       "—",
       "—",
     ]),
