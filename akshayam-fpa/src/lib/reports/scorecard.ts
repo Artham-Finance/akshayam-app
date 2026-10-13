@@ -3,6 +3,7 @@ import { getVerticals, listAllEntities, type Entity } from "@/lib/entity";
 import { fyMonths, type QuarterNo } from "@/lib/period";
 import { buildBudgetVsActual } from "@/lib/reports/budget";
 import { scorecardBudgetFor, scorecardBudgetSource } from "@/lib/reports/scorecard-budget";
+import { buildProfitAndLoss } from "@/lib/reports/statements";
 import { buildVerticalCostApportionment } from "@/lib/reports/vertical-cost-apportionment";
 import {
   MGMT_APPRAISAL_DEFAULT,
@@ -155,12 +156,20 @@ export interface ScorecardRow {
   directCost: number;
   /** its share of the apportioned common pool */
   apportionedCost: number;
-  /**
-   * Finance cost (interest and bank charges) booked to the vertical - carried
-   * only by Raja's row (AIF and GIFT), whose own books bear it; nil elsewhere.
-   */
+  /** Finance cost (interest and bank charges) booked to the vertical, carried on its own row. */
   financeCost: number;
-  /** directCost + apportionedCost + financeCost - the figure contribution is struck on */
+  /**
+   * Out-of-books billing on the vertical: rated against budget in the revenue
+   * card, and added to its net revenue contribution here, so the contribution
+   * ties to the P&L, which carries it as revenue.
+   */
+  osbRevenue: number;
+  /**
+   * directCost + apportionedCost + financeCost - the figure contribution is struck on.
+   * Common's `directCost` also carries what is booked to no vertical at all - the
+   * net reimbursable cost (RE less RI) and any untagged posting - so that the whole
+   * of the P&L is on the card.
+   */
   cost: number;
   /**
    * Ledger revenue for the vertical - what net revenue contribution is struck
@@ -200,6 +209,18 @@ export interface ScorecardResult {
    */
   revisedBudgetSource: string | null;
   rows: ScorecardRow[];
+  /**
+   * DSC and support, shown in the contribution cards only: its revenue is part of
+   * the P&L's, its cost is already in Common's pool, and it is not rated. Null
+   * where there is none (Akshayam, a team lead's slice).
+   */
+  dsc: ScorecardRow | null;
+  /**
+   * The P&L's profit before tax (EBITDA less finance cost) less the contribution
+   * of every row, DSC included. Nil when the card ties to the P&L, as it should;
+   * the Data checks page says so when it does not.
+   */
+  unreconciled: number;
 }
 
 const QUARTER_LABELS = ["Q1 · Apr–Jun", "Q2 · Jul–Sep", "Q3 · Oct–Dec", "Q4 · Jan–Mar"];
@@ -250,7 +271,7 @@ export async function buildScorecard(opts: {
   const companySlugs = await scorecardCompanySlugs(entity);
   const rowDefs = scorecardRowsFor(companySlugs);
 
-  // Finance cost by vertical code over the window - Raja's row carries it.
+  // Finance cost by vertical code over the window - each vertical's row carries its own.
   const financeByCode = new Map(
     (
       await query<{ code: string | null; amount: number }>(
@@ -260,6 +281,74 @@ export async function buildScorecard(opts: {
            left join verticals v on v.id = g.vertical_id
           where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
             and a.statement = 'pnl' and a.group_code = 'finance_cost'
+          group by v.code`,
+        [entity.memberIds, start, end],
+      )
+    ).map((r) => [r.code ?? "", Number(r.amount)]),
+  );
+
+  /*
+    The net reimbursable cost (RE less RI) of the window. The apportionment card
+    leaves it out, so no vertical's cost carries it; here it is put on Common's row,
+    as Common's direct cost, so the whole of the P&L's figure is on the card. Where
+    there is no Common (Akshayam alone), Raja's GIFT row bears it.
+  */
+  const reimbursementsNet = Number(
+    (
+      await query<{ amount: number }>(
+        `select coalesce(sum(g.debit - g.credit), 0)::numeric as amount
+           from gl_entries g
+           join accounts a on a.id = g.account_id
+          where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
+            and a.statement = 'pnl' and a.group_code = 'reimbursements'
+            and not ($4::boolean and a.is_intercompany)`,
+        [entity.memberIds, start, end, entity.consolidates],
+      )
+    )[0]?.amount ?? 0,
+  );
+  /*
+    Anything booked to no vertical at all - revenue, cost, other income, finance
+    cost, out-of-books items - has no row of its own to sit on. It is dropped into
+    Common's direct cost (revenue as a negative cost), with the RE / RI above, so
+    the card's total is the P&L's.
+  */
+  const untagged = (
+    await query<{ revenue: number; cost: number }>(
+      `select coalesce(sum(case when a.group_code = 'revenue' then g.credit - g.debit else 0 end), 0)::numeric as revenue,
+              coalesce(sum(case when a.group_code in ('direct_cost','establishment_cost','overheads','other_income','finance_cost')
+                                then g.debit - g.credit else 0 end), 0)::numeric as cost
+         from gl_entries g
+         join accounts a on a.id = g.account_id
+        where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
+          and a.statement = 'pnl' and g.vertical_id is null
+          and not ($4::boolean and a.is_intercompany)`,
+      [entity.memberIds, start, end, entity.consolidates],
+    )
+  )[0];
+  const untaggedOsb = (
+    await query<{ revenue: number; cost: number }>(
+      `select (select coalesce(sum(i.amount_base), 0) from invoice_lines i
+                 where i.entity_id = any($1::int[]) and i.is_osb and i.vertical_id is null
+                   and i.invoice_date between $2 and $3)::numeric as revenue,
+              (select coalesce(sum(o.amount), 0) from osb_expense_entries o
+                where o.entity_id = any($1::int[]) and o.vertical_id is null
+                  and o.month between date_trunc('month', $2::date)::date and $3::date)::numeric as cost`,
+      [entity.memberIds, start, end],
+    )
+  )[0];
+  const untaggedNetCost =
+    Number(untagged?.cost ?? 0) + Number(untaggedOsb?.cost ?? 0) - Number(untagged?.revenue ?? 0) - Number(untaggedOsb?.revenue ?? 0);
+  const commonCarries = reimbursementsNet + untaggedNetCost;
+  const commonRow = companySlugs.includes("rbjv") ? "COMMON" : "AIF_GIFT";
+
+  // Out-of-books billing by vertical code over the window.
+  const osbByCode = new Map(
+    (
+      await query<{ code: string | null; amount: number }>(
+        `select v.code, sum(i.amount_base)::numeric as amount
+           from invoice_lines i
+           left join verticals v on v.id = i.vertical_id
+          where i.entity_id = any($1::int[]) and i.is_osb and i.invoice_date between $2 and $3
           group by v.code`,
         [entity.memberIds, start, end],
       )
@@ -384,18 +473,23 @@ export async function buildScorecard(opts: {
           { revenue: 0, directCost: 0 },
         )
       : undefined;
-    const financeCost = def.ownCost ? def.codes.reduce((s, c) => s + (financeByCode.get(c) ?? 0), 0) : 0;
-    const directCost = ap?.directCost ?? own?.directCost ?? 0;
+    const financeCost = def.codes.reduce((s, c) => s + (financeByCode.get(c) ?? 0), 0);
+    const carried = def.code === commonRow ? commonCarries : 0;
+    const osbRevenue = def.codes.reduce((s, c) => s + (osbByCode.get(c) ?? 0), 0);
+    const directCost = (ap?.directCost ?? own?.directCost ?? 0) + carried;
     const apportionedCost = ap?.apportionedCost ?? 0;
-    const cost = ap?.cost ?? (own?.directCost ?? 0) + financeCost;
-    // Ledger revenue, as the cost beneath it is: out-of-books billing is rated
-    // against budget but has no cost line, so contribution leaves it out. A
-    // vertical with no ledger activity at all falls back to the budget figure.
+    // what the vertical's cost was before finance cost and RE / RI are put on it
+    const baseCost = ap?.cost ?? own?.directCost ?? 0;
+    const cost = baseCost + financeCost + carried;
+    // Ledger revenue is what the cost beneath it is struck against; out-of-books
+    // billing is added alongside it (its own column) so the contribution is the
+    // P&L's. A vertical with no ledger activity at all falls back to the budget figure.
     const ledgerRevenue = def.codes.some((c) => outside.has(c))
       ? def.codes.reduce((s, c) => s + (outside.get(c)?.revenue ?? 0), 0)
       : rev;
     const contributionRevenue = ap?.revenue ?? ledgerRevenue;
-    const revContribution = ap?.contribution ?? contributionRevenue - cost;
+    const revContribution =
+      (ap?.contribution ?? contributionRevenue - baseCost) + osbRevenue - financeCost - carried;
     const collContribution = coll - cost;
 
     // AIF_GIFT sums its two codes' buckets elementwise; everything else is one code.
@@ -431,6 +525,7 @@ export async function buildScorecard(opts: {
       directCost,
       apportionedCost,
       financeCost,
+      osbRevenue,
       cost,
       contributionRevenue,
       revenueContribution: revContribution,
@@ -453,7 +548,43 @@ export async function buildScorecard(opts: {
     };
   });
 
-  const totalRevContribution = drafts.reduce((s, d) => s + Math.max(0, d.revenueContribution), 0);
+  // DSC and support: not a rated vertical, but its revenue is in the P&L, so it is a
+  // line of the contribution cards (its cost is already in Common's pool).
+  const dscRevenue = outside.get("DSC")?.revenue ?? 0;
+  const dscOsb = osbByCode.get("DSC") ?? 0;
+  const dscFinance = financeByCode.get("DSC") ?? 0;
+  const dscContribution = dscRevenue + dscOsb - dscFinance;
+  const dscDraft: ScorecardRow | null =
+    companySlugs.includes("rbjv") && (dscRevenue !== 0 || dscOsb !== 0 || dscFinance !== 0)
+      ? {
+          code: "DSC",
+          label: "DSC and support",
+          revenueBudget: 0,
+          revenueActual: dscRevenue + dscOsb,
+          revenueAchievement: null,
+          collectionBudget: 0,
+          collectionActual: 0,
+          collectionAchievement: null,
+          directCost: 0,
+          apportionedCost: 0,
+          financeCost: dscFinance,
+          osbRevenue: dscOsb,
+          cost: dscFinance,
+          contributionRevenue: dscRevenue,
+          revenueContribution: dscContribution,
+          revenueContributionShare: null,
+          collectionContribution: 0,
+          collectionContributionShare: null,
+          ageingBuckets: [0, 0, 0, 0, 0, 0],
+          ageingTotal: 0,
+          ageingDays: null,
+          ratings: { revenue: 0, collection: 0, netRevContrib: 0, netCollContrib: 0, ageing: null, mgmt: MGMT_APPRAISAL_DEFAULT },
+          composite: 0,
+        }
+      : null;
+
+  const totalRevContribution =
+    drafts.reduce((s, d) => s + Math.max(0, d.revenueContribution), 0) + Math.max(0, dscDraft?.revenueContribution ?? 0);
   const totalCollContribution = drafts.reduce((s, d) => s + Math.max(0, d.collectionContribution), 0);
 
   const rows: ScorecardRow[] = drafts
@@ -488,6 +619,26 @@ export async function buildScorecard(opts: {
       };
     });
 
+  const dsc: ScorecardRow | null = dscDraft
+    ? {
+        ...dscDraft,
+        revenueContributionShare:
+          totalRevContribution > 0 ? dscDraft.revenueContribution / totalRevContribution : null,
+      }
+    : null;
+
+  // The tie to the P&L: its profit before tax (EBITDA less finance cost) over the same
+  // months, against every row's contribution. It is nil when nothing is missing.
+  const pl = await buildProfitAndLoss({ entity, fyStartYear, verticalId: null, window: { start, end } });
+  const plTotal = (groupCode: string) => {
+    const line = pl.lines.find((l) => l.level === 0 && l.groupCode === groupCode);
+    return line ? months.reduce((s, m) => s + (line.values[m.key] ?? 0), 0) : 0;
+  };
+  const unreconciled =
+    plTotal("ebitda") +
+    plTotal("finance_cost") -
+    (rows.reduce((s, r) => s + r.revenueContribution, 0) + (dsc?.revenueContribution ?? 0));
+
   return {
     quarter,
     cumulative,
@@ -495,5 +646,7 @@ export async function buildScorecard(opts: {
     arAsOf,
     revisedBudgetSource: scorecardBudgetSource(fyStartYear),
     rows,
+    dsc,
+    unreconciled,
   };
 }

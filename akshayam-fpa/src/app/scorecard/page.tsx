@@ -175,6 +175,7 @@ export default async function ScorecardPage({
       directCost: 0,
       apportionedCost: 0,
       financeCost: 0,
+      osbRevenue: 0,
       cost: 0,
       contributionRevenue: 0,
       revenueContribution: 0,
@@ -270,8 +271,18 @@ export default async function ScorecardPage({
     const directCostTot = sum((r) => r.directCost);
     const apportCostTot = sum((r) => r.apportionedCost);
     const financeCostTot = sum((r) => r.financeCost);
-    const contribRevTot = sum((r) => r.contributionRevenue);
-    const revContribTot = sum((r) => r.revenueContribution);
+    // DSC and support is a line of the contribution cards only (its revenue is in the P&L; its
+    // cost is in Common's pool) - on the all-verticals view, not a trend, a single vertical or a slice.
+    const dscRow = !trend && !singleVertical && !isSlice ? data.dsc : null;
+    const cSum = (f: (r: ScorecardRow) => number) => sum(f) + (dscRow ? f(dscRow) : 0);
+    const cRevTot = cSum((r) => r.contributionRevenue);
+    const cOsbTot = cSum((r) => r.osbRevenue);
+    const cDirectTot = cSum((r) => r.directCost);
+    const cApportTot = cSum((r) => r.apportionedCost);
+    const cFinanceTot = cSum((r) => r.financeCost);
+    const cContribTot = cSum((r) => r.revenueContribution);
+    const contribRevTot = cRevTot;
+    const revContribTot = cContribTot;
 
     const vertRevBudTot = ownSum((r) => r.revenueBudget);
     const vertRevActTot = ownSum((r) => r.revenueActual);
@@ -280,22 +291,32 @@ export default async function ScorecardPage({
     const vertDirectCostTot = ownSum((r) => r.directCost);
     const vertApportCostTot = ownSum((r) => r.apportionedCost);
     const vertFinanceCostTot = ownSum((r) => r.financeCost);
-    // Finance cost has a column only where a vertical bears it (Raja's AIF and GIFT) -
-    // Akshayam's view, Raja's own, and the group's. Elsewhere it would be a column of dashes.
-    const showFinance = sum((r) => Math.abs(r.financeCost)) > 0;
+    // Finance cost and out-of-books billing have a column only where a vertical has some -
+    // elsewhere it would be a column of dashes.
+    const showFinance = cSum((r) => Math.abs(r.financeCost)) > 0;
+    const showOsb = cSum((r) => Math.abs(r.osbRevenue)) > 0;
     /** inserts the finance-cost cell after "Apportioned cost" (the fourth), when the column is shown */
     const withFinance = (cells: string[], finance: string): string[] =>
       showFinance ? [...cells.slice(0, 4), finance, ...cells.slice(4)] : cells;
     const vertContribRevTot = ownSum((r) => r.contributionRevenue);
+    const vertOsbTot = ownSum((r) => r.osbRevenue);
     const vertRevContribTot = ownSum((r) => r.revenueContribution);
-
-    // The Revenue-vs-budget card counts out-of-books billing; contribution is
-    // struck on the ledger only. Their difference is the whole gap between the
-    // two group-total revenue figures, so it is named under the contribution card.
-    const osbRows = data.rows
-      .map((r) => ({ code: r.label.split(" - ").pop() ?? r.label, osb: r.revenueActual - r.contributionRevenue }))
-      .filter((x) => x.osb > 0.5);
-    const osbTotal = osbRows.reduce((s, x) => s + x.osb, 0);
+    /**
+     * The Net revenue contribution card's row, in its columns: the vertical, its ledger revenue,
+     * its out-of-books billing (when any vertical has some), direct cost, apportioned cost, its
+     * finance cost (when any has some), contribution and share. `six` is the label, revenue,
+     * direct, apportioned, contribution and share cells.
+     */
+    const contribCells = (six: string[], osb: string, finance: string): string[] => [
+      six[0],
+      six[1],
+      ...(showOsb ? [osb] : []),
+      six[2],
+      six[3],
+      ...(showFinance ? [finance] : []),
+      six[4],
+      six[5],
+    ];
     const collContribTot = sum((r) => r.collectionContribution);
     const vertCollContribTot = ownSum((r) => r.collectionContribution);
     const ageBucketTot = [0, 1, 2, 3, 4, 5].map((i) => sum((r) => r.ageingBuckets[i] ?? 0));
@@ -533,86 +554,118 @@ export default async function ScorecardPage({
             title="Net revenue contribution"
             hint={unitHint}
             accent="border-positive"
-            head={withFinance(
-              [
-                firstColHead,
-                "Revenue",
-                "Direct cost",
-                "Apportioned cost",
-                "Contribution",
-                "% of total",
-                "Rating",
-              ],
-              "Finance cost",
-            )}
-            rows={rowSource.map(({ label, row }) => ({
-              cells: withFinance(
-                [
-                  label,
-                  fig(row.contributionRevenue),
-                  fig(row.directCost),
-                  fig(row.apportionedCost),
-                  fig(row.revenueContribution),
-                  row.revenueContributionShare === null ? "–" : percent(row.revenueContributionShare * 100, 1),
-                ],
-                row.financeCost ? fig(row.financeCost) : "–",
+            head={[
+              ...contribCells(
+                [firstColHead, "Revenue", "Direct cost", "Apportioned cost", "Contribution", "% of total"],
+                "OSB revenue",
+                "Finance cost",
               ),
-              rating: row.ratings.netRevContrib,
-            }))}
+              "Rating",
+            ]}
+            rows={[
+              ...rowSource.map(({ label, row }) => ({
+                cells: contribCells(
+                  [
+                    label,
+                    fig(row.contributionRevenue),
+                    fig(row.directCost),
+                    fig(row.apportionedCost),
+                    fig(row.revenueContribution),
+                    row.revenueContributionShare === null ? "–" : percent(row.revenueContributionShare * 100, 1),
+                  ],
+                  row.osbRevenue ? fig(row.osbRevenue) : "–",
+                  row.financeCost ? fig(row.financeCost) : "–",
+                ),
+                rating: row.ratings.netRevContrib as number | null,
+              })),
+              ...(dscRow
+                ? [
+                    {
+                      cells: contribCells(
+                        [
+                          dscRow.label,
+                          fig(dscRow.contributionRevenue),
+                          fig(dscRow.directCost),
+                          fig(dscRow.apportionedCost),
+                          fig(dscRow.revenueContribution),
+                          dscRow.revenueContributionShare === null ? "–" : percent(dscRow.revenueContributionShare * 100, 1),
+                        ],
+                        dscRow.osbRevenue ? fig(dscRow.osbRevenue) : "–",
+                        dscRow.financeCost ? fig(dscRow.financeCost) : "–",
+                      ),
+                      rating: null as number | null,
+                    },
+                  ]
+                : []),
+            ]}
             subFoot={
               singleVertical
                 ? [
-                    withFinance(
-                      [
-                        "Vertical total",
-                        fig(vertContribRevTot),
-                        fig(vertDirectCostTot),
-                        fig(vertApportCostTot),
-                        fig(vertRevContribTot),
-                        pctOf(vertRevContribTot, revContribTot),
-                        "",
-                      ],
-                      fig(vertFinanceCostTot),
-                    ),
-                    withFinance(
-                      [
-                        "% of group total",
-                        pctOf(vertContribRevTot, contribRevTot),
-                        pctOf(vertDirectCostTot, directCostTot),
-                        pctOf(vertApportCostTot, apportCostTot),
-                        pctOf(vertRevContribTot, revContribTot),
-                        "–",
-                        "",
-                      ],
-                      pctOf(vertFinanceCostTot, financeCostTot),
-                    ),
+                    [
+                      ...contribCells(
+                        [
+                          "Vertical total",
+                          fig(vertContribRevTot),
+                          fig(vertDirectCostTot),
+                          fig(vertApportCostTot),
+                          fig(vertRevContribTot),
+                          pctOf(vertRevContribTot, revContribTot),
+                        ],
+                        fig(vertOsbTot),
+                        fig(vertFinanceCostTot),
+                      ),
+                      "",
+                    ],
+                    [
+                      ...contribCells(
+                        [
+                          "% of group total",
+                          pctOf(vertContribRevTot, cRevTot),
+                          pctOf(vertDirectCostTot, cDirectTot),
+                          pctOf(vertApportCostTot, cApportTot),
+                          pctOf(vertRevContribTot, revContribTot),
+                          "–",
+                        ],
+                        pctOf(vertOsbTot, cOsbTot),
+                        pctOf(vertFinanceCostTot, cFinanceTot),
+                      ),
+                      "",
+                    ],
                   ]
                 : undefined
             }
-            foot={withFinance(
-              [
-                singleVertical ? "Group total" : "Total",
-                fig(contribRevTot),
-                fig(directCostTot),
-                fig(apportCostTot),
-                fig(revContribTot),
-                percent(100, 0),
-                "",
-              ],
-              fig(financeCostTot),
-            )}
+            foot={[
+              ...contribCells(
+                [
+                  singleVertical ? "Group total" : "Total",
+                  fig(cRevTot),
+                  fig(cDirectTot),
+                  fig(cApportTot),
+                  fig(cContribTot),
+                  percent(100, 0),
+                ],
+                fig(cOsbTot),
+                fig(cFinanceTot),
+              ),
+              "",
+            ]}
             note={
-              osbTotal > 0.5 ? (
+              singleVertical || trend ? undefined : (
                 <>
-                  Revenue here is the ledger&rsquo;s. A further{" "}
-                  <span className="num font-medium">{fig(osbTotal)}</span> of
-                  out-of-books billing ({osbRows.map((x) => x.code).join(", ")}) is rated
-                  against budget in the Revenue card above but left out here — it carries
-                  no cost, so counting it would overstate contribution. That is the whole
-                  of the difference between the two group-total revenue figures{" "}
-                  ({fig(revActTot)} vs {fig(contribRevTot)}).
+                  Contribution = ledger revenue and out-of-books billing, less direct, apportioned and finance
+                  cost. DSC and support is a line of its own — its revenue is in the P&amp;L, its cost is in
+                  Common&rsquo;s pool. Common&rsquo;s direct cost carries the net reimbursable cost (RE − RI) and
+                  anything booked to no vertical, so the total is the P&amp;L&rsquo;s profit before tax.
+                  {Math.abs(data.unreconciled) >= 1 && (
+                    <>
+                      {" "}
+                      <span className="font-medium text-negative">
+                        {fig(data.unreconciled)} of the P&amp;L is on no row — see Settings → Data checks.
+                      </span>
+                    </>
+                  )}
                 </>
-              ) : undefined
+              )
             }
           />
           <WorkingCard
@@ -801,6 +854,7 @@ function WorkingCard({
   subFoot,
   foot,
   note,
+  extra,
 }: {
   title: string;
   /** the unit the figures are in, shown beside the title */
@@ -814,6 +868,8 @@ function WorkingCard({
   foot?: (string | number)[];
   /** an explanatory line shown under the table */
   note?: ReactNode;
+  /** a block shown under the note - the reconciliation to the P&L */
+  extra?: ReactNode;
 }) {
   return (
     <Card padded={false} className={clsx("border-t-2", accent)}>
@@ -902,6 +958,7 @@ function WorkingCard({
           {note}
         </p>
       )}
+      {extra}
     </Card>
   );
 }

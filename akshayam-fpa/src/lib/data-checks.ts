@@ -237,8 +237,9 @@ export async function runDataChecks(): Promise<DataCheck[]> {
             }
             const pairs: [string, number, number][] = [
               ["revenue", v.revenue, row.contributionRevenue],
-              ["total cost", v.totalCost, row.cost],
-              ["contribution", v.contribution, row.revenueContribution],
+              // the scorecard also carries each vertical's finance cost and out-of-books billing, which the card does not
+              ["total cost", v.totalCost, row.cost - row.financeCost],
+              ["contribution", v.contribution, row.revenueContribution + row.financeCost - row.osbRevenue],
             ];
             for (const [what, onCard, onScorecard] of pairs) {
               compared++;
@@ -253,6 +254,43 @@ export async function runDataChecks(): Promise<DataCheck[]> {
       return problems.length === 0
         ? { status: "ok", detail: `Revenue, total cost and contribution agree for the six verticals, in every quarter and cumulatively (${compared} comparisons)` }
         : { status: "fail", detail: problems.slice(0, 6).join("; ") + (problems.length > 6 ? `; and ${problems.length - 6} more` : "") };
+    }),
+  );
+
+  /*
+    The scorecard's net revenue contribution, in total, is the P&L's profit before tax
+    (EBITDA less finance cost) - each vertical's finance cost on its own row, DSC as
+    a line, and RE / RI and anything booked to no vertical on Common's direct cost.
+    Struck for each company and the group, for every quarter and for the year.
+  */
+  checks.push(
+    guarded("scorecard-pnl", "The scorecard's total contribution equals the P&L's profit before tax", async () => {
+      const problems: string[] = [];
+      let compared = 0;
+      const scopes = [...companies, ...(group ? [group] : [])];
+      for (const entity of scopes) {
+        const windows: { label: string; quarter: QuarterNo; cumulative: boolean }[] = [
+          ...([1, 2, 3, 4] as QuarterNo[]).map((q) => ({ label: `Q${q}`, quarter: q, cumulative: false })),
+          { label: "the year", quarter: 4 as QuarterNo, cumulative: true },
+        ];
+        for (const w of windows) {
+          const sc = await buildScorecard({ entity, fyStartYear: FY, quarter: w.quarter, cumulative: w.cumulative });
+          if (sc.rows.length === 0) continue;
+          compared++;
+          if (Math.abs(sc.unreconciled) > 2) {
+            problems.push(`${entity.slug} ${w.label}: ${rs(sc.unreconciled)} of the P&L is on no row`);
+          }
+        }
+      }
+      if (compared === 0) return { status: "skip", detail: "There is no scorecard to compare yet." };
+      return problems.length === 0
+        ? { status: "ok", detail: `Every window ties to the P&L (${compared} comparisons)` }
+        : {
+            status: "fail",
+            detail:
+              problems.slice(0, 6).join("; ") +
+              ". Something in the P&L is on a vertical the scorecard does not carry - open the Net revenue contribution card.",
+          };
     }),
   );
 
