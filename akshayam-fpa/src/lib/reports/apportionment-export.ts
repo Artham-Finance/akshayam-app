@@ -21,10 +21,10 @@ import { createWorkbook } from "@/lib/reports/xlsx";
  * Common cost is Common's own cost plus the DSC support cost - one pool.
  *
  * Two sheets, one for each way of spreading Common's and ACC & HRCM's cost:
- *   - on the head count of the six verticals, the figures VPP is struck on
+ *   - on the head count of the verticals, the figures VPP is struck on
  *   - on the company's whole head count (the comparison), which leaves part of the
- *     pooled cost uncharged to any of the six; that part is shown on its own row,
- *     so the six verticals plus it add back to the whole pool
+ *     pooled cost uncharged to any of the verticals above; that part is shown on its own row,
+ *     so the verticals plus it add back to the whole pool
  *
  * A quarter or year-to-date column is the sum of its months (a head count, the
  * average) - each month spread on its own head count, then added - so the months
@@ -86,7 +86,7 @@ export interface ApportionmentWorkbookInput {
   fyStartYear: number;
   /** the last date to include - months starting on or before it are columns */
   through: string;
-  /** vertical keys to list; null for all six */
+  /** vertical keys to list; null for all */
   only: Set<string> | null;
 }
 
@@ -128,7 +128,7 @@ export async function buildApportionmentWorkbook(
   const lastCol = ytdCol;
 
   for (const scenario of ["six", "wide"] as Scenario[]) {
-    const sheet = workbook.addWorksheet(scenario === "six" ? "Head count of the six" : "Company-wide head count");
+    const sheet = workbook.addWorksheet(scenario === "six" ? "Head count of the verticals" : "Company-wide head count");
     sheet.columns = [
       { width: 38 },
       ...months.map(() => ({ width: 13 })),
@@ -138,7 +138,7 @@ export async function buildApportionmentWorkbook(
     ];
 
     const title = sheet.addRow([
-      `Vertical-wise P&L after cost apportionment — ${scenario === "six" ? "on the head count of the six verticals" : "on the company's whole head count (comparison)"}`,
+      `Vertical-wise P&L after cost apportionment — ${scenario === "six" ? "on the head count of the verticals" : "on the company's whole head count (comparison)"}`,
     ]);
     title.font = { bold: true, size: 14, color: { argb: NAVY } };
     sheet.addRow([[entity.name, fyLabel(fyStartYear), "in rupees"].join("  ·  ")]).font = {
@@ -147,8 +147,8 @@ export async function buildApportionmentWorkbook(
     };
     sheet.addRow([
       scenario === "six"
-        ? "Common's cost and ACC and HRCM's cost are each spread on head count across the six verticals - the basis VPP is struck on. Each month on its own head count; quarter, cumulative and year-to-date columns are the sum of their months (head count, the average); a cumulative column adds the quarters up from the first. Common cost is Common's own cost plus the DSC support cost."
-        : "The same pools spread on the company's whole head count, so part of each pool sits on heads outside the six and is not charged to any of them - shown on its own row at the foot. A comparison, not the VPP basis. Each month on its own head count; quarter, cumulative and year-to-date columns are the sum of their months. Common cost is Common's own cost plus the DSC support cost.",
+        ? "Common's cost and ACC and HRCM's cost are each spread on head count across the verticals - the basis VPP is struck on. Each month on its own head count; quarter, cumulative and year-to-date columns are the sum of their months (head count, the average); a cumulative column adds the quarters up from the first. Common cost is Common's own cost plus the DSC support cost."
+        : "The same pools spread on the company's whole head count, so part of each pool sits on heads outside them and is not charged to any of them - shown on its own row at the foot. A comparison, not the VPP basis. Each month on its own head count; quarter, cumulative and year-to-date columns are the sum of their months. Common cost is Common's own cost plus the DSC support cost.",
     ]).font = { size: 10, italic: true, color: { argb: GREY } };
     sheet.addRow([
       "Reimbursement income and expense are left out of every figure, as on the card. Other income is a credit and so reduces total cost; Direct overheads includes OSB expenses.",
@@ -273,7 +273,7 @@ export async function buildApportionmentWorkbook(
       writeBlock(k.key, k.label, (metric, mi) => figure(k.key, metric, mi));
     }
 
-    // the six together
+    // the verticals together
     if (showTotal) {
       const ids = listed.map((k) => k.key);
       const sumMetric = (metric: string, mi: number) => {
@@ -288,7 +288,7 @@ export async function buildApportionmentWorkbook(
         const unalloc = (mi: number) => results[mi].wide.commonUnapportioned + results[mi].wide.accHrcmUnapportioned;
         const rowNo = sheet.rowCount + 1;
         const cells: (string | number | { formula: string; result?: number })[] = [
-          "Cost not charged to any of the six (sits on heads outside them)",
+          "Cost not charged to any of the verticals above (sits on heads outside them)",
           ...months.map((_m, mi) => unalloc(mi)),
         ];
         let offset = 0;

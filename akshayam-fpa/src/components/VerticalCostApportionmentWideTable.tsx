@@ -15,7 +15,7 @@ import { ExpandableRow, HeadInput, Row } from "@/components/VerticalCostApportio
  * the six receiving verticals. Revenue and direct cost are each vertical's
  * own and are identical to the primary card; only the two apportioned lines
  * and everything under them differ, because the wider denominator leaves
- * most of each pool uncharged to any of the six - shown below as the
+ * most of each pool uncharged to any of the verticals above - shown below as the
  * balance still to be allocated.
  */
 export function VerticalCostApportionmentWideTable({
@@ -121,9 +121,9 @@ export function VerticalCostApportionmentWideTable({
 
       <p className="px-3 pb-3 text-[11.5px] text-ink-muted">
         Same pools as the card above, spread instead over {data.wide.totalCompanyHeads.toFixed(2)}{" "}
-        heads across the whole entity, not just these six ({data.totalHeads.toFixed(2)}). Of{" "}
+        heads across the whole entity, not just these ({data.totalHeads.toFixed(2)}). Of{" "}
         {show(data.poolTotal + data.accHrcmPoolTotal)} pooled, only{" "}
-        {show(data.poolTotal + data.accHrcmPoolTotal - unapportioned)} lands on the six below; the
+        {show(data.poolTotal + data.accHrcmPoolTotal - unapportioned)} lands on the verticals below; the
         remaining {show(unapportioned)} sits on heads outside them and stays unallocated here.
         {scale !== "abs" && ` All figures ${scaleLabel[scale].toLowerCase()}.`}
       </p>
@@ -160,7 +160,7 @@ export function VerticalCostApportionmentWideTable({
               <th scope="row" className="border-b border-line px-3 py-2 text-left font-normal text-ink">
                 Total company head count
                 <span className="block text-[10px] font-normal text-ink-faint">
-                  every vertical in the entity, not just these six
+                  every vertical in the entity, not just these
                   {editHeads
                     ? ` · ${data.label}${applyForward ? " · fills the rest of the year" : ""}`
                     : canEditHeads
@@ -266,15 +266,15 @@ export function VerticalCostApportionmentWideTable({
         {showTotal ? (
           <>
             Total contribution of {show(contribution)} on this basis, against{" "}
-            {show(data.verticals.reduce((s, v) => s + v.contribution, 0))} on the head-count-of-six
+            {show(data.verticals.reduce((s, v) => s + v.contribution, 0))} on the head-count
             basis above — the gap is exactly the {show(unapportioned)} left unallocated: still a
-            real cost, just not yet charged to any of these six verticals.
+            real cost, just not yet charged to any of these verticals.
           </>
         ) : (
           <>
             Contribution of {show(contribution)} is this vertical&rsquo;s share on the wider
             denominator, against {show(data.verticals[0]?.contribution ?? 0)} on the
-            head-count-of-six basis above. The spread was struck across all six and then narrowed
+            head-count basis above. The spread was struck across all of them and then narrowed
             to this one; the share does not change with the filter.
           </>
         )}

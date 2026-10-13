@@ -229,9 +229,11 @@ export async function runDataChecks(): Promise<DataCheck[]> {
           if (card.verticals.every((v) => v.revenue === 0 && v.totalCost === 0)) continue;
           const sc = await buildScorecard({ entity: company, fyStartYear: FY, quarter: w.quarter, cumulative: w.cumulative });
           for (const v of card.verticals) {
-            // Raja's AIF is on the card with its own cost only; the scorecard's Raja row is AIF and GIFT
-            if (v.key === "AIF") continue;
-            const row = sc.rows.find((r) => r.code === rowByKey.get(v.key)?.code);
+            // Raja's AIF is the scorecard's "AIF" row, or its Raja row where only RBJV is read
+            const row =
+              v.key === "AIF"
+                ? sc.rows.find((r) => r.code === "AIF" || r.code === "AIF_GIFT")
+                : sc.rows.find((r) => r.code === rowByKey.get(v.key)?.code);
             if (!row) {
               // a vertical with no activity is left off the scorecard, and has nothing on the card either
               if (Math.abs(v.revenue) + Math.abs(v.totalCost) >= 2) {

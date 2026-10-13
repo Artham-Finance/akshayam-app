@@ -119,11 +119,10 @@ export function VerticalCostApportionmentTable({
       <p className="px-3 pb-3 text-[11.5px] text-ink-muted">
         {show(data.poolTotal)} of common cost (including {show(data.dscPoolTotal)} of DSC support
         cost) and {show(data.accHrcmPoolTotal)} of ACC and HRCM cost spread over {data.label}, on
-        head count only, across the six verticals below. Cost already tagged to a vertical is its
+        head count only, across the verticals below. Cost already tagged to a vertical is its
         own and is never re-spread; only Common&rsquo;s, DSC&rsquo;s and ACC and HRCM&rsquo;s
         activity is pooled and spread this way — any other vertical&rsquo;s activity plays no part
-        in this card. Raja&rsquo;s AIF, where shown, carries its own revenue and cost only — it is not in the head
-        count and takes no share of the pools.
+        in this card.
         {scale !== "abs" && ` All figures ${scaleLabel[scale].toLowerCase()}.`}
       </p>
       <p className="px-3 pb-3 text-[11.5px] text-ink-faint">
@@ -252,7 +251,7 @@ export function VerticalCostApportionmentTable({
       <p className="px-3 py-3 text-[11.5px] leading-relaxed text-ink-muted">
         {showTotal ? (
           <>
-            Total contribution of {show(contribution)} across these six verticals — the figure VPP
+            Total contribution of {show(contribution)} across these verticals — the figure VPP
             is struck on. Common&rsquo;s cost and ACC and HRCM&rsquo;s cost are each spread on head
             count alone, in proportion to each vertical&rsquo;s own head count over{" "}
             {data.totalHeads.toFixed(2)} total.
@@ -261,7 +260,7 @@ export function VerticalCostApportionmentTable({
           <>
             Contribution of {show(contribution)} is this vertical&rsquo;s share, after its own
             direct cost and its head-count share of Common&rsquo;s cost and of ACC and
-            HRCM&rsquo;s cost — the figure VPP is struck on. The spread was struck across all six
+            HRCM&rsquo;s cost — the figure VPP is struck on. The spread was struck across all of them
             verticals and then narrowed to this one; the share does not change with the filter.
           </>
         )}
