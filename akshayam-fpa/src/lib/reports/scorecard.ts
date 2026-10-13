@@ -71,6 +71,30 @@ export const ROWS: {
 ];
 
 /**
+ * The rows as one scope reads them. Raja's row is AIF (RBJV) and GIFT (Akshayam):
+ * on RBJV's own scorecard it is AIF alone - GIFT is Akshayam's, and a stray GIFT
+ * tag in RBJV's books is not Raja's - and on Akshayam's it is GIFT alone. Only a
+ * view across both companies (the group, or Raja's own login) carries both.
+ */
+export function scorecardRowsFor(companySlugs: string[]): typeof ROWS {
+  const rbjv = companySlugs.includes("rbjv");
+  const akshayam = companySlugs.includes("akshayam");
+  return ROWS.map((r) => {
+    if (r.code !== "AIF_GIFT") return r;
+    if (rbjv && !akshayam) return { ...r, label: "Raja - AIF", codes: ["AIF"] };
+    if (akshayam && !rbjv) return { ...r, label: "Raja - GIFT", codes: ["GIFT"] };
+    return r;
+  });
+}
+
+/** The company slugs an entity reports on - what `scorecardRowsFor` reads. */
+export async function scorecardCompanySlugs(entity: Entity): Promise<string[]> {
+  return (
+    await query<{ slug: string }>("select slug from entities where id = any($1::int[])", [entity.memberIds])
+  ).map((r) => r.slug);
+}
+
+/**
  * The scorecard row a ledger vertical code rolls into, or null for one the
  * scorecard does not track. AIF and GIFT share Raja's row, so this is the
  * mapping a caller narrowing the card to a slice's verticals needs.
@@ -131,7 +155,12 @@ export interface ScorecardRow {
   directCost: number;
   /** its share of the apportioned common pool */
   apportionedCost: number;
-  /** directCost + apportionedCost - the figure contribution is struck on */
+  /**
+   * Finance cost (interest and bank charges) booked to the vertical - carried
+   * only by Raja's row (AIF and GIFT), whose own books bear it; nil elsewhere.
+   */
+  financeCost: number;
+  /** directCost + apportionedCost + financeCost - the figure contribution is struck on */
   cost: number;
   /**
    * Ledger revenue for the vertical - what net revenue contribution is struck
@@ -218,11 +247,24 @@ export async function buildScorecard(opts: {
   ) as QuarterNo[];
 
   // The companies in scope, by slug - the revised budget is held per company.
-  const companySlugs = (
-    await query<{ slug: string }>("select slug from entities where id = any($1::int[])", [
-      entity.memberIds,
-    ])
-  ).map((r) => r.slug);
+  const companySlugs = await scorecardCompanySlugs(entity);
+  const rowDefs = scorecardRowsFor(companySlugs);
+
+  // Finance cost by vertical code over the window - Raja's row carries it.
+  const financeByCode = new Map(
+    (
+      await query<{ code: string | null; amount: number }>(
+        `select v.code, sum(g.debit - g.credit)::numeric as amount
+           from gl_entries g
+           join accounts a on a.id = g.account_id
+           left join verticals v on v.id = g.vertical_id
+          where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
+            and a.statement = 'pnl' and a.group_code = 'finance_cost'
+          group by v.code`,
+        [entity.memberIds, start, end],
+      )
+    ).map((r) => [r.code ?? "", Number(r.amount)]),
+  );
 
   const [revenueBva, collectionBva, apportionments, ageingRows] = await Promise.all([
     buildBudgetVsActual({
@@ -314,7 +356,7 @@ export async function buildScorecard(opts: {
 
   // ----- assemble rows, then the shares (need the totals first) -----
   type Draft = ScorecardRow & { _hasData: boolean };
-  const drafts: Draft[] = ROWS.map((def) => {
+  const drafts: Draft[] = rowDefs.map((def) => {
     const rev = def.codes.reduce((s, c) => s + (revByCode.get(c)?.period.actual ?? 0), 0);
     // The revised quarterly budget, where there is one for the year - for this
     // scorecard only; every other report keeps the budgets already loaded.
@@ -342,9 +384,10 @@ export async function buildScorecard(opts: {
           { revenue: 0, directCost: 0 },
         )
       : undefined;
+    const financeCost = def.ownCost ? def.codes.reduce((s, c) => s + (financeByCode.get(c) ?? 0), 0) : 0;
     const directCost = ap?.directCost ?? own?.directCost ?? 0;
     const apportionedCost = ap?.apportionedCost ?? 0;
-    const cost = ap?.cost ?? own?.directCost ?? 0;
+    const cost = ap?.cost ?? (own?.directCost ?? 0) + financeCost;
     // Ledger revenue, as the cost beneath it is: out-of-books billing is rated
     // against budget but has no cost line, so contribution leaves it out. A
     // vertical with no ledger activity at all falls back to the budget figure.
@@ -387,6 +430,7 @@ export async function buildScorecard(opts: {
       collectionAchievement: collBud > 0 ? coll / collBud : null,
       directCost,
       apportionedCost,
+      financeCost,
       cost,
       contributionRevenue,
       revenueContribution: revContribution,
