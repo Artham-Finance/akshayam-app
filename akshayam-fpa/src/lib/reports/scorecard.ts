@@ -86,10 +86,10 @@ export function scorecardRowsFor(companySlugs: string[]): typeof ROWS {
   const akshayam = companySlugs.includes("akshayam");
   return ROWS.flatMap((r) => {
     if (r.code !== "AIF_GIFT") return [r];
-    if (rbjv && !akshayam) return [{ ...r, label: "Raja - AIF", codes: ["AIF"] }];
+    if (rbjv && !akshayam) return [{ ...r, label: "Raja - AIF", codes: ["AIF"], apportKey: "AIF", ownCost: false }];
     if (akshayam && !rbjv) return [{ ...r, label: "Raja - GIFT", codes: ["GIFT"] }];
     return [
-      { ...r, code: "AIF", label: "Raja - AIF", codes: ["AIF"], budgetCode: "AIF_GIFT", budgetCompanies: ["rbjv"] },
+      { ...r, code: "AIF", label: "Raja - AIF", codes: ["AIF"], apportKey: "AIF", ownCost: false, budgetCode: "AIF_GIFT", budgetCompanies: ["rbjv"] },
       { ...r, code: "GIFT", label: "Raja - GIFT", codes: ["GIFT"], budgetCode: "AIF_GIFT", budgetCompanies: ["akshayam"] },
     ];
   });

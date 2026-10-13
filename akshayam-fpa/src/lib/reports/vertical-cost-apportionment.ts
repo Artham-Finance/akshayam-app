@@ -7,14 +7,14 @@ import { fyMonths, type QuarterNo } from "@/lib/period";
  *
  * The one apportionment method in the app: the P&L's cost apportionment card
  * and the Vertical Performance Scorecard both read it, so the two always
- * agree. It is struck for exactly six verticals, on one rule only - head
+ * agree. It is struck for exactly seven verticals, on one rule only - head
  * count - over two pools: actual cost booked under "Common incl partners
  * contribution" together with the cost booked under DSC (the DSC support
  * cost is common cost, so the one pool is Common plus DSC), and actual cost
  * booked under ACC and HRCM (both their direct
  * team cost and their overheads, combined into one pool). A cost already
- * tagged to one of the six is that vertical's own and is never re-spread;
- * cost under any other vertical (GIFT/AIF) or left untagged is outside
+ * tagged to one of the seven is that vertical's own and is never re-spread;
+ * cost under any other vertical (GIFT) or left untagged is outside
  * this card's arrangement entirely, not shown here and not pooled (`outside`
  * hands it back for a caller that rates those verticals itself). ACC's and
  * HRCM's own revenue plays no part here either - only their cost is spread,
@@ -37,22 +37,16 @@ const RECEIVERS: { key: string; label: string; code: string }[] = [
   { key: "DLR", label: "Vijay — DLR", code: "DLR" },
   { key: "RRG", label: "Dharshan — RRG", code: "RRG" },
   { key: "CFC", label: "Rekha — CFC", code: "CFC" },
+  // Raja's AIF takes a share on its own head count, like the others (GIFT is Akshayam's, outside)
+  { key: "AIF", label: "Raja — AIF", code: "AIF" },
 ];
 
 /** The common-cost row's name wherever it is shown - the pool is Common's cost plus DSC's. */
 export const COMMON_COST_LABEL = "Common cost (incl DSC cost) — apportioned";
 
-/**
- * Raja's AIF is a seventh column, after the six: its own revenue and its own cost, and
- * no share of the pools - it is not in the head count they are spread on, as on the
- * scorecard, where Raja carries his own cost only.
- */
-const AIF_COLUMN = { key: "AIF", label: "Raja — AIF", code: "AIF" };
-
-/** The apportionment column a ledger vertical belongs to, or null - the six that share the pools, and AIF's own. */
+/** The apportionment column a ledger vertical belongs to, or null - only the receivers take part. */
 export function costApportionmentKeyFor(code: string | null | undefined): string | null {
   if (!code) return null;
-  if (code === AIF_COLUMN.code) return AIF_COLUMN.key;
   return RECEIVERS.find((r) => r.code === code)?.key ?? null;
 }
 
@@ -289,29 +283,6 @@ export async function buildVerticalCostApportionment(opts: {
   }));
   const byKey = new Map(verticals.map((v) => [v.key, v]));
 
-  // Raja's AIF: its own figures in a column of its own, outside the pools. Present only
-  // where the entity has an AIF vertical (RBJV, the group).
-  const aif: ApportionedVerticalCost | null = idByCode.has(AIF_COLUMN.code)
-    ? {
-        key: AIF_COLUMN.key,
-        label: AIF_COLUMN.label,
-        // not editable: its head count takes no part in the spread
-        verticalId: null,
-        heads: 0,
-        revenue: 0,
-        directTeamCost: 0,
-        directOverheads: 0,
-        otherIncome: 0,
-        commonApportioned: 0,
-        accHrcmApportioned: 0,
-        totalCost: 0,
-        contribution: 0,
-        commonApportionedWide: 0,
-        accHrcmApportionedWide: 0,
-        totalCostWide: 0,
-        contributionWide: 0,
-      }
-    : null;
 
   // account name -> vertical key -> amount, for the two direct-cost lines.
   const directTeamByAccount = new Map<string, Map<string, number>>();
@@ -334,22 +305,6 @@ export async function buildVerticalCostApportionment(opts: {
     const revenue = Number(row.revenue);
     const cost = Number(row.cost);
     const receiver = row.code ? receiverOf.get(row.code) : undefined;
-
-    // AIF's own column. It is also still counted among the verticals outside the six
-    // below, which is what the scorecard reads for Raja.
-    if (aif && row.code === AIF_COLUMN.code) {
-      aif.revenue += revenue;
-      if (row.group_code === "direct_cost") {
-        aif.directTeamCost += cost;
-        if (cost !== 0) addTo(directTeamByAccount, row.name, AIF_COLUMN.key, cost);
-      } else if (row.group_code === "other_income") {
-        aif.otherIncome += cost;
-        if (cost !== 0) addTo(otherIncomeByAccount, row.name, AIF_COLUMN.key, cost);
-      } else if (row.group_code !== "revenue") {
-        aif.directOverheads += cost;
-        if (cost !== 0) addTo(directOverheadByAccount, row.name, AIF_COLUMN.key, cost);
-      }
-    }
 
     if (receiver) {
       const v = byKey.get(receiver.key)!;
@@ -401,12 +356,11 @@ export async function buildVerticalCostApportionment(opts: {
     ? companyHeadcounts.reduce((s, h) => s + round2(Number(h.heads)), 0)
     : [...headsByCode.values()].reduce((s, h) => s + round2(h), 0);
 
-  const columns = aif ? [...verticals, aif] : verticals;
   const toLines = (map: Map<string, Map<string, number>>): CostAccountLine[] =>
     [...map.entries()].map(([account, byVertical]) => {
       const amountByKey: Record<string, number> = {};
       let total = 0;
-      for (const v of columns) {
+      for (const v of verticals) {
         const amount = byVertical.get(v.key) ?? 0;
         amountByKey[v.key] = amount;
         total += amount;
@@ -467,13 +421,6 @@ export async function buildVerticalCostApportionment(opts: {
     v.contributionWide = v.revenue - v.totalCostWide;
   }
 
-  if (aif) {
-    aif.totalCost = aif.directTeamCost + aif.directOverheads + aif.otherIncome;
-    aif.contribution = aif.revenue - aif.totalCost;
-    aif.totalCostWide = aif.totalCost;
-    aif.contributionWide = aif.contribution;
-  }
-
   const commonUnapportioned = poolTotal - verticals.reduce((s, v) => s + v.commonApportionedWide, 0);
   const accHrcmUnapportioned = accHrcmPoolTotal - verticals.reduce((s, v) => s + v.accHrcmApportionedWide, 0);
 
@@ -490,7 +437,7 @@ export async function buildVerticalCostApportionment(opts: {
     label: picked ? picked.label : QUARTER_LABELS[quarter - 1],
     start,
     end,
-    verticals: columns,
+    verticals,
     directTeamCostLines: toLines(directTeamByAccount),
     directOverheadLines: toLines(directOverheadByAccount),
     otherIncomeLines: toLines(otherIncomeByAccount),
