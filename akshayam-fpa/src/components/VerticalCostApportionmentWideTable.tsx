@@ -76,7 +76,7 @@ export function VerticalCostApportionmentWideTable({
   const showTotal = data.verticals.length > 1;
 
   const contribution = total((v) => v.contributionWide);
-  const unapportioned = data.wide.commonUnapportioned + data.wide.accHrcmUnapportioned;
+  const unapportioned = data.wide.commonUnapportioned + data.wide.accUnapportioned;
 
   return (
     <>
@@ -120,10 +120,11 @@ export function VerticalCostApportionmentWideTable({
       </div>
 
       <p className="px-3 pb-3 text-[11.5px] text-ink-muted">
-        Same pools as the card above, spread instead over {data.wide.totalCompanyHeads.toFixed(2)}{" "}
-        heads across the whole entity, not just these ({data.totalHeads.toFixed(2)}). Of{" "}
-        {show(data.poolTotal + data.accHrcmPoolTotal)} pooled, only{" "}
-        {show(data.poolTotal + data.accHrcmPoolTotal - unapportioned)} lands on the verticals below; the
+        Common&rsquo;s pool (with DSC&rsquo;s and HRCM&rsquo;s) as on the card above, spread instead over{" "}
+        {data.wide.totalCompanyHeads.toFixed(2)} heads across the whole entity, not just these (
+        {data.totalHeads.toFixed(2)}); ACC&rsquo;s cost is spread equally either way, so it does not change. Of{" "}
+        {show(data.poolTotal + data.accPoolTotal)} pooled, only{" "}
+        {show(data.poolTotal + data.accPoolTotal - unapportioned)} lands on the verticals below; the
         remaining {show(unapportioned)} sits on heads outside them and stays unallocated here.
         {scale !== "abs" && ` All figures ${scaleLabel[scale].toLowerCase()}.`}
       </p>
@@ -227,7 +228,7 @@ export function VerticalCostApportionmentWideTable({
               showTotal={showTotal}
               show={show}
               showDetail={showDetail}
-              label="Common cost (incl DSC cost) — apportioned (company-wide heads)"
+              label="Common cost (incl DSC and HRCM cost) — apportioned (company-wide heads)"
               pick={(v) => v.commonApportionedWide}
               lines={data.wide.commonCostLines}
             />
@@ -236,9 +237,9 @@ export function VerticalCostApportionmentWideTable({
               showTotal={showTotal}
               show={show}
               showDetail={showDetail}
-              label="ACC and HRCM cost — apportioned (company-wide heads)"
-              pick={(v) => v.accHrcmApportionedWide}
-              lines={data.wide.accHrcmCostLines}
+              label="ACC cost — apportioned equally (same as above)"
+              pick={(v) => v.accApportionedWide}
+              lines={data.wide.accCostLines}
             />
 
             <Row

@@ -245,14 +245,16 @@ function CommitmentPanel({
       const customer = l.customer.trim();
       const raw = l.amount.trim().replace(/[,\s₹]/g, "");
       if (!customer && !raw) continue;
-      const amount = Number(raw);
-      if (!customer || raw === "" || !Number.isFinite(amount) || amount <= 0) {
-        setError("Each line needs a customer and an amount above nil.");
+      // An admin may key a nil amount (a blank counts as nil) - to zero a commitment out, not only to set one.
+      const amount = isAdmin && raw === "" ? 0 : Number(raw);
+      if (!customer || (!isAdmin && raw === "") || !Number.isFinite(amount) || amount < 0 || (!isAdmin && amount <= 0)) {
+        setError(isAdmin ? "Each line needs a customer and an amount." : "Each line needs a customer and an amount above nil.");
         return;
       }
       cleaned.push({ customer, amount });
     }
-    if (cleaned.length === 0) {
+    // An admin may also save with no lines, which leaves the commitment at nil.
+    if (cleaned.length === 0 && !isAdmin) {
       setError("Add at least one customer with an amount.");
       return;
     }

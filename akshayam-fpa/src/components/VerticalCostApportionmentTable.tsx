@@ -118,17 +118,17 @@ export function VerticalCostApportionmentTable({
 
       <p className="px-3 pb-3 text-[11.5px] text-ink-muted">
         {show(data.poolTotal)} of common cost (including {show(data.dscPoolTotal)} of DSC support
-        cost) and {show(data.accHrcmPoolTotal)} of ACC and HRCM cost spread over {data.label}, on
-        head count only, across the verticals below. Cost already tagged to a vertical is its
-        own and is never re-spread; only Common&rsquo;s, DSC&rsquo;s and ACC and HRCM&rsquo;s
-        activity is pooled and spread this way — any other vertical&rsquo;s activity plays no part
-        in this card.
+        cost and {show(data.hrcmPoolTotal)} of HRCM cost) is spread over {data.label} on head count,
+        and {show(data.accPoolTotal)} of ACC cost is spread equally over every vertical below but
+        Vijay&rsquo;s DLR. Cost already tagged to a vertical is its own and is never re-spread; only
+        Common&rsquo;s, DSC&rsquo;s, HRCM&rsquo;s and ACC&rsquo;s activity is pooled and spread this way —
+        any other vertical&rsquo;s activity plays no part in this card.
         {scale !== "abs" && ` All figures ${scaleLabel[scale].toLowerCase()}.`}
       </p>
       <p className="px-3 pb-3 text-[11.5px] text-ink-faint">
         Reimbursement income and expense are left out of every figure here — a client cost
         recovered from the client is not overhead spend, so it is not counted toward a
-        vertical&rsquo;s direct overheads, nor pooled into Common&rsquo;s or ACC and HRCM&rsquo;s
+        vertical&rsquo;s direct overheads, nor pooled into Common&rsquo;s or ACC&rsquo;s
         apportioned cost. Other income and OSB expenses are counted, each on the vertical it is
         booked to. If these figures look different from an earlier view, this is why.
       </p>
@@ -228,7 +228,7 @@ export function VerticalCostApportionmentTable({
               showTotal={showTotal}
               show={show}
               showDetail={showDetail}
-              label="Common cost (incl DSC cost) — apportioned"
+              label="Common cost (incl DSC and HRCM cost) — apportioned"
               pick={(v) => v.commonApportioned}
               lines={data.commonCostLines}
             />
@@ -237,9 +237,9 @@ export function VerticalCostApportionmentTable({
               showTotal={showTotal}
               show={show}
               showDetail={showDetail}
-              label="ACC and HRCM cost — apportioned"
-              pick={(v) => v.accHrcmApportioned}
-              lines={data.accHrcmCostLines}
+              label="ACC cost — apportioned equally"
+              pick={(v) => v.accApportioned}
+              lines={data.accCostLines}
             />
 
             <Row verticals={data.verticals} showTotal={showTotal} show={show} label="Total cost" pick={(v) => v.totalCost} tone="strong" rule />
@@ -252,15 +252,16 @@ export function VerticalCostApportionmentTable({
         {showTotal ? (
           <>
             Total contribution of {show(contribution)} across these verticals — the figure VPP
-            is struck on. Common&rsquo;s cost and ACC and HRCM&rsquo;s cost are each spread on head
-            count alone, in proportion to each vertical&rsquo;s own head count over{" "}
-            {data.totalHeads.toFixed(2)} total.
+            is struck on. Common&rsquo;s cost (with DSC&rsquo;s and HRCM&rsquo;s) is spread on head
+            count, in proportion to each vertical&rsquo;s own head count over{" "}
+            {data.totalHeads.toFixed(2)} total; ACC&rsquo;s cost is spread equally over every
+            vertical but DLR.
           </>
         ) : (
           <>
             Contribution of {show(contribution)} is this vertical&rsquo;s share, after its own
-            direct cost and its head-count share of Common&rsquo;s cost and of ACC and
-            HRCM&rsquo;s cost — the figure VPP is struck on. The spread was struck across all of them
+            direct cost, its head-count share of Common&rsquo;s cost (with DSC&rsquo;s and
+            HRCM&rsquo;s) and its equal share of ACC&rsquo;s cost (none for DLR) — the figure VPP is struck on. The spread was struck across all of them
             verticals and then narrowed to this one; the share does not change with the filter.
           </>
         )}

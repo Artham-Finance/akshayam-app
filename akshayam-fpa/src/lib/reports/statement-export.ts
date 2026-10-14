@@ -350,7 +350,7 @@ export async function buildStatementWorkbook(opts: {
 
       emphasise.push(rows.length);
       rows.push([
-        "Common cost (incl DSC cost) — apportioned",
+        "Common cost (incl DSC and HRCM cost) — apportioned",
         ...a.verticals.map((v) => v.commonApportioned),
         total((v) => v.commonApportioned),
       ]);
@@ -358,11 +358,11 @@ export async function buildStatementWorkbook(opts: {
 
       emphasise.push(rows.length);
       rows.push([
-        "ACC and HRCM cost — apportioned",
-        ...a.verticals.map((v) => v.accHrcmApportioned),
-        total((v) => v.accHrcmApportioned),
+        "ACC cost — apportioned equally",
+        ...a.verticals.map((v) => v.accApportioned),
+        total((v) => v.accApportioned),
       ]);
-      rows.push(...lineRows(a.accHrcmCostLines));
+      rows.push(...lineRows(a.accCostLines));
 
       rule.push(rows.length);
       emphasise.push(rows.length);
@@ -376,7 +376,7 @@ export async function buildStatementWorkbook(opts: {
         context: [
           ...context,
           `${a.start} to ${a.end}`,
-          "Common's cost and ACC and HRCM's cost spread on head count only, across the six verticals · contribution is the VPP line",
+          "Common's cost (with DSC's and HRCM's) spread on head count and ACC's cost equally over every vertical but DLR, across the verticals · contribution is the VPP line",
         ],
         columns: [
           { header: "Particulars", type: "text" },

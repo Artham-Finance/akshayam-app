@@ -335,7 +335,7 @@ export function buildScorecardWorkbook(input: ScorecardWorkbookInput): ExcelJS.W
       "Net revenue contribution",
       [
         "Net contribution = ledger revenue and out-of-books (OSB) billing, less the vertical's own direct cost, its head-count share of " +
-          "Common's and ACC/HRCM's cost (the same figures as the P&L's cost apportionment card) and its own finance cost. Common's direct cost " +
+          "Common's cost (with DSC's and HRCM's, on head count) and ACC's cost (equally, not DLR) (the same figures as the P&L's cost apportionment card) and its own finance cost. Common's direct cost " +
           "carries the net reimbursable cost (RE - RI) and anything booked to no vertical; DSC and support is a line of its own (its cost is in " +
           "Common's pool). The total is the P&L's profit before tax. Share = the vertical's contribution ÷ the group's positive contributions.",
         "Rating: 4 at a 20% share or more, 3 from 15%, 2 from 10%, 1 from 5%, otherwise 0.",

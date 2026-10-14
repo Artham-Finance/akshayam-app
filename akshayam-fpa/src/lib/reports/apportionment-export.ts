@@ -20,7 +20,7 @@ import { createWorkbook } from "@/lib/reports/xlsx";
  *
  * Common cost is Common's own cost plus the DSC support cost - one pool.
  *
- * Two sheets, one for each way of spreading Common's and ACC & HRCM's cost:
+ * Two sheets, one for each way of spreading Common's (with DSC's and HRCM's) cost - ACC's is spread equally over every vertical but DLR either way:
  *   - on the head count of the verticals, the figures VPP is struck on
  *   - on the company's whole head count (the comparison), which leaves part of the
  *     pooled cost uncharged to any of the verticals above; that part is shown on its own row,
@@ -62,8 +62,8 @@ const METRICS: Metric[] = [
   { key: "directTeamCost", label: "Direct team cost" },
   { key: "directOverheads", label: "Direct overheads" },
   { key: "otherIncome", label: "Other income (a credit)" },
-  { key: "common", label: "Common cost (incl DSC cost) — apportioned" },
-  { key: "accHrcm", label: "ACC and HRCM cost — apportioned" },
+  { key: "common", label: "Common cost (incl DSC and HRCM cost) — apportioned" },
+  { key: "acc", label: "ACC cost — apportioned equally" },
   { key: "totalCost", label: "Total cost", formula: "totalCost" },
   { key: "contribution", label: "Contribution", formula: "contribution" },
 ];
@@ -76,7 +76,7 @@ function valueOf(v: ApportionedVerticalCost, key: string, scenario: Scenario): n
     case "directOverheads": return v.directOverheads;
     case "otherIncome": return v.otherIncome;
     case "common": return scenario === "six" ? v.commonApportioned : v.commonApportionedWide;
-    case "accHrcm": return scenario === "six" ? v.accHrcmApportioned : v.accHrcmApportionedWide;
+    case "acc": return scenario === "six" ? v.accApportioned : v.accApportionedWide;
     default: return 0;
   }
 }
@@ -147,8 +147,8 @@ export async function buildApportionmentWorkbook(
     };
     sheet.addRow([
       scenario === "six"
-        ? "Common's cost and ACC and HRCM's cost are each spread on head count across the verticals - the basis VPP is struck on. Each month on its own head count; quarter, cumulative and year-to-date columns are the sum of their months (head count, the average); a cumulative column adds the quarters up from the first. Common cost is Common's own cost plus the DSC support cost."
-        : "The same pools spread on the company's whole head count, so part of each pool sits on heads outside them and is not charged to any of them - shown on its own row at the foot. A comparison, not the VPP basis. Each month on its own head count; quarter, cumulative and year-to-date columns are the sum of their months. Common cost is Common's own cost plus the DSC support cost.",
+        ? "Common's cost (with DSC's and HRCM's) is spread on head count across the verticals, and ACC's cost equally over every vertical but DLR - the basis VPP is struck on. Each month on its own head count; quarter, cumulative and year-to-date columns are the sum of their months (head count, the average); a cumulative column adds the quarters up from the first. Common cost is Common's own cost plus the DSC support cost and HRCM's."
+        : "The same pools spread on the company's whole head count, so part of each pool sits on heads outside them and is not charged to any of them - shown on its own row at the foot. A comparison, not the VPP basis. Each month on its own head count; quarter, cumulative and year-to-date columns are the sum of their months. Common cost is Common's own cost plus the DSC support cost and HRCM's.",
     ]).font = { size: 10, italic: true, color: { argb: GREY } };
     sheet.addRow([
       "Reimbursement income and expense are left out of every figure, as on the card. Other income is a credit and so reduces total cost; Direct overheads includes OSB expenses.",
@@ -207,8 +207,8 @@ export async function buildApportionmentWorkbook(
           const col = letter(monthCol(mi));
           if (metric.formula === "totalCost") {
             const first = rowOf[id].directTeamCost;
-            const last = rowOf[id].accHrcm;
-            const result = (["directTeamCost", "directOverheads", "otherIncome", "common", "accHrcm"] as const).reduce(
+            const last = rowOf[id].acc;
+            const result = (["directTeamCost", "directOverheads", "otherIncome", "common", "acc"] as const).reduce(
               (s, k) => s + (resultOf.get(k)?.[mi] ?? 0),
               0,
             );
@@ -285,7 +285,7 @@ export async function buildApportionmentWorkbook(
       writeBlock("TOTAL", "Total — all the verticals above", (metric, mi) => sumMetric(metric, mi));
 
       if (scenario === "wide") {
-        const unalloc = (mi: number) => results[mi].wide.commonUnapportioned + results[mi].wide.accHrcmUnapportioned;
+        const unalloc = (mi: number) => results[mi].wide.commonUnapportioned + results[mi].wide.accUnapportioned;
         const rowNo = sheet.rowCount + 1;
         const cells: (string | number | { formula: string; result?: number })[] = [
           "Cost not charged to any of the verticals above (sits on heads outside them)",

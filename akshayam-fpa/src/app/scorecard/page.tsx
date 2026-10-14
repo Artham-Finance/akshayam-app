@@ -855,10 +855,11 @@ export default async function ScorecardPage({
                 foot of the revenue, collection, contribution and ageing cards — not rated, but in the totals, so
                 every total is the Overview&rsquo;s. Cost is shown in parts —
                 the vertical&rsquo;s own directly-tagged cost, and its apportioned share of
-                Common&rsquo;s cost and of ACC and HRCM&rsquo;s cost, spread on head count across
-                the six verticals exactly as in the P&amp;L&rsquo;s cost apportionment card, so
-                the two always agree. Raja carries his own directly-tagged cost and no share of
-                the pool, and each vertical carries its own finance cost. Contribution is struck after all
+                Common&rsquo;s cost (with DSC&rsquo;s and HRCM&rsquo;s), spread on head count, and of
+                ACC&rsquo;s cost, spread equally over every vertical but DLR, exactly as in the
+                P&amp;L&rsquo;s cost apportionment card, so the two always agree. Raja&rsquo;s AIF takes its
+                share like the others, and GIFT carries its own cost only. Each vertical carries its own
+                finance cost. Contribution is struck after all
                 of them, and out-of-books billing is added to it, so the total is the P&amp;L&rsquo;s profit
                 before tax. Common&rsquo;s direct cost carries the net reimbursable cost (RE − RI) and anything
                 booked to no vertical.

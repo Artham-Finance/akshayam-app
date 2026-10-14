@@ -7,12 +7,11 @@ import { fyMonths, type QuarterNo } from "@/lib/period";
  *
  * The one apportionment method in the app: the P&L's cost apportionment card
  * and the Vertical Performance Scorecard both read it, so the two always
- * agree. It is struck for exactly seven verticals, on one rule only - head
- * count - over two pools: actual cost booked under "Common incl partners
+ * agree. It is struck for exactly seven verticals over two pools: actual cost booked under "Common incl partners
  * contribution" together with the cost booked under DSC (the DSC support
- * cost is common cost, so the one pool is Common plus DSC), and actual cost
- * booked under ACC and HRCM (both their direct
- * team cost and their overheads, combined into one pool). A cost already
+ * cost is common cost) and under HRCM - one pool, spread on head count; and
+ * actual cost booked under ACC (its direct team cost and overheads), a pool
+ * of its own, spread equally over every receiver but Vijay's DLR. A cost already
  * tagged to one of the seven is that vertical's own and is never re-spread;
  * cost under any other vertical (GIFT) or left untagged is outside
  * this card's arrangement entirely, not shown here and not pooled (`outside`
@@ -43,6 +42,12 @@ const RECEIVERS: { key: string; label: string; code: string }[] = [
 
 /** The common-cost row's name wherever it is shown - the pool is Common's cost plus DSC's. */
 export const COMMON_COST_LABEL = "Common cost (incl DSC cost) — apportioned";
+
+/**
+ * ACC's cost is spread equally, not on head count, over every receiver but these - Vijay's
+ * DLR does not share it. ACC is a pool of its own; Common, DSC and HRCM are the other, on head count.
+ */
+const ACC_NOT_CHARGED = new Set(["DLR"]);
 
 /** The apportionment column a ledger vertical belongs to, or null - only the receivers take part. */
 export function costApportionmentKeyFor(code: string | null | undefined): string | null {
@@ -78,14 +83,14 @@ export interface ApportionedVerticalCost {
   otherIncome: number;
   commonApportioned: number;
   /** ACC's and HRCM's own direct team cost and overheads, combined into one pool and spread the same way as Common's */
-  accHrcmApportioned: number;
+  accApportioned: number;
   totalCost: number;
   /** revenue less every cost, direct and apportioned - the figure VPP is struck on */
   contribution: number;
   /** Common's pool, spread instead over every head in the entity - the comparison denominator */
   commonApportionedWide: number;
   /** ACC's and HRCM's pool, spread instead over every head in the entity - the comparison denominator */
-  accHrcmApportionedWide: number;
+  accApportionedWide: number;
   totalCostWide: number;
   contributionWide: number;
 }
@@ -107,13 +112,15 @@ export interface VerticalCostApportionmentResult {
   /** Common's own cost, by account - spread across the six by head-count share */
   commonCostLines: CostAccountLine[];
   /** ACC's and HRCM's own cost, combined by account - spread across the six by head-count share */
-  accHrcmCostLines: CostAccountLine[];
+  accCostLines: CostAccountLine[];
   /** total cost booked under Common incl partners contribution and under DSC, before spreading */
   poolTotal: number;
   /** the part of `poolTotal` that is DSC's own cost */
   dscPoolTotal: number;
+  /** the part of `poolTotal` that is HRCM's own cost */
+  hrcmPoolTotal: number;
   /** total cost booked under ACC and HRCM combined, before spreading */
-  accHrcmPoolTotal: number;
+  accPoolTotal: number;
   /**
    * Every vertical outside the six, by ledger code: its own ledger revenue and
    * its own directly-tagged cost. Not part of this card's figures and never
@@ -138,11 +145,11 @@ export interface VerticalCostApportionmentResult {
     /** Common's pool, by account - spread across the six on the company-wide denominator */
     commonCostLines: CostAccountLine[];
     /** ACC's and HRCM's pool, by account - spread across the six on the company-wide denominator */
-    accHrcmCostLines: CostAccountLine[];
+    accCostLines: CostAccountLine[];
     /** the slice of Common's pool this denominator leaves uncharged to any of the six */
     commonUnapportioned: number;
     /** the slice of ACC's and HRCM's pool this denominator leaves uncharged to any of the six */
-    accHrcmUnapportioned: number;
+    accUnapportioned: number;
   };
 }
 
@@ -273,11 +280,11 @@ export async function buildVerticalCostApportionment(opts: {
     directOverheads: 0,
     otherIncome: 0,
     commonApportioned: 0,
-    accHrcmApportioned: 0,
+    accApportioned: 0,
     totalCost: 0,
     contribution: 0,
     commonApportionedWide: 0,
-    accHrcmApportionedWide: 0,
+    accApportionedWide: 0,
     totalCostWide: 0,
     contributionWide: 0,
   }));
@@ -291,9 +298,10 @@ export async function buildVerticalCostApportionment(opts: {
   // account name -> pooled amount, Common's own cost before spreading.
   const commonPool = new Map<string, number>();
   // account name -> pooled amount, ACC's and HRCM's own cost combined, before spreading.
-  const accHrcmPool = new Map<string, number>();
+  const accPool = new Map<string, number>();
   const outside: Record<string, { revenue: number; directCost: number }> = {};
   let dscPoolTotal = 0;
+  let hrcmPoolTotal = 0;
 
   const addTo = (map: Map<string, Map<string, number>>, account: string, key: string, amount: number) => {
     const byVertical = map.get(account) ?? new Map<string, number>();
@@ -331,22 +339,22 @@ export async function buildVerticalCostApportionment(opts: {
       outside[row.code] = o;
     }
 
-    // Only Common's own booked cost is one pool, and ACC's and HRCM's own
-    // booked cost (direct team cost and overheads together) is the other -
-    // not untagged, unallocated, or any other vertical's activity. Their
+    // Two pools, not untagged, unallocated or any other vertical's activity; their
     // revenue, and any other vertical's figures, play no part in this card.
-    // DSC's support cost is common cost: it goes into Common's pool, by account.
-    if ((row.code === "COMMON" || row.code === "DSC") && cost !== 0) {
+    //   Common's cost, with DSC's support cost and HRCM's - spread on head count
+    //   ACC's cost (direct team cost and overheads together) - spread equally
+    if ((row.code === "COMMON" || row.code === "DSC" || row.code === "HRCM") && cost !== 0) {
       commonPool.set(row.name, (commonPool.get(row.name) ?? 0) + cost);
       if (row.code === "DSC") dscPoolTotal += cost;
-    } else if ((row.code === "ACC" || row.code === "HRCM") && cost !== 0) {
-      accHrcmPool.set(row.name, (accHrcmPool.get(row.name) ?? 0) + cost);
+      if (row.code === "HRCM") hrcmPoolTotal += cost;
+    } else if (row.code === "ACC" && cost !== 0) {
+      accPool.set(row.name, (accPool.get(row.name) ?? 0) + cost);
     }
   }
 
   const totalHeads = verticals.reduce((s, v) => s + v.heads, 0);
   const poolTotal = [...commonPool.values()].reduce((s, n) => s + n, 0);
-  const accHrcmPoolTotal = [...accHrcmPool.values()].reduce((s, n) => s + n, 0);
+  const accPoolTotal = [...accPool.values()].reduce((s, n) => s + n, 0);
   const companyEntityId = companyEntityRows[0]?.entity_id ?? null;
   // A keyed-in company total, where one exists, is the real denominator;
   // summing vertical_headcount is only ever a fallback estimate, since it
@@ -378,12 +386,14 @@ export async function buildVerticalCostApportionment(opts: {
     return { account, amountByKey, total: amount };
   });
 
-  const accHrcmCostLines: CostAccountLine[] = [...accHrcmPool.entries()].map(([account, amount]) => {
+  // ACC: equally over every receiver but DLR - the other six - whatever their head count.
+  const accShare = verticals.filter((v) => !ACC_NOT_CHARGED.has(v.key)).length;
+  const accCostLines: CostAccountLine[] = [...accPool.entries()].map(([account, amount]) => {
     const amountByKey: Record<string, number> = {};
     for (const v of verticals) {
-      const share = totalHeads > 0 ? amount * (v.heads / totalHeads) : amount / verticals.length;
+      const share = ACC_NOT_CHARGED.has(v.key) || accShare === 0 ? 0 : amount / accShare;
       amountByKey[v.key] = share;
-      v.accHrcmApportioned += share;
+      v.accApportioned += share;
     }
     return { account, amountByKey, total: amount };
   });
@@ -402,27 +412,25 @@ export async function buildVerticalCostApportionment(opts: {
     return { account, amountByKey, total: amount };
   });
 
-  const accHrcmCostLinesWide: CostAccountLine[] = [...accHrcmPool.entries()].map(([account, amount]) => {
-    const amountByKey: Record<string, number> = {};
-    for (const v of verticals) {
-      const share = totalCompanyHeads > 0 ? amount * (v.heads / totalCompanyHeads) : 0;
-      amountByKey[v.key] = share;
-      v.accHrcmApportionedWide += share;
-    }
-    return { account, amountByKey, total: amount };
-  });
+  // ACC has no head-count denominator: the company-wide comparison spreads it the same, equally
+  const accCostLinesWide: CostAccountLine[] = accCostLines.map((line) => ({
+    account: line.account,
+    amountByKey: { ...line.amountByKey },
+    total: line.total,
+  }));
+  for (const v of verticals) v.accApportionedWide = v.accApportioned;
 
   for (const v of verticals) {
     v.totalCost =
-      v.directTeamCost + v.directOverheads + v.otherIncome + v.commonApportioned + v.accHrcmApportioned;
+      v.directTeamCost + v.directOverheads + v.otherIncome + v.commonApportioned + v.accApportioned;
     v.contribution = v.revenue - v.totalCost;
     v.totalCostWide =
-      v.directTeamCost + v.directOverheads + v.otherIncome + v.commonApportionedWide + v.accHrcmApportionedWide;
+      v.directTeamCost + v.directOverheads + v.otherIncome + v.commonApportionedWide + v.accApportionedWide;
     v.contributionWide = v.revenue - v.totalCostWide;
   }
 
   const commonUnapportioned = poolTotal - verticals.reduce((s, v) => s + v.commonApportionedWide, 0);
-  const accHrcmUnapportioned = accHrcmPoolTotal - verticals.reduce((s, v) => s + v.accHrcmApportionedWide, 0);
+  const accUnapportioned = accPoolTotal - verticals.reduce((s, v) => s + v.accApportionedWide, 0);
 
   // Two or more of the six actually traded, and there is a pool to spread
   // between them. Head count is a standing figure and would make an empty
@@ -430,7 +438,7 @@ export async function buildVerticalCostApportionment(opts: {
   const active = verticals.filter((v) => v.revenue !== 0 || v.directTeamCost !== 0 || v.directOverheads !== 0).length;
 
   return {
-    applicable: active > 1 && (poolTotal !== 0 || accHrcmPoolTotal !== 0),
+    applicable: active > 1 && (poolTotal !== 0 || accPoolTotal !== 0),
     quarter,
     month: picked ? picked.key : null,
     fyStartYear,
@@ -442,10 +450,11 @@ export async function buildVerticalCostApportionment(opts: {
     directOverheadLines: toLines(directOverheadByAccount),
     otherIncomeLines: toLines(otherIncomeByAccount),
     commonCostLines,
-    accHrcmCostLines,
+    accCostLines,
     poolTotal,
     dscPoolTotal,
-    accHrcmPoolTotal,
+    hrcmPoolTotal,
+    accPoolTotal,
     outside,
     totalHeads,
     wide: {
@@ -453,9 +462,9 @@ export async function buildVerticalCostApportionment(opts: {
       companyHeadsIsKeyed,
       entityId: companyEntityId,
       commonCostLines: commonCostLinesWide,
-      accHrcmCostLines: accHrcmCostLinesWide,
+      accCostLines: accCostLinesWide,
       commonUnapportioned,
-      accHrcmUnapportioned,
+      accUnapportioned,
     },
   };
 }
@@ -502,11 +511,11 @@ function combineApportionments(
       directOverheads: sum((x) => x.directOverheads),
       otherIncome: sum((x) => x.otherIncome),
       commonApportioned: sum((x) => x.commonApportioned),
-      accHrcmApportioned: sum((x) => x.accHrcmApportioned),
+      accApportioned: sum((x) => x.accApportioned),
       totalCost: sum((x) => x.totalCost),
       contribution: sum((x) => x.contribution),
       commonApportionedWide: sum((x) => x.commonApportionedWide),
-      accHrcmApportionedWide: sum((x) => x.accHrcmApportionedWide),
+      accApportionedWide: sum((x) => x.accApportionedWide),
       totalCostWide: sum((x) => x.totalCostWide),
       contributionWide: sum((x) => x.contributionWide),
     };
@@ -549,10 +558,11 @@ function combineApportionments(
     directOverheadLines: mergeLines(parts.map((p) => p.directOverheadLines)),
     otherIncomeLines: mergeLines(parts.map((p) => p.otherIncomeLines)),
     commonCostLines: mergeLines(parts.map((p) => p.commonCostLines)),
-    accHrcmCostLines: mergeLines(parts.map((p) => p.accHrcmCostLines)),
+    accCostLines: mergeLines(parts.map((p) => p.accCostLines)),
     poolTotal: total((p) => p.poolTotal),
     dscPoolTotal: total((p) => p.dscPoolTotal),
-    accHrcmPoolTotal: total((p) => p.accHrcmPoolTotal),
+    hrcmPoolTotal: total((p) => p.hrcmPoolTotal),
+    accPoolTotal: total((p) => p.accPoolTotal),
     outside,
     totalHeads: round2(total((p) => p.totalHeads) / n),
     wide: {
@@ -560,9 +570,9 @@ function combineApportionments(
       companyHeadsIsKeyed: parts.every((p) => p.wide.companyHeadsIsKeyed),
       entityId: first.wide.entityId,
       commonCostLines: mergeLines(parts.map((p) => p.wide.commonCostLines)),
-      accHrcmCostLines: mergeLines(parts.map((p) => p.wide.accHrcmCostLines)),
+      accCostLines: mergeLines(parts.map((p) => p.wide.accCostLines)),
       commonUnapportioned: total((p) => p.wide.commonUnapportioned),
-      accHrcmUnapportioned: total((p) => p.wide.accHrcmUnapportioned),
+      accUnapportioned: total((p) => p.wide.accUnapportioned),
     },
   };
 }
