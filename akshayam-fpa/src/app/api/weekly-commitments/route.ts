@@ -43,10 +43,9 @@ const Save = z.object({
     .array(
       z.object({
         customer: z.string().trim().min(1).max(300),
-        amount: z.number().finite().positive(),
+        amount: z.number().finite().nonnegative(),
       }),
     )
-    .min(1)
     .max(200),
 });
 
@@ -137,6 +136,11 @@ export async function POST(request: Request) {
           "An admin can reopen it.",
         409,
       );
+    }
+    // Everyone but an admin keys at least one customer, each with an amount above nil; an admin may
+    // save a nil amount, or no lines at all, to zero a commitment out.
+    if (!isAdmin && (parsed.lines.length === 0 || parsed.lines.some((l) => l.amount <= 0))) {
+      return fail("Each line needs a customer and an amount above nil.");
     }
     const meetingDate = parsed.meetingDate ?? defaultMeetingDate(parsed.weekEnd);
     if (!isSaturday(meetingDate)) return fail("The meeting date must be a Saturday.");

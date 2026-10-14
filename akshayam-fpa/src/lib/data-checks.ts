@@ -258,7 +258,7 @@ export async function runDataChecks(): Promise<DataCheck[]> {
       }
       if (compared === 0 && problems.length === 0) return { status: "skip", detail: "There is no apportionment to compare yet." };
       return problems.length === 0
-        ? { status: "ok", detail: `Revenue, total cost and contribution agree for the six verticals, in every quarter and cumulatively (${compared} comparisons)` }
+        ? { status: "ok", detail: `Revenue, total cost and contribution agree for every vertical, in every quarter and cumulatively (${compared} comparisons)` }
         : { status: "fail", detail: problems.slice(0, 6).join("; ") + (problems.length > 6 ? `; and ${problems.length - 6} more` : "") };
     }),
   );

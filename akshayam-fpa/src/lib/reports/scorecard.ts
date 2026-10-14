@@ -44,7 +44,7 @@ const AGE_BUCKETS = [
 /**
  * The scorecard rows, in the order the workbook lists them. `apportKey` is the
  * column the P&L's cost apportionment card uses for the vertical - the six it
- * spreads Common's and ACC and HRCM's cost over on head count; the scorecard
+ * spreads Common's (with DSC's and HRCM's) cost over on head count and ACC's equally; the scorecard
  * reads cost off that same engine so the two always agree. `ownCost` marks a
  * row outside the six that is charged its own directly-tagged cost and no
  * share of the pool (Raja). Common, ACC and HRCM carry none: their cost is the
@@ -459,7 +459,7 @@ export async function buildScorecard(opts: {
       cur.revenue += v.revenue;
       cur.cost += v.totalCost;
       cur.directCost += v.directTeamCost + v.directOverheads + v.otherIncome;
-      cur.apportionedCost += v.commonApportioned + v.accHrcmApportioned;
+      cur.apportionedCost += v.commonApportioned + v.accApportioned;
       cur.contribution += v.contribution;
       apport.set(v.key, cur);
     }
