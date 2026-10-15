@@ -15,7 +15,7 @@ import type {
 
 /**
  * The MAK meeting's Receivables tab: for each vertical, the receivables over
- * 180 days with what is committed for the week and how last week's commitment
+ * 90 days (up to 180) and over 180 days, each with what is committed for the week and how last week's commitment
  * went; the ten customers who owe the most; and every customer's invoices with
  * the TDS Zoho books on them against what Form 26AS shows.
  *
@@ -118,6 +118,13 @@ export function WeeklyReceivables({
                 <span className="text-ink-faint">({percent(v.pctOfEntity * 100, 1)} of the entity)</span>
               </span>
               <span className="text-[12px] text-ink-muted">
+                91–180 days{" "}
+                <span className={clsx("num font-medium", v.over90Total > 0 ? "text-caution" : "text-ink")}>
+                  {money(v.over90Total)}
+                </span>{" "}
+                <span className="text-ink-faint">· {v.over90.length} customer{v.over90.length === 1 ? "" : "s"}</span>
+              </span>
+              <span className="text-[12px] text-ink-muted">
                 Over 180 days{" "}
                 <span className={clsx("num font-medium", v.over180Total > 0 ? "text-caution" : "text-ink")}>
                   {money(v.over180Total)}
@@ -154,42 +161,47 @@ function VerticalBlock({
 }) {
   return (
     <div className="space-y-6 bg-surface-sunk/20 px-4 pb-5 pt-1 sm:px-5">
-      {/* 1. over 180 days */}
-      <div>
-        <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-muted">
-          Receivables over 180 days
-        </h3>
-        {v.over180.length === 0 ? (
-          <p className="text-[12.5px] text-ink-muted">Nothing is over 180 days for this vertical.</p>
-        ) : (
-          <div className="table-frame">
-            <table className="w-full min-w-max border-collapse text-[12.5px]">
-              <thead>
-                <tr>
-                  <th className={clsx(th, "text-left")}>Customer</th>
-                  <th className={clsx(th, "text-right")}>Over 180 days</th>
-                  <th className={clsx(th, "text-left")}>Commitment for this week</th>
-                  <th className={clsx(th, "text-left")}>Last week&rsquo;s commitment</th>
-                  <th className={clsx(th, "text-left")}>Review &amp; follow-up</th>
-                  <th className={clsx(th, "text-left")}>Achieved?</th>
-                  <th className={th} />
-                </tr>
-              </thead>
-              <tbody>
-                {v.over180.map((c) => (
-                  <Over180Row
-                    key={c.customer}
-                    c={c}
-                    verticalId={v.verticalId}
-                    weekEnd={weekEnd}
-                    canCommit={canCommit}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      {/* 1. the two ageing buckets: 91-180 days, then over 180 */}
+      {(
+        [
+          { key: "over90", title: "Receivables over 90 days, up to 180", head: "91–180 days", none: "Nothing is between 90 and 180 days for this vertical.", lines: v.over90 },
+          { key: "over180", title: "Receivables over 180 days", head: "Over 180 days", none: "Nothing is over 180 days for this vertical.", lines: v.over180 },
+        ] as const
+      ).map((b) => (
+        <div key={b.key}>
+          <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-muted">{b.title}</h3>
+          {b.lines.length === 0 ? (
+            <p className="text-[12.5px] text-ink-muted">{b.none}</p>
+          ) : (
+            <div className="table-frame">
+              <table className="w-full min-w-max border-collapse text-[12.5px]">
+                <thead>
+                  <tr>
+                    <th className={clsx(th, "text-left")}>Customer</th>
+                    <th className={clsx(th, "text-right")}>{b.head}</th>
+                    <th className={clsx(th, "text-left")}>Commitment for this week</th>
+                    <th className={clsx(th, "text-left")}>Last week&rsquo;s commitment</th>
+                    <th className={clsx(th, "text-left")}>Review &amp; follow-up</th>
+                    <th className={clsx(th, "text-left")}>Achieved?</th>
+                    <th className={th} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {b.lines.map((c) => (
+                    <Over180Row
+                      key={c.customer}
+                      c={c}
+                      verticalId={v.verticalId}
+                      weekEnd={weekEnd}
+                      canCommit={canCommit}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ))}
 
       {/* 2. top ten */}
       <div>
@@ -205,6 +217,7 @@ function VerticalBlock({
                 <th className={clsx(th, "text-right")}>Outstanding</th>
                 <th className={clsx(th, "text-right")}>% of vertical&rsquo;s receivables</th>
                 <th className={clsx(th, "text-right")}>% of entity&rsquo;s receivables</th>
+                <th className={clsx(th, "text-right")}>91–180 days</th>
                 <th className={clsx(th, "text-right")}>Over 180 days</th>
               </tr>
             </thead>
@@ -226,6 +239,7 @@ function VerticalBlock({
                 <td className="num border-t border-line-strong px-3 py-2 text-right">
                   {percent(v.top.reduce((s, t) => s + t.pctOfEntity, 0) * 100, 1)}
                 </td>
+                <td className="border-t border-line-strong px-3 py-2" />
                 <td className="border-t border-line-strong px-3 py-2" />
               </tr>
             </tfoot>
@@ -278,7 +292,7 @@ function VerticalBlock({
   );
 }
 
-/** One customer over 180 days: this week's commitment, and the review of last week's. */
+/** One customer in an ageing bucket (91-180 days, or over 180): this week's commitment, and the review of last week's. */
 function Over180Row({
   c,
   verticalId,
@@ -304,7 +318,7 @@ function Over180Row({
     setMessage(null);
     let error: string | null = null;
     if (canEditCommitment && commitment.trim() !== (c.commitment ?? "")) {
-      error = await save({ action: "commitment", verticalId, weekEnd, customer: c.customer, text: commitment });
+      error = await save({ action: "commitment", bucket: c.bucket, verticalId, weekEnd, customer: c.customer, text: commitment });
     }
     if (!error && c.previous && canCommit) {
       const changed =
@@ -312,6 +326,7 @@ function Over180Row({
       if (changed) {
         error = await save({
           action: "review",
+          bucket: c.bucket,
           verticalId,
           weekEnd: c.previous.weekEnd,
           customer: c.customer,
@@ -481,13 +496,16 @@ function TopRow({ t }: { t: TopCustomer }) {
         <td className={clsx(td, "num text-right text-ink")}>{money(t.outstanding)}</td>
         <td className={clsx(td, "num text-right text-ink-muted")}>{percent(t.pctOfVertical * 100, 1)}</td>
         <td className={clsx(td, "num text-right text-ink-muted")}>{percent(t.pctOfEntity * 100, 1)}</td>
+        <td className={clsx(td, "num text-right", t.over90 > 0 ? "text-caution" : "text-ink-faint")}>
+          {t.over90 > 0 ? money(t.over90) : "—"}
+        </td>
         <td className={clsx(td, "num text-right", t.over180 > 0 ? "text-caution" : "text-ink-faint")}>
           {t.over180 > 0 ? money(t.over180) : "—"}
         </td>
       </tr>
       {open && (
         <tr>
-          <td colSpan={6} className="border-b border-line bg-surface-sunk/30 px-6 py-2">
+          <td colSpan={7} className="border-b border-line bg-surface-sunk/30 px-6 py-2">
             <table className="w-full max-w-3xl border-collapse text-[12px]">
               <thead>
                 <tr className="text-ink-faint">

@@ -24,14 +24,18 @@ const Where = {
   customer: z.string().trim().min(1).max(300),
 };
 
+const Bucket = z.enum(["over90", "over180"]).default("over180");
+
 const Commitment = z.object({
   action: z.literal("commitment"),
   ...Where,
+  bucket: Bucket,
   text: z.string().max(4000),
 });
 const Review = z.object({
   action: z.literal("review"),
   ...Where,
+  bucket: Bucket,
   review: z.string().max(4000).nullable(),
   achieved: z.enum(["yes", "partly", "no"]).nullable(),
 });
@@ -74,7 +78,8 @@ export async function POST(request: Request) {
     }
 
     const today = todayIst();
-    const kind = parsed.action === "tds" ? "tds" : "over180";
+    // the head commits against two ageing buckets - over 90 days (up to 180), and over 180 - kept apart
+    const kind = parsed.action === "tds" ? "tds" : parsed.bucket;
     const existing = await queryOne<{ id: number; entered_on: string }>(
       `select id, entered_on::text from weekly_receivable_notes
         where vertical_id = $1 and week_end = $2 and customer = $3 and kind = $4`,
@@ -92,11 +97,11 @@ export async function POST(request: Request) {
       await query(
         `insert into weekly_receivable_notes
            (entity_id, vertical_id, week_end, customer, kind, commitment, entered_on, updated_by)
-         values ($1, $2, $3, $4, 'over180', $5, $6, $7)
+         values ($1, $2, $3, $4, $8, $5, $6, $7)
          on conflict (vertical_id, week_end, customer, kind)
          do update set commitment = excluded.commitment, updated_by = excluded.updated_by,
                        updated_at = now()`,
-        [vertical.entity_id, parsed.verticalId, parsed.weekEnd, parsed.customer, parsed.text.trim() || null, today, user.id],
+        [vertical.entity_id, parsed.verticalId, parsed.weekEnd, parsed.customer, parsed.text.trim() || null, today, user.id, kind],
       );
       return NextResponse.json({ ok: true });
     }

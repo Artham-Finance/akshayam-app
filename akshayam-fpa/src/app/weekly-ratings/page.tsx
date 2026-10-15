@@ -15,7 +15,7 @@ import {
   WEEKLY_MEASURE_LABEL,
   defaultMeetingDate,
   defaultWeekEnd,
-  isSaturday,
+  isValidDate,
   meetingWeeks,
   todayIst,
   type WeeklyMeasure,
@@ -24,7 +24,7 @@ import {
 export const dynamic = "force-dynamic";
 
 /**
- * MAK meeting (weekly ratings) - the Saturday meeting's commitments and how they landed.
+ * MAK meeting (weekly ratings) - the meeting's commitments and how they landed. The meeting is normally on the Saturday before the week, but its date is free.
  *
  * Each vertical head commits, before the week begins, what they will bring in:
  * revenue or collection, customer by customer - a collection out of the
@@ -57,7 +57,7 @@ export default async function WeeklyRatingsPage({
         : weeks.find((w) => w.end === defaultWeekEnd(today))?.end ?? weeks[0].end;
     const requestedMeeting = pick(params.meeting);
     const meetingDate =
-      requestedMeeting && isSaturday(requestedMeeting) ? requestedMeeting : defaultMeetingDate(weekEnd);
+      requestedMeeting && isValidDate(requestedMeeting) ? requestedMeeting : defaultMeetingDate(weekEnd);
     const requestedMeasure = pick(params.measure);
     const measure: WeeklyMeasure = WEEKLY_MEASURES.includes(requestedMeasure as WeeklyMeasure)
       ? (requestedMeasure as WeeklyMeasure)
@@ -79,7 +79,7 @@ export default async function WeeklyRatingsPage({
         r.locked = false;
       });
       receivables?.verticals.forEach((v) =>
-        v.over180.forEach((c) => {
+        [...v.over90, ...v.over180].forEach((c) => {
           c.locked = false;
         }),
       );
