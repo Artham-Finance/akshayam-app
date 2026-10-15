@@ -393,7 +393,11 @@ export async function buildWeeklyReceivables(opts: {
           (n) => n.vertical_id === vid && n.kind === bucket && norm(n.customer) === norm(customer),
         );
         const current = mine.find((n) => n.week_end === weekEnd) ?? null;
-        const earlier = mine.find((n) => n.week_end < weekEnd) ?? null;
+        // An earlier week counts only if something was said in it - a commitment, a review or an
+        // outcome. A note left empty (typed, then cleared) is nothing committed earlier.
+        const said = (n: (typeof notes)[number]) =>
+          !!n.commitment?.trim() || !!n.review?.trim() || n.achieved !== null;
+        const earlier = mine.find((n) => n.week_end < weekEnd && said(n)) ?? null;
         target.push({
           customer,
           bucket,
