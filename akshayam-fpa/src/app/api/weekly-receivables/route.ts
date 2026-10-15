@@ -46,6 +46,22 @@ const TdsRemark = z.object({
 });
 const Body = z.discriminatedUnion("action", [Commitment, Review, TdsRemark]);
 
+/**
+ * A commitment that is typed and then cleared leaves a note with nothing in it, which would
+ * read later as "committed earlier". Once a note says nothing - no commitment, review or
+ * outcome - it is removed.
+ */
+async function dropEmptyNote(verticalId: number, weekEnd: string, customer: string, kind: string) {
+  await query(
+    `delete from weekly_receivable_notes
+      where vertical_id = $1 and week_end = $2 and customer = $3 and kind = $4
+        and kind in ('over90', 'over180')
+        and coalesce(btrim(commitment), '') = '' and coalesce(btrim(review), '') = ''
+        and achieved is null`,
+    [verticalId, weekEnd, customer, kind],
+  );
+}
+
 export async function POST(request: Request) {
   const { user, denied } = await apiGuard("reports.view");
   if (denied) return denied;
@@ -103,6 +119,7 @@ export async function POST(request: Request) {
                        updated_at = now()`,
         [vertical.entity_id, parsed.verticalId, parsed.weekEnd, parsed.customer, parsed.text.trim() || null, today, user.id, kind],
       );
+      await dropEmptyNote(parsed.verticalId, parsed.weekEnd, parsed.customer, kind);
       return NextResponse.json({ ok: true });
     }
 
@@ -114,6 +131,7 @@ export async function POST(request: Request) {
           where id = $1`,
         [existing.id, parsed.review?.trim() || null, parsed.achieved, user.id],
       );
+      await dropEmptyNote(parsed.verticalId, parsed.weekEnd, parsed.customer, kind);
       return NextResponse.json({ ok: true });
     }
 
