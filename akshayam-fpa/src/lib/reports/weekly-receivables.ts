@@ -32,6 +32,11 @@ import { addDays, isLocked, todayIst } from "@/lib/weekly";
  */
 
 export const OVER_DAYS = 180;
+/** the lower bucket: over this many days, up to OVER_DAYS */
+export const MID_DAYS = 90;
+
+/** the two ageing buckets the head commits against: 91-180 days, and over 180 */
+export type AgeBucket = "over90" | "over180";
 
 export interface ReceivableInvoice {
   invoiceNumber: string;
@@ -43,7 +48,9 @@ export interface ReceivableInvoice {
 
 export interface Over180Customer {
   customer: string;
-  /** what is owed over 180 days */
+  /** which bucket this line is: over 90 days (up to 180), or over 180 */
+  bucket: AgeBucket;
+  /** what is owed in the bucket */
   amount: number;
   invoices: ReceivableInvoice[];
   /** this week's commitment, as keyed */
@@ -66,6 +73,8 @@ export interface TopCustomer {
   outstanding: number;
   pctOfVertical: number;
   pctOfEntity: number;
+  /** owed over 90 days, up to 180 */
+  over90: number;
   over180: number;
   /** every open invoice behind the balance, the oldest first */
   invoices: ReceivableInvoice[];
@@ -108,6 +117,8 @@ export interface VerticalReceivables {
   label: string;
   total: number;
   pctOfEntity: number;
+  over90Total: number;
+  over90: Over180Customer[];
   over180Total: number;
   over180: Over180Customer[];
   top: TopCustomer[];
@@ -202,7 +213,7 @@ export async function buildWeeklyReceivables(opts: {
           vertical_id: number;
           week_end: string;
           customer: string;
-          kind: "over180" | "tds";
+          kind: "over90" | "over180" | "tds";
           commitment: string | null;
           entered_on: string;
           review: string | null;
@@ -345,61 +356,64 @@ export async function buildWeeklyReceivables(opts: {
       byCustomer.set(key, [...(byCustomer.get(key) ?? []), r]);
     }
 
+    const over90: Over180Customer[] = [];
     const over180: Over180Customer[] = [];
     const topAll: TopCustomer[] = [];
+    const lineOf = (r: (typeof rows)[number]) => ({
+      invoiceNumber: r.invoice_number ?? "—",
+      invoiceDate: r.invoice_date,
+      dueDate: r.due_date,
+      balance: Number(r.balance),
+      ageDays: Number(r.age),
+    });
     for (const [customer, list] of byCustomer) {
       const outstanding = list.reduce((s, r) => s + Number(r.balance), 0);
+      const sumOf = (rs: typeof list) => rs.reduce((s, r) => s + Number(r.balance), 0);
+      const mid = list.filter((r) => Number(r.age) > MID_DAYS && Number(r.age) <= OVER_DAYS);
       const old = list.filter((r) => Number(r.age) > OVER_DAYS);
-      const oldAmount = old.reduce((s, r) => s + Number(r.balance), 0);
       topAll.push({
         rank: 0,
         customer,
         outstanding,
         pctOfVertical: total > 0 ? outstanding / total : 0,
         pctOfEntity: entityTotal > 0 ? outstanding / entityTotal : 0,
-        over180: oldAmount,
-        invoices: list
-          .map((r) => ({
-            invoiceNumber: r.invoice_number ?? "—",
-            invoiceDate: r.invoice_date,
-            dueDate: r.due_date,
-            balance: Number(r.balance),
-            ageDays: Number(r.age),
-          }))
-          .sort((a, b) => b.ageDays - a.ageDays),
+        over90: sumOf(mid),
+        over180: sumOf(old),
+        invoices: list.map(lineOf).sort((a, b) => b.ageDays - a.ageDays),
       });
-      if (oldAmount <= 0) continue;
 
-      const mine = notes.filter(
-        (n) => n.vertical_id === vid && n.kind === "over180" && norm(n.customer) === norm(customer),
-      );
-      const current = mine.find((n) => n.week_end === weekEnd) ?? null;
-      const earlier = mine.find((n) => n.week_end < weekEnd) ?? null;
-      over180.push({
-        customer,
-        amount: oldAmount,
-        invoices: old
-          .map((r) => ({
-            invoiceNumber: r.invoice_number ?? "—",
-            invoiceDate: r.invoice_date,
-            dueDate: r.due_date,
-            balance: Number(r.balance),
-            ageDays: Number(r.age),
-          }))
-          .sort((a, b) => b.ageDays - a.ageDays),
-        commitment: current?.commitment ?? null,
-        enteredOn: current?.entered_on ?? null,
-        locked: current ? isLocked(current.entered_on, null, today) : false,
-        previous: earlier
-          ? {
-              weekEnd: earlier.week_end,
-              commitment: earlier.commitment,
-              review: earlier.review,
-              achieved: earlier.achieved,
-            }
-          : null,
-      });
+      // one line per customer in each bucket it has something in, with the head's notes for that bucket
+      for (const [bucket, invoices, target] of [
+        ["over90", mid, over90],
+        ["over180", old, over180],
+      ] as const) {
+        const amount = sumOf(invoices);
+        if (amount <= 0) continue;
+        const mine = notes.filter(
+          (n) => n.vertical_id === vid && n.kind === bucket && norm(n.customer) === norm(customer),
+        );
+        const current = mine.find((n) => n.week_end === weekEnd) ?? null;
+        const earlier = mine.find((n) => n.week_end < weekEnd) ?? null;
+        target.push({
+          customer,
+          bucket,
+          amount,
+          invoices: invoices.map(lineOf).sort((a, b) => b.ageDays - a.ageDays),
+          commitment: current?.commitment ?? null,
+          enteredOn: current?.entered_on ?? null,
+          locked: current ? isLocked(current.entered_on, null, today) : false,
+          previous: earlier
+            ? {
+                weekEnd: earlier.week_end,
+                commitment: earlier.commitment,
+                review: earlier.review,
+                achieved: earlier.achieved,
+              }
+            : null,
+        });
+      }
     }
+    over90.sort((a, b) => b.amount - a.amount);
     over180.sort((a, b) => b.amount - a.amount);
 
     const top = topAll
@@ -463,6 +477,8 @@ export async function buildWeeklyReceivables(opts: {
       label: labelFor(vid),
       total,
       pctOfEntity: entityTotal > 0 ? total / entityTotal : 0,
+      over90Total: over90.reduce((s, c) => s + c.amount, 0),
+      over90,
       over180Total: over180.reduce((s, c) => s + c.amount, 0),
       over180,
       top,

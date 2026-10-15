@@ -31,6 +31,11 @@ export function addDays(date: string, days: number): string {
   return iso(new Date(parse(date).getTime() + days * DAY));
 }
 
+/** A real calendar date, YYYY-MM-DD - the meeting can be on any day (a Friday, when Saturday is a holiday). */
+export function isValidDate(date: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(parse(date).getTime()) && iso(parse(date)) === date;
+}
+
 export function isSaturday(date: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(date) && parse(date).getUTCDay() === 6;
 }

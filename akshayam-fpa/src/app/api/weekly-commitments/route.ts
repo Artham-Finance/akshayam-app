@@ -10,6 +10,7 @@ import {
   defaultMeetingDate,
   isLocked,
   isSaturday,
+  isValidDate,
   todayIst,
 } from "@/lib/weekly";
 
@@ -143,7 +144,8 @@ export async function POST(request: Request) {
       return fail("Each line needs a customer and an amount above nil.");
     }
     const meetingDate = parsed.meetingDate ?? defaultMeetingDate(parsed.weekEnd);
-    if (!isSaturday(meetingDate)) return fail("The meeting date must be a Saturday.");
+    // Any day: management may meet on the Friday when the Saturday is a holiday.
+    if (!isValidDate(meetingDate)) return fail("The meeting date is not a valid date.");
 
     await transaction(async (client) => {
       const header = await client.query<{ id: number }>(

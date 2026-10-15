@@ -4,7 +4,7 @@ import { Fragment, useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { money, percent } from "@/lib/format";
-import { isSaturday } from "@/lib/weekly";
+import { isValidDate } from "@/lib/weekly";
 import type { WeeklyRow } from "@/lib/reports/weekly-ratings";
 
 /**
@@ -258,8 +258,8 @@ function CommitmentPanel({
       setError("Add at least one customer with an amount.");
       return;
     }
-    if (!isSaturday(meeting)) {
-      setError("The meeting date must be a Saturday.");
+    if (!isValidDate(meeting)) {
+      setError("Pick the meeting date.");
       return;
     }
     void post({ action: "save", meetingDate: meeting, lines: cleaned }, "Saved. It freezes at the end of today.");
@@ -410,7 +410,7 @@ function CommitmentPanel({
           </table>
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex flex-col gap-1 text-[11px] text-ink-muted">
-              Meeting date (Saturday)
+              Meeting date
               <input
                 type="date"
                 value={meeting}
