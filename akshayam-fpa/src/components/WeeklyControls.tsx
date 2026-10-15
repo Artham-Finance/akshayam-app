@@ -3,13 +3,13 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import clsx from "clsx";
-import { isSaturday, type MeetingWeek } from "@/lib/weekly";
+import { isValidDate, type MeetingWeek } from "@/lib/weekly";
 
 /**
- * The two pickers at the head of the screen: the Saturday meeting, and the week
- * ended. Choosing a week moves the meeting to the Saturday before it begins -
- * where its commitment is normally made - and a meeting date picked by hand
- * stays as it is, since a commitment can be taken at any Saturday meeting.
+ * The two pickers at the head of the screen: the meeting, and the week ended.
+ * Choosing a week moves the meeting to the Saturday before it begins - where its
+ * commitment is normally made - and a meeting date picked by hand stays as it is,
+ * on any day: management may meet on the Friday when the Saturday is a holiday.
  */
 export function WeeklyControls({
   weeks,
@@ -41,15 +41,15 @@ export function WeeklyControls({
   return (
     <div className="flex flex-wrap items-end gap-4">
       <label className="flex flex-col gap-1 text-[11px] text-ink-muted">
-        Weekly meeting date (Saturday)
+        Weekly meeting date
         <input
           type="date"
           value={meetingDate}
           onChange={(e) => {
             const value = e.target.value;
             if (!value) return;
-            if (!isSaturday(value)) {
-              setProblem("The weekly meeting is on a Saturday - pick a Saturday.");
+            if (!isValidDate(value)) {
+              setProblem("Pick a valid date for the meeting.");
               return;
             }
             setProblem(null);
