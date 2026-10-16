@@ -120,7 +120,8 @@ export function ScorecardControls({
           <option value="cumulative">Cumulative to quarter</option>
         </select>
       </label>
-      {verticalOptions.length > 0 && (
+      {/* One vertical in scope means "All verticals" is that vertical - nothing to pick. */}
+      {verticalOptions.length > 1 && (
         <label className="flex items-center gap-2 text-[12px] text-ink-muted">
           <span className="sr-only sm:not-sr-only">Vertical</span>
           <select
