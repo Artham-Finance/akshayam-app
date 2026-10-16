@@ -17,14 +17,14 @@ import {
 export const runtime = "nodejs";
 
 /**
- * Record a vertical head's weekly commitment, say whether it was achieved, or
+ * Record a vertical head's weekly commitment, add remarks on how it went, or
  * (an admin) reopen a frozen one.
  *
  * A commitment is a set of customer lines, each an amount the head undertakes
  * to bring in that week; their sum is the figure the week is rated against. The
  * amounts freeze at the end of the day they are first keyed, so a commitment
- * cannot be improved once the week's figures are known. "Achieved?" is the
- * outcome, said afterwards, and so stays editable.
+ * cannot be improved once the week's figures are known. The remarks are said
+ * afterwards, and so stay editable.
  *
  * Who may commit: anyone whose role carries `weekly.commit`, and a team lead
  * signed in to their own vertical's slice - those logins are read-only
@@ -53,7 +53,6 @@ const Save = z.object({
 const Outcome = z.object({
   action: z.literal("outcome"),
   ...Week,
-  achieved: z.enum(["yes", "partly", "no"]).nullable(),
   remarks: z.string().max(2000).nullable(),
 });
 
@@ -123,9 +122,9 @@ export async function POST(request: Request) {
       if (!existing) return fail("Nothing has been committed for this week yet.", 404);
       await query(
         `update weekly_commitments
-            set achieved = $2, remarks = $3, updated_by = $4, updated_at = now()
+            set remarks = $2, updated_by = $3, updated_at = now()
           where id = $1`,
-        [existing.id, parsed.achieved, parsed.remarks?.trim() || null, user.id],
+        [existing.id, parsed.remarks?.trim() || null, user.id],
       );
       return NextResponse.json({ ok: true });
     }

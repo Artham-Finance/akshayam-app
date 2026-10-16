@@ -38,6 +38,17 @@ export interface WeeklyLine {
   outstanding: number | null;
 }
 
+/** One entry of the ledger figure the week's actual revenue is made of (revenue measure only). */
+export interface ActualEntry {
+  customer: string;
+  date: string;
+  /** where the amount comes from: the ledger itself, an OSB invoice, or revenue transferred away */
+  source: "Ledger" | "OSB" | "Transferred";
+  /** the transaction's type and number, e.g. "Invoice INV-0042" */
+  ref: string;
+  amount: number;
+}
+
 /** A customer who owes the vertical money, and so a customer a collection can be committed against. */
 export interface ReceivableCustomer {
   customer: string;
@@ -56,6 +67,8 @@ export interface WeeklyRow {
   hasCommitment: boolean;
   lines: WeeklyLine[];
   actual: number;
+  /** revenue only: the entries that add up to `actual`, by customer then date */
+  breakup: ActualEntry[];
   /** actual as a fraction of the commitment, or null where nothing was committed */
   pctOfCommitment: number | null;
   /** the commitment rated against the weekly budget - what the head undertook */
@@ -89,6 +102,12 @@ export interface WeeklyRatingsResult {
 }
 
 const norm = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
+
+const TXN_LABEL: Record<string, string> = {
+  invoice: "Invoice",
+  creditnote: "Credit note",
+  journal: "Journal",
+};
 
 interface CommitRow {
   id: number;
@@ -200,6 +219,88 @@ export async function buildWeeklyRatings(opts: {
         [...window],
       ),
     );
+  }
+
+  // ---- revenue actual, entry by entry: the same three sources as above, so it adds up to it ----
+  const breakupByVertical = new Map<number, ActualEntry[]>();
+  if (ids.length > 0 && measure === "revenue") {
+    const none = "(no customer on the entry)";
+    const [gl, osb, transferred] = await Promise.all([
+      query<{ vertical_id: number; customer: string; d: string; kind: string | null; num: string | null; v: number }>(
+        // The ledger rarely names the customer: an invoice's is on the invoice, a credit note's is its description.
+        `select g.vertical_id,
+                coalesce(nullif(btrim(g.contact_name), ''), c.cust,
+                         case when g.txn_type ilike 'credit%' then nullif(btrim(g.description), '') end, $5) as customer,
+                g.txn_date::text as d, g.txn_type as kind, g.txn_number as num,
+                sum(g.credit - g.debit)::float8 as v
+           from gl_entries g join accounts a on a.id = g.account_id
+           left join (select entity_id, invoice_number, min(btrim(customer_name)) as cust
+                        from invoice_lines where entity_id = any($1::int[]) group by 1, 2) c
+             on c.entity_id = g.entity_id and c.invoice_number = g.txn_number
+          where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3
+            and a.statement = 'pnl' and a.group_code = 'revenue'
+            and g.vertical_id = any($4::int[])
+          group by 1, 2, 3, 4, 5`,
+        [...window, none],
+      ),
+      query<{ vertical_id: number; customer: string; d: string; num: string | null; v: number }>(
+        `select i.vertical_id, coalesce(nullif(btrim(i.customer_name), ''), $5) as customer,
+                i.invoice_date::text as d, i.invoice_number as num, sum(i.amount_base)::float8 as v
+           from invoice_lines i
+          where i.entity_id = any($1::int[]) and i.is_osb
+            and i.invoice_date between $2 and $3 and i.vertical_id = any($4::int[])
+          group by 1, 2, 3, 4`,
+        [...window, none],
+      ),
+      query<{ vertical_id: number; customer: string; d: string; num: string | null; v: number }>(
+        `select t.vertical_id, coalesce(nullif(btrim(t.customer_name), ''), $5) as customer,
+                t.invoice_date::text as d, t.invoice_number as num, -sum(t.amount)::float8 as v
+           from revenue_transfer_entries t
+          where t.entity_id = any($1::int[]) and t.entity_id in (select id from entities where slug = 'akshayam') and t.invoice_date between $2 and $3
+            and t.vertical_id = any($4::int[])
+          group by 1, 2, 3, 4`,
+        [...window, none],
+      ),
+    ]);
+    const push = (verticalId: number, entry: ActualEntry) => {
+      if (Math.abs(entry.amount) < 0.005) return;
+      const list = breakupByVertical.get(verticalId) ?? [];
+      list.push(entry);
+      breakupByVertical.set(verticalId, list);
+    };
+    for (const r of gl) {
+      push(r.vertical_id, {
+        customer: r.customer,
+        date: r.d,
+        source: "Ledger",
+        ref: [TXN_LABEL[(r.kind ?? "").toLowerCase()] ?? r.kind, r.num].filter(Boolean).join(" ") || "Journal",
+        amount: Number(r.v),
+      });
+    }
+    for (const r of osb) {
+      push(r.vertical_id, { customer: r.customer, date: r.d, source: "OSB", ref: `Invoice ${r.num ?? ""}`.trim(), amount: Number(r.v) });
+    }
+    for (const r of transferred) {
+      push(r.vertical_id, {
+        customer: r.customer,
+        date: r.d,
+        source: "Transferred",
+        ref: `Invoice ${r.num ?? ""}`.trim(),
+        amount: Number(r.v),
+      });
+    }
+    for (const list of breakupByVertical.values()) {
+      const byCustomer = new Map<string, number>();
+      for (const e of list) byCustomer.set(e.customer, (byCustomer.get(e.customer) ?? 0) + e.amount);
+      // The customer with the most first, then by date within a customer.
+      list.sort(
+        (a, b) =>
+          (byCustomer.get(b.customer) ?? 0) - (byCustomer.get(a.customer) ?? 0) ||
+          a.customer.localeCompare(b.customer) ||
+          a.date.localeCompare(b.date) ||
+          a.ref.localeCompare(b.ref),
+      );
+    }
   }
 
   // ---- actuals, by customer - the figure beside each committed line ----
@@ -335,6 +436,7 @@ export async function buildWeeklyRatings(opts: {
         hasCommitment: commit !== null,
         lines,
         actual,
+        breakup: breakupByVertical.get(v.id) ?? [],
         pctOfCommitment: committed > 0 ? actual / committed : null,
         commitmentRating: ratingVsBudget(committed, budget),
         actualRating: ratingVsBudget(actual, budget),

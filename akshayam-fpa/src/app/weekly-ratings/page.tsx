@@ -4,12 +4,14 @@ import { SetupRequired } from "@/components/SetupRequired";
 import { WeeklyControls } from "@/components/WeeklyControls";
 import { WeeklyReceivables } from "@/components/WeeklyReceivables";
 import { WeeklyRatingsTable } from "@/components/WeeklyRatingsTable";
+import { TdsReceivablesTable } from "@/components/TdsReceivablesTable";
 import { Card, CardTitle, EmptyState, Notice, PageHeader } from "@/components/ui";
 import { getEntity } from "@/lib/entity";
 import { dateLabel } from "@/lib/format";
 import { getCurrentUser, requireEntityAccess, requireReportAccess } from "@/lib/auth/dal";
 import { buildWeeklyRatings } from "@/lib/reports/weekly-ratings";
 import { buildWeeklyReceivables } from "@/lib/reports/weekly-receivables";
+import { buildTdsReceivables } from "@/lib/reports/tds-receivables";
 import {
   WEEKLY_MEASURES,
   WEEKLY_MEASURE_LABEL,
@@ -63,10 +65,12 @@ export default async function WeeklyRatingsPage({
       ? (requestedMeasure as WeeklyMeasure)
       : "revenue";
 
-    // Receivables is a tab of its own, not a measure a commitment is rated on.
+    // Receivables and TDS receivables are tabs of their own, not measures a commitment is rated on.
     const isReceivables = requestedMeasure === "receivables";
-    const data = isReceivables ? null : await buildWeeklyRatings({ entity, measure, weekEnd });
+    const isTds = requestedMeasure === "tds";
+    const data = isReceivables || isTds ? null : await buildWeeklyRatings({ entity, measure, weekEnd });
     const receivables = isReceivables ? await buildWeeklyReceivables({ entity, weekEnd }) : null;
+    const tdsReceivables = isTds ? await buildTdsReceivables({ entity, weekEnd }) : null;
 
     // Whoever may commit: a role that carries the permission, or a team lead
     // signed in to their own vertical's slice.
@@ -91,8 +95,9 @@ export default async function WeeklyRatingsPage({
     const tabs: { key: string; label: string }[] = [
       ...WEEKLY_MEASURES.map((m) => ({ key: m, label: WEEKLY_MEASURE_LABEL[m] })),
       { key: "receivables", label: "Receivables" },
+      { key: "tds", label: "TDS receivables" },
     ];
-    const activeTab = isReceivables ? "receivables" : measure;
+    const activeTab = isReceivables ? "receivables" : isTds ? "tds" : measure;
 
     return (
       <>
@@ -107,7 +112,7 @@ export default async function WeeklyRatingsPage({
               weeks={weeks}
               weekEnd={weekEnd}
               meetingDate={meetingDate}
-              measure={isReceivables ? "receivables" : measure}
+              measure={isReceivables ? "receivables" : isTds ? "tds" : measure}
             />
           </Card>
 
@@ -128,7 +133,14 @@ export default async function WeeklyRatingsPage({
             ))}
           </div>
 
-          {receivables ? (
+          {tdsReceivables ? (
+            <Card padded={false}>
+              <div className="px-4 pt-4 sm:px-5">
+                <CardTitle hint="position at 31 Mar 2026">TDS receivables — year wise</CardTitle>
+              </div>
+              <TdsReceivablesTable data={tdsReceivables} canCommit={canCommit} />
+            </Card>
+          ) : receivables ? (
             <Card padded={false}>
               <div className="px-4 pt-4 sm:px-5">
                 <CardTitle hint={`as at ${receivables.arAsOf ? dateLabel(receivables.arAsOf) : "—"}`}>
@@ -161,7 +173,33 @@ export default async function WeeklyRatingsPage({
             </Card>
           ) : null}
 
-          {receivables ? (
+          {tdsReceivables ? (
+            <Notice tone="info" title="How to read this">
+              <ul className="ml-4 list-disc space-y-1">
+                <li>
+                  The TDS each customer has deducted that we hold as receivable, as at 31 March 2026,
+                  arranged by financial year. The year, vertical, customer and TDS amount are as per the
+                  books and cannot be changed here. A vertical sees only its own customers.
+                </li>
+                <li>
+                  Against each, key the invoice it relates to &mdash; number, date and value, as free text.
+                  The TDS at 10% of the invoice value fills in as the value is keyed.
+                </li>
+                <li>
+                  The observation and the follow-up action are free text and stay open to edit; press Save on
+                  the row to keep what you have keyed.
+                </li>
+                <li>
+                  Below the years, the current financial year is listed invoice by invoice, a quarter at a
+                  time: the TDS Zoho books on each invoice, and the amount found in Form 26AS, as the TDS
+                  reconciliation on the Receivables page has it. Form 26AS has no invoice numbers, so its
+                  amount is the customer&rsquo;s for the quarter, shown once beside that customer&rsquo;s
+                  invoices, with the difference (TDS minus Form 26AS) on the customer&rsquo;s total. A quarter
+                  whose Form 26AS has not been uploaded shows nil found.
+                </li>
+              </ul>
+            </Notice>
+          ) : receivables ? (
             <Notice tone="info" title="How to read this">
               <ul className="ml-4 list-disc space-y-1">
                 <li>
@@ -170,20 +208,15 @@ export default async function WeeklyRatingsPage({
                   the snapshot.
                 </li>
                 <li>
-                  For each customer over 180 days, write what is committed for the week; it can be edited
-                  until the end of the day it is first keyed. In the weeks that follow, the same row shows
-                  last week&rsquo;s commitment, for the review and follow-up and whether it was achieved.
+                  For each customer over 90 or 180 days, write what is committed for the week; it can be
+                  edited until the end of the day it is first keyed. In the weeks that follow, the same row
+                  lists every earlier week&rsquo;s commitment, each with the week it was made, so the whole
+                  history of the receivable is in one place; the review and follow-up is written on the
+                  latest of them.
                 </li>
                 <li>
                   The top 10 customers are the ten who owe the vertical the most, with their share of the
                   vertical&rsquo;s receivables and of the whole entity&rsquo;s.
-                </li>
-                <li>
-                  TDS per Zoho is the TDS receivable booked on each invoice raised this financial year. Form
-                  26AS records tax deducted by customer and quarter, not by invoice, so it is compared with
-                  the customer&rsquo;s total over the same stretch: the difference, and whether 26AS reflects
-                  the TDS (Yes when it covers it, Partly when it shows some, No when it shows none). The
-                  follow-up action is yours to write.
                 </li>
               </ul>
             </Notice>
@@ -197,7 +230,7 @@ export default async function WeeklyRatingsPage({
               </li>
               <li>
                 A commitment can be edited until the end of the day it is first keyed, and freezes
-                then. An admin can reopen one for a day. &ldquo;Achieved?&rdquo; and the remarks are said afterwards, so they
+                then. An admin can reopen one for a day. The remarks are said afterwards, so they
                 stay open.
               </li>
               <li>
@@ -206,7 +239,7 @@ export default async function WeeklyRatingsPage({
               </li>
               <li>
                 {measure === "revenue"
-                  ? "Actual revenue is the ledger's Revenue from Operations for the vertical in the week, the same figure the Revenue tab's Actual is made of. Under each customer, what they were billed."
+                  ? "Actual revenue is the ledger's Revenue from Operations for the vertical in the week, the same figure the Revenue tab's Actual is made of. Open a row to see it broken up by customer and entry; under each committed customer, what they were billed."
                   : "Actual collection is fee receipts allocated to the vertical in the week. A collection is committed out of what customers owe: the picker lists the customers on the receivables snapshot with what each owes, and the Receivable outstanding column is the vertical's total. Under each customer, what they paid."}
               </li>
               <li>

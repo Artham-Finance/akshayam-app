@@ -3,9 +3,9 @@
 import { Fragment, useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
-import { money, percent } from "@/lib/format";
+import { dateLabel, money, moneySigned, percent } from "@/lib/format";
 import { isValidDate } from "@/lib/weekly";
-import type { WeeklyRow } from "@/lib/reports/weekly-ratings";
+import type { ActualEntry, WeeklyRow } from "@/lib/reports/weekly-ratings";
 
 /**
  * The weekly commitment screen's table: one row per vertical, and under a row
@@ -14,8 +14,8 @@ import type { WeeklyRow } from "@/lib/reports/weekly-ratings";
  *
  * Amounts can be changed only until the end of the day they were first keyed,
  * and only by whoever may commit; the server enforces both, this just stops
- * offering what will be refused. "Achieved?" is the outcome, said afterwards,
- * so it is editable whenever there is a commitment.
+ * offering what will be refused. The remarks are said afterwards, so they are
+ * editable whenever there is a commitment.
  */
 
 const RATING_TONE = [
@@ -26,7 +26,11 @@ const RATING_TONE = [
   "bg-positive-tint text-positive",
 ];
 
-const ACHIEVED_LABEL = { yes: "Yes", partly: "Partly", no: "No" } as const;
+/**
+ * A collection can also be an advance from a new customer, who owes nothing and so is on no
+ * receivables list. The line is committed under this name, first in the list of customers.
+ */
+const ADVANCE_FROM_CUSTOMER = "Advance from customer";
 
 function Rating({ value }: { value: number | null }) {
   if (value === null) return <span className="text-ink-faint">—</span>;
@@ -70,7 +74,7 @@ export function WeeklyRatingsTable({
 
   return (
     <div className="table-frame">
-      <table className="w-full min-w-max border-collapse text-[13px]">
+      <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr>
             <th scope="col" className={clsx(head, "text-left")}>Vertical</th>
@@ -83,7 +87,6 @@ export function WeeklyRatingsTable({
             <th scope="col" className={clsx(head, "text-right")}>{actualLabel}</th>
             <th scope="col" className={clsx(head, "text-right")}>% of commitment achieved</th>
             <th scope="col" className={clsx(head, "text-center")}>Weekly rating based on actuals</th>
-            <th scope="col" className={clsx(head, "text-center")}>Achieved?</th>
             <th scope="col" className={head} />
           </tr>
         </thead>
@@ -127,9 +130,6 @@ export function WeeklyRatingsTable({
                   <td className={clsx(cell, "text-center")}>
                     <Rating value={row.actualRating} />
                   </td>
-                  <td className={clsx(cell, "text-center text-ink")}>
-                    {row.achieved ? ACHIEVED_LABEL[row.achieved] : <span className="text-ink-faint">—</span>}
-                  </td>
                   <td className={clsx(cell, "text-right")}>
                     <button
                       type="button"
@@ -142,7 +142,7 @@ export function WeeklyRatingsTable({
                 </tr>
                 {isOpen && (
                   <tr>
-                    <td colSpan={showReceivable ? 10 : 9} className="border-b border-line bg-surface-sunk/30 px-3 py-3 sm:px-6">
+                    <td colSpan={showReceivable ? 9 : 8} className="border-b border-line bg-surface-sunk/30 px-3 py-3 sm:px-6">
                       <CommitmentPanel
                         row={row}
                         measure={measure}
@@ -160,6 +160,67 @@ export function WeeklyRatingsTable({
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** What the week's actual revenue is made of: by customer, then the entries under each. */
+function ActualBreakup({ row }: { row: WeeklyRow }) {
+  const groups: { customer: string; total: number; entries: ActualEntry[] }[] = [];
+  for (const e of row.breakup) {
+    const last = groups[groups.length - 1];
+    if (last && last.customer === e.customer) {
+      last.entries.push(e);
+      last.total += e.amount;
+    } else {
+      groups.push({ customer: e.customer, total: e.amount, entries: [e] });
+    }
+  }
+  const total = row.breakup.reduce((s, e) => s + e.amount, 0);
+
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[12px] font-medium text-ink">
+        Breakup of actual revenue — <span className="num">{moneySigned(row.actual)}</span>
+      </p>
+      {groups.length === 0 ? (
+        <p className="text-[12px] text-ink-muted">No revenue entries in the ledger for this vertical in the week.</p>
+      ) : (
+        <table className="w-full max-w-3xl border-collapse text-[12px]">
+          <thead>
+            <tr className="text-ink-faint">
+              <th scope="col" className="px-1 py-1 text-left font-medium">Customer / entry</th>
+              <th scope="col" className="px-1 py-1 text-left font-medium">Date</th>
+              <th scope="col" className="px-1 py-1 text-left font-medium">Source</th>
+              <th scope="col" className="px-1 py-1 text-right font-medium">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map((g) => (
+              <Fragment key={g.customer}>
+                <tr className="font-medium text-ink">
+                  <td colSpan={3} className="border-t border-line px-1 py-1.5">{g.customer}</td>
+                  <td className="num border-t border-line px-1 py-1.5 text-right">{moneySigned(g.total)}</td>
+                </tr>
+                {g.entries.map((e, i) => (
+                  <tr key={i} className="text-ink-muted">
+                    <td className="px-1 py-0.5 pl-4">{e.ref}</td>
+                    <td className="px-1 py-0.5">{dateLabel(e.date)}</td>
+                    <td className="px-1 py-0.5">{e.source}</td>
+                    <td className="num px-1 py-0.5 text-right">{moneySigned(e.amount)}</td>
+                  </tr>
+                ))}
+              </Fragment>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="font-semibold text-ink">
+              <td colSpan={3} className="border-t border-line-strong px-1 py-1.5">Total</td>
+              <td className="num border-t border-line-strong px-1 py-1.5 text-right">{moneySigned(total)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      )}
     </div>
   );
 }
@@ -196,8 +257,8 @@ function CommitmentPanel({
       ? row.lines.map((l) => ({ customer: l.customer, amount: String(l.amount) }))
       : [{ customer: "", amount: "" }],
   );
-  const [meeting, setMeeting] = useState(row.meetingDate ?? meetingDate);
-  const [achieved, setAchieved] = useState<string>(row.achieved ?? "");
+  // The commitment is for the meeting picked at the head of the screen; it is not keyed again here.
+  const meeting = meetingDate;
   const [remarks, setRemarks] = useState(row.remarks ?? "");
 
   const editable = canCommit && !row.locked;
@@ -267,6 +328,8 @@ function CommitmentPanel({
 
   return (
     <div className="space-y-4">
+      {measure === "revenue" && <ActualBreakup row={row} />}
+
       {row.hasCommitment && (
         <p className="text-[12px] text-ink-muted">
           Committed at the meeting of {row.meetingDate}, first keyed {row.enteredOn}.{" "}
@@ -300,6 +363,7 @@ function CommitmentPanel({
       {editable ? (
         <div className="space-y-2">
           <datalist id={listId}>
+            {measure === "collection" && <option value={ADVANCE_FROM_CUSTOMER} />}
             {row.customers.map((c) => (
               <option key={c} value={c} />
             ))}
@@ -333,6 +397,7 @@ function CommitmentPanel({
                         aria-label="Customer"
                       >
                         <option value="">Pick a customer who owes…</option>
+                        <option value={ADVANCE_FROM_CUSTOMER}>{ADVANCE_FROM_CUSTOMER} — not on the receivables</option>
                         {row.receivableCustomers.map((c) => (
                           <option key={c.customer} value={c.customer}>
                             {c.customer} — owes {money(c.outstanding)}
@@ -409,15 +474,6 @@ function CommitmentPanel({
             </tfoot>
           </table>
           <div className="flex flex-wrap items-end gap-3">
-            <label className="flex flex-col gap-1 text-[11px] text-ink-muted">
-              Meeting date
-              <input
-                type="date"
-                value={meeting}
-                onChange={(e) => setMeeting(e.target.value)}
-                className={clsx(field, "w-40")}
-              />
-            </label>
             <button
               type="button"
               onClick={save}
@@ -486,19 +542,6 @@ function CommitmentPanel({
 
       {row.hasCommitment && canCommit && (
         <div className="flex flex-wrap items-end gap-3 border-t border-line pt-3">
-          <label className="flex flex-col gap-1 text-[11px] text-ink-muted">
-            Achieved?
-            <select
-              value={achieved}
-              onChange={(e) => setAchieved(e.target.value)}
-              className={clsx(field, "w-32")}
-            >
-              <option value="">—</option>
-              <option value="yes">Yes</option>
-              <option value="partly">Partly</option>
-              <option value="no">No</option>
-            </select>
-          </label>
           <label className="flex min-w-[14rem] flex-1 flex-col gap-1 text-[11px] text-ink-muted">
             Remarks
             <input
@@ -512,7 +555,7 @@ function CommitmentPanel({
             type="button"
             onClick={() =>
               void post(
-                { action: "outcome", achieved: achieved || null, remarks: remarks.trim() || null },
+                { action: "outcome", remarks: remarks.trim() || null },
                 "Outcome saved.",
               )
             }

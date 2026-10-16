@@ -6,8 +6,6 @@ import clsx from "clsx";
 import { dateLabel, money, percent } from "@/lib/format";
 import type {
   Over180Customer,
-  TdsCustomer,
-  TdsReflected,
   TopCustomer,
   VerticalReceivables,
   WeeklyReceivablesResult,
@@ -15,14 +13,13 @@ import type {
 
 /**
  * The MAK meeting's Receivables tab: for each vertical, the receivables over
- * 90 days (up to 180) and over 180 days, each with what is committed for the week and how last week's commitment
- * went; the ten customers who owe the most; and every customer's invoices with
- * the TDS Zoho books on them against what Form 26AS shows.
+ * 90 days (up to 180) and over 180 days, each with what is committed for the week and
+ * every earlier week's commitment on the customer; and the ten customers who owe the
+ * most. (TDS has a tab of its own.)
  *
  * What is typed here is the head's own account: a commitment (editable until
- * the end of the day it was first keyed), a review of last week's with whether
- * it was achieved, and the follow-up on a TDS difference. The figures are read
- * fresh from the receivables snapshot, the ledger and Form 26AS.
+ * the end of the day it was first keyed), and a review of the latest earlier one. The
+ * figures are read fresh from the receivables snapshot.
  */
 
 const th =
@@ -30,13 +27,6 @@ const th =
 const td = "border-b border-line px-3 py-2";
 const field =
   "w-full rounded-md border border-line bg-surface px-2 py-1 text-[12px] text-ink placeholder:text-ink-faint";
-
-const REFLECTED: Record<TdsReflected, { label: string; tone: string }> = {
-  yes: { label: "Yes", tone: "bg-positive-tint text-positive" },
-  partly: { label: "Partly", tone: "bg-caution-tint text-caution" },
-  no: { label: "No", tone: "bg-negative-tint text-negative" },
-  na: { label: "No TDS booked", tone: "bg-surface-sunk text-ink-faint" },
-};
 
 async function save(body: Record<string, unknown>): Promise<string | null> {
   try {
@@ -112,7 +102,7 @@ export function WeeklyReceivables({
               className="flex w-full flex-wrap items-center gap-x-6 gap-y-1 px-4 py-3 text-left hover:bg-surface-sunk/40 sm:px-5"
             >
               <span className={clsx("text-[9px] text-ink-faint transition-transform", isOpen && "rotate-90")}>▶</span>
-              <span className="min-w-[14rem] text-[14px] font-semibold text-ink">{v.label}</span>
+              <span className="min-w-[10rem] text-[14px] font-semibold text-ink">{v.label}</span>
               <span className="text-[12px] text-ink-muted">
                 Receivables <span className="num font-medium text-ink">{money(v.total)}</span>{" "}
                 <span className="text-ink-faint">({percent(v.pctOfEntity * 100, 1)} of the entity)</span>
@@ -132,18 +122,10 @@ export function WeeklyReceivables({
                 <span className="text-ink-faint">· {v.over180.length} customer{v.over180.length === 1 ? "" : "s"}</span>
               </span>
             </button>
-            {isOpen && <VerticalBlock v={v} weekEnd={data.weekEnd} canCommit={canCommit} tdsFrom={data.tdsFrom} />}
+            {isOpen && <VerticalBlock v={v} weekEnd={data.weekEnd} canCommit={canCommit} />}
           </section>
         );
       })}
-
-      {Math.abs(data.tdsUnallocated) >= 1 && (
-        <p className="px-4 py-3 text-[12px] text-ink-muted sm:px-5">
-          TDS booked in Zoho this year on no vertical:{" "}
-          <span className="num font-medium text-ink">{money(data.tdsUnallocated)}</span>. It is the
-          &ldquo;Unallocated&rdquo; line of the TDS reconciliation and is in none of the verticals above.
-        </p>
-      )}
     </div>
   );
 }
@@ -152,12 +134,10 @@ function VerticalBlock({
   v,
   weekEnd,
   canCommit,
-  tdsFrom,
 }: {
   v: VerticalReceivables;
   weekEnd: string;
   canCommit: boolean;
-  tdsFrom: string;
 }) {
   return (
     <div className="space-y-6 bg-surface-sunk/20 px-4 pb-5 pt-1 sm:px-5">
@@ -174,15 +154,14 @@ function VerticalBlock({
             <p className="text-[12.5px] text-ink-muted">{b.none}</p>
           ) : (
             <div className="table-frame">
-              <table className="w-full min-w-max border-collapse text-[12.5px]">
+              <table className="w-full border-collapse text-[12.5px]">
                 <thead>
                   <tr>
                     <th className={clsx(th, "text-left")}>Customer</th>
                     <th className={clsx(th, "text-right")}>{b.head}</th>
                     <th className={clsx(th, "text-left")}>Commitment for this week</th>
-                    <th className={clsx(th, "text-left")}>Last week&rsquo;s commitment</th>
+                    <th className={clsx(th, "text-left")}>Earlier commitments</th>
                     <th className={clsx(th, "text-left")}>Review &amp; follow-up</th>
-                    <th className={clsx(th, "text-left")}>Achieved?</th>
                     <th className={th} />
                   </tr>
                 </thead>
@@ -209,7 +188,7 @@ function VerticalBlock({
           Top 10 customers by receivables
         </h3>
         <div className="table-frame">
-          <table className="w-full min-w-max border-collapse text-[12.5px]">
+          <table className="w-full border-collapse text-[12.5px]">
             <thead>
               <tr>
                 <th className={clsx(th, "text-right")}>#</th>
@@ -247,47 +226,6 @@ function VerticalBlock({
         </div>
       </div>
 
-      {/* 3. TDS */}
-      <div>
-        <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-muted">
-          Invoices and TDS - Zoho against Form 26AS
-        </h3>
-        <p className="mb-2 text-[11.5px] text-ink-muted">
-          Invoices raised from {dateLabel(tdsFrom)} to the week&rsquo;s end, with the TDS receivable Zoho books on
-          each. Form 26AS records tax deducted by customer and quarter, not by invoice, so it is compared with the
-          customer&rsquo;s total over the same stretch. Open a customer for its invoices.
-          {v.tdsNoReceivable > 0 && (
-            <>
-              {" "}
-              <span className="font-medium text-ink">
-                {v.tdsNoReceivable} customer{v.tdsNoReceivable === 1 ? "" : "s"} below owe nothing now
-              </span>{" "}
-              but have TDS to be claimed; they are listed too.
-            </>
-          )}
-        </p>
-        <div className="table-frame">
-          <table className="w-full min-w-max border-collapse text-[12.5px]">
-            <thead>
-              <tr>
-                <th className={clsx(th, "text-left")}>Customer</th>
-                <th className={clsx(th, "text-right")}>Outstanding</th>
-                <th className={clsx(th, "text-right")}>TDS per Zoho</th>
-                <th className={clsx(th, "text-right")}>TDS per Form 26AS</th>
-                <th className={clsx(th, "text-right")}>Difference</th>
-                <th className={clsx(th, "text-center")}>Reflected in 26AS?</th>
-                <th className={clsx(th, "text-left")}>Follow-up action</th>
-                <th className={th} />
-              </tr>
-            </thead>
-            <tbody>
-              {v.tds.map((c) => (
-                <TdsRow key={c.customer} c={c} verticalId={v.verticalId} weekEnd={weekEnd} canCommit={canCommit} />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
   );
 }
@@ -308,7 +246,6 @@ function Over180Row({
   const [showInvoices, setShowInvoices] = useState(false);
   const [commitment, setCommitment] = useState(c.commitment ?? "");
   const [review, setReview] = useState(c.previous?.review ?? "");
-  const [achieved, setAchieved] = useState<string>(c.previous?.achieved ?? "");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);
   const canEditCommitment = canCommit && !c.locked;
@@ -321,17 +258,15 @@ function Over180Row({
       error = await save({ action: "commitment", bucket: c.bucket, verticalId, weekEnd, customer: c.customer, text: commitment });
     }
     if (!error && c.previous && canCommit) {
-      const changed =
-        review.trim() !== (c.previous.review ?? "") || achieved !== (c.previous.achieved ?? "");
-      if (changed) {
+      if (review.trim() !== (c.previous.review ?? "")) {
         error = await save({
           action: "review",
-          bucket: c.bucket,
+          // the review belongs to the bucket the latest commitment was made in
+          bucket: c.previous.bucket,
           verticalId,
           weekEnd: c.previous.weekEnd,
           customer: c.customer,
           review,
-          achieved: achieved || null,
         });
       }
     }
@@ -360,7 +295,7 @@ function Over180Row({
           </button>
         </td>
         <td className={clsx(td, "num text-right font-medium text-caution")}>{money(c.amount)}</td>
-        <td className={clsx(td, "min-w-[14rem]")}>
+        <td className={clsx(td, "min-w-[10rem]")}>
           {canEditCommitment ? (
             <textarea
               value={commitment}
@@ -379,47 +314,49 @@ function Over180Row({
             <span className="mt-0.5 block text-[10.5px] text-ink-faint">Editable until the end of today.</span>
           )}
         </td>
-        <td className={clsx(td, "min-w-[12rem] text-ink-muted")}>
+        <td className={clsx(td, "min-w-[10rem] text-ink-muted")}>
+          {c.history.length > 0 ? (
+            <ul className="space-y-2">
+              {c.history.map((h, n) => (
+                <li key={h.weekEnd + h.bucket}>
+                  <span className="block text-[10.5px] text-ink-faint">
+                    Week ended {dateLabel(h.weekEnd)}
+                    {h.bucket !== c.bucket && ` · made at ${h.bucket === "over90" ? "91–180 days" : "over 180 days"}`}
+                  </span>
+                  <span className="whitespace-pre-wrap">{h.commitment ?? "—"}</span>
+                  {/* the latest one's review is the box to the right; the older ones' stand as written */}
+                  {n > 0 && h.review && (
+                    <span className="mt-0.5 block whitespace-pre-wrap text-[11.5px] text-ink-faint">
+                      Review: {h.review}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <span className="text-ink-faint">—</span>
+          )}
+        </td>
+        <td className={clsx(td, "min-w-[10rem]")}>
           {c.previous ? (
             <>
-              <span className="block text-[10.5px] text-ink-faint">Week ended {dateLabel(c.previous.weekEnd)}</span>
-              <span className="whitespace-pre-wrap">{c.previous.commitment ?? "—"}</span>
+              <span className="mb-0.5 block text-[10.5px] text-ink-faint">
+                On the commitment of the week ended {dateLabel(c.previous.weekEnd)}
+              </span>
+              {canCommit ? (
+                <textarea
+                  value={review}
+                  onChange={(e) => setReview(e.target.value)}
+                  rows={2}
+                  placeholder="Review of the latest commitment, and the follow-up"
+                  className={field}
+                />
+              ) : (
+                <span className="whitespace-pre-wrap text-ink">{c.previous.review ?? "—"}</span>
+              )}
             </>
           ) : (
-            <span className="text-ink-faint">—</span>
-          )}
-        </td>
-        <td className={clsx(td, "min-w-[14rem]")}>
-          {c.previous ? (
-            canCommit ? (
-              <textarea
-                value={review}
-                onChange={(e) => setReview(e.target.value)}
-                rows={2}
-                placeholder="Review of last week's commitment, and the follow-up"
-                className={field}
-              />
-            ) : (
-              <span className="whitespace-pre-wrap text-ink">{c.previous.review ?? "—"}</span>
-            )
-          ) : (
             <span className="text-ink-faint">Nothing committed earlier</span>
-          )}
-        </td>
-        <td className={td}>
-          {c.previous ? (
-            canCommit ? (
-              <select value={achieved} onChange={(e) => setAchieved(e.target.value)} className={clsx(field, "w-28")}>
-                <option value="">—</option>
-                <option value="yes">Yes</option>
-                <option value="partly">Partly</option>
-                <option value="no">No</option>
-              </select>
-            ) : (
-              <span className="text-ink">{c.previous.achieved ?? "—"}</span>
-            )
-          ) : (
-            <span className="text-ink-faint">—</span>
           )}
         </td>
         <td className={clsx(td, "whitespace-nowrap text-right")}>
@@ -442,7 +379,7 @@ function Over180Row({
       </tr>
       {showInvoices && (
         <tr>
-          <td colSpan={7} className="border-b border-line bg-surface-sunk/30 px-6 py-2">
+          <td colSpan={6} className="border-b border-line bg-surface-sunk/30 px-6 py-2">
             <table className="w-full max-w-3xl border-collapse text-[12px]">
               <thead>
                 <tr className="text-ink-faint">
@@ -537,159 +474,6 @@ function TopRow({ t }: { t: TopCustomer }) {
                 </tr>
               </tfoot>
             </table>
-          </td>
-        </tr>
-      )}
-    </Fragment>
-  );
-}
-
-/** One customer's TDS: the invoices behind it, Zoho against Form 26AS, and the follow-up. */
-function TdsRow({
-  c,
-  verticalId,
-  weekEnd,
-  canCommit,
-}: {
-  c: TdsCustomer;
-  verticalId: number;
-  weekEnd: string;
-  canCommit: boolean;
-}) {
-  const router = useRouter();
-  const [open, setOpen] = useState(false);
-  const [remark, setRemark] = useState(c.remark ?? "");
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);
-
-  const onSave = async () => {
-    setBusy(true);
-    setMessage(null);
-    const error = await save({ action: "tds", verticalId, weekEnd, customer: c.customer, remark });
-    setBusy(false);
-    setMessage(error ? { text: error, ok: false } : { text: "Saved", ok: true });
-    if (!error) router.refresh();
-  };
-
-  return (
-    <Fragment>
-      <tr className="align-top hover:bg-surface-sunk/40">
-        <td className={clsx(td, "text-ink")}>
-          <button
-            type="button"
-            onClick={() => setOpen((s) => !s)}
-            aria-expanded={open}
-            className="flex items-start gap-1.5 text-left hover:text-navy"
-          >
-            <span className={clsx("mt-[3px] text-[9px] text-ink-faint transition-transform", open && "rotate-90")}>▶</span>
-            <span>
-              {c.customer}
-              <span className="ml-2 text-[11px] text-ink-faint">
-                {c.invoices.length} invoice{c.invoices.length === 1 ? "" : "s"}
-              </span>
-            </span>
-          </button>
-        </td>
-        <td className={clsx(td, "num text-right text-ink-muted")}>
-          {c.outstanding >= 1 ? (
-            money(c.outstanding)
-          ) : (
-            <span className="rounded-full bg-surface-sunk px-2 py-0.5 text-[10.5px] font-medium text-ink-muted">
-              no receivable
-            </span>
-          )}
-        </td>
-        <td className={clsx(td, "num text-right text-ink")}>{c.tdsZoho ? money(c.tdsZoho) : "—"}</td>
-        <td className={clsx(td, "num text-right text-ink")}>{c.tds26as ? money(c.tds26as) : "—"}</td>
-        <td className={clsx(td, "num text-right", Math.abs(c.difference) >= 1 ? "font-medium text-negative" : "text-ink-faint")}>
-          {Math.abs(c.difference) >= 1 ? (c.difference < 0 ? `(${money(c.difference)})` : money(c.difference)) : "—"}
-        </td>
-        <td className={clsx(td, "text-center")}>
-          <span
-            className={clsx(
-              "inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
-              REFLECTED[c.reflected].tone,
-            )}
-          >
-            {REFLECTED[c.reflected].label}
-          </span>
-        </td>
-        <td className={clsx(td, "min-w-[14rem]")}>
-          {canCommit ? (
-            <textarea
-              value={remark}
-              onChange={(e) => setRemark(e.target.value)}
-              rows={2}
-              placeholder="Follow-up action"
-              className={field}
-            />
-          ) : (
-            <span className="whitespace-pre-wrap text-ink">{c.remark ?? "—"}</span>
-          )}
-          {c.remarkWeekEnd && c.remarkWeekEnd !== weekEnd && (
-            <span className="mt-0.5 block text-[10.5px] text-ink-faint">Last noted for the week ended {dateLabel(c.remarkWeekEnd)}.</span>
-          )}
-        </td>
-        <td className={clsx(td, "whitespace-nowrap text-right")}>
-          {canCommit && (
-            <button
-              type="button"
-              onClick={onSave}
-              disabled={busy || remark.trim() === (c.remark ?? "")}
-              className="rounded-md border border-line px-2.5 py-1 text-[11.5px] font-medium text-ink-muted hover:bg-surface-sunk disabled:opacity-50"
-            >
-              {busy ? "Saving…" : "Save"}
-            </button>
-          )}
-          {message && (
-            <span className={clsx("mt-0.5 block text-[10.5px]", message.ok ? "text-positive" : "text-negative")}>
-              {message.text}
-            </span>
-          )}
-        </td>
-      </tr>
-      {open && (
-        <tr>
-          <td colSpan={8} className="border-b border-line bg-surface-sunk/30 px-6 py-2">
-            {c.invoices.length === 0 && !c.tdsOther ? (
-              <p className="text-[12px] text-ink-muted">No invoice has been raised on this customer this financial year.</p>
-            ) : (
-              <table className="w-full max-w-3xl border-collapse text-[12px]">
-                <thead>
-                  <tr className="text-ink-faint">
-                    <th className="px-1 py-1 text-left font-medium">Invoice</th>
-                    <th className="px-1 py-1 text-left font-medium">Date</th>
-                    <th className="px-1 py-1 text-right font-medium">Invoice value (ex tax)</th>
-                    <th className="px-1 py-1 text-right font-medium">TDS per Zoho</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {c.invoices.map((i) => (
-                    <tr key={i.invoiceNumber}>
-                      <td className="border-t border-line px-1 py-1.5 text-ink">{i.invoiceNumber}</td>
-                      <td className="border-t border-line px-1 py-1.5 text-ink-muted">{i.invoiceDate ? dateLabel(i.invoiceDate) : "—"}</td>
-                      <td className="num border-t border-line px-1 py-1.5 text-right">{money(i.amount)}</td>
-                      <td className="num border-t border-line px-1 py-1.5 text-right">{i.tdsZoho ? money(i.tdsZoho) : "—"}</td>
-                    </tr>
-                  ))}
-                  {c.tdsOther !== 0 && (
-                    <tr>
-                      <td className="border-t border-line px-1 py-1.5 text-ink-muted" colSpan={3}>
-                        Other TDS entries this year - against earlier years&rsquo; invoices, and adjustments
-                      </td>
-                      <td className="num border-t border-line px-1 py-1.5 text-right">{money(c.tdsOther)}</td>
-                    </tr>
-                  )}
-                </tbody>
-                <tfoot>
-                  <tr className="font-semibold text-ink">
-                    <td className="border-t border-line-strong px-1 py-1.5" colSpan={2}>Total</td>
-                    <td className="num border-t border-line-strong px-1 py-1.5 text-right">{money(c.invoices.reduce((s, i) => s + i.amount, 0))}</td>
-                    <td className="num border-t border-line-strong px-1 py-1.5 text-right">{money(c.tdsZoho)}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            )}
           </td>
         </tr>
       )}
