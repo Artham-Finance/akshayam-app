@@ -1,34 +1,22 @@
 import { query } from "@/lib/db";
 import { getVerticalsInScope, type Entity } from "@/lib/entity";
-import { fyBounds } from "@/lib/period";
 import { ROWS, scorecardRowCodeFor } from "@/lib/reports/scorecard";
-import { BOOKS_CUSTOMER, TDS_ACCOUNTS, TDS_TOLERANCE } from "@/lib/reports/tds";
 import { addDays, isLocked, todayIst } from "@/lib/weekly";
 
 /**
  * The MAK meeting's Receivables tab, for one week.
  *
- * Three things per vertical, all read from the latest receivables snapshot on
+ * Two things per vertical, both read from the latest receivables snapshot on
  * or before the week's end (the same rule the Collection tab reads):
  *
- *  1. Receivables over 180 days, by customer, with the commitment the head
- *     makes for the week and - for what was committed the week before - the
- *     review and whether it was achieved.
+ *  1. Receivables over 90 and over 180 days, by customer, with the commitment the
+ *     head makes for the week, the commitments of every earlier week (the whole
+ *     history of the receivable) and the review of the latest of them.
  *  2. The ten customers who owe the most, with each one's share of the
  *     vertical's receivables and of the whole entity's.
- *  3. Every customer with receivables, the invoices raised on them this
- *     financial year, and the TDS on each as Zoho books it - set against the
- *     Form 26AS amount for that customer over the same stretch, with the
- *     difference, whether 26AS reflects it, and a follow-up remark.
  *
- * A customer can owe nothing and still have TDS to be claimed - it paid in full
- * and deducted tax - so the TDS list is not limited to customers with a
- * receivable: it also carries every customer with TDS booked in Zoho this year,
- * and any customer Form 26AS shows tax deducted for, even with no receivable.
- *
- * Form 26AS records tax deducted per deductor and quarter, not per invoice, so
- * the 26AS side is compared at the customer, never guessed down to an invoice.
- * The notes are the only thing stored (see 072_weekly_receivable_notes.sql).
+ * TDS receivable has a tab of its own (see tds-receivables.ts). The notes are the
+ * only thing stored (see 072_weekly_receivable_notes.sql).
  */
 
 export const OVER_DAYS = 180;
@@ -58,13 +46,24 @@ export interface Over180Customer {
   enteredOn: string | null;
   /** the commitment's text can no longer be changed */
   locked: boolean;
-  /** what was committed in the most recent earlier week, and how it went */
-  previous: {
-    weekEnd: string;
-    commitment: string | null;
-    review: string | null;
-    achieved: "yes" | "partly" | "no" | null;
-  } | null;
+  /** what was committed in the most recent earlier week, and how it went - the one whose review is still being written */
+  previous: EarlierCommitment | null;
+  /**
+   * Every earlier week the customer was committed on, newest first, from the first one: the
+   * whole picture of the receivable. A customer who aged from the 91-180 bucket into over 180
+   * carries its earlier commitments with it, each marked with the bucket it was made in.
+   */
+  history: EarlierCommitment[];
+}
+
+/** What was committed against a customer in an earlier week, and the review of it. */
+export interface EarlierCommitment {
+  /** the Saturday the week ended on */
+  weekEnd: string;
+  /** the ageing bucket the commitment was made in */
+  bucket: AgeBucket;
+  commitment: string | null;
+  review: string | null;
 }
 
 export interface TopCustomer {
@@ -80,38 +79,6 @@ export interface TopCustomer {
   invoices: ReceivableInvoice[];
 }
 
-export type TdsReflected = "yes" | "partly" | "no" | "na";
-
-export interface TdsInvoice {
-  invoiceNumber: string;
-  invoiceDate: string | null;
-  /** invoice value, ex tax */
-  amount: number;
-  /**
-   * the TDS receivable booked on it in Zoho - an invoice shared by two verticals
-   * carries its TDS on one of them only, as the TDS reconciliation does
-   */
-  tdsZoho: number;
-}
-
-export interface TdsCustomer {
-  customer: string;
-  outstanding: number;
-  invoices: TdsInvoice[];
-  tdsZoho: number;
-  /**
-   * the part of `tdsZoho` that sits on no invoice listed here: TDS posted this year
-   * against earlier years' invoices, and adjustments - mostly credits
-   */
-  tdsOther: number;
-  /** tax deducted for this customer in Form 26AS over the same stretch */
-  tds26as: number;
-  difference: number;
-  reflected: TdsReflected;
-  remark: string | null;
-  remarkWeekEnd: string | null;
-}
-
 export interface VerticalReceivables {
   verticalId: number;
   label: string;
@@ -122,9 +89,6 @@ export interface VerticalReceivables {
   over180Total: number;
   over180: Over180Customer[];
   top: TopCustomer[];
-  tds: TdsCustomer[];
-  /** how many of the TDS customers owe nothing at the snapshot */
-  tdsNoReceivable: number;
 }
 
 export interface WeeklyReceivablesResult {
@@ -132,10 +96,6 @@ export interface WeeklyReceivablesResult {
   arAsOf: string | null;
   /** the whole entity's open receivables at the snapshot - the base for "% of entity" */
   entityTotal: number;
-  /** the financial year's start, the beginning of the TDS stretch */
-  tdsFrom: string;
-  /** TDS booked in Zoho this year on no vertical - in the TDS reconciliation's "Unallocated" line */
-  tdsUnallocated: number;
   verticals: VerticalReceivables[];
 }
 
@@ -148,11 +108,6 @@ export async function buildWeeklyReceivables(opts: {
   const { entity, weekEnd } = opts;
   const today = todayIst();
   const ids = entity.memberIds;
-  const fy = Number(weekEnd.slice(5, 7)) >= entity.fy_start_month
-    ? Number(weekEnd.slice(0, 4))
-    : Number(weekEnd.slice(0, 4)) - 1;
-  const tdsFrom = fyBounds(fy, entity.fy_start_month).start;
-
   const scoped = await getVerticalsInScope(entity);
   const scopedIds = scoped.map((v) => v.id);
 
@@ -213,102 +168,18 @@ export async function buildWeeklyReceivables(opts: {
           vertical_id: number;
           week_end: string;
           customer: string;
-          kind: "over90" | "over180" | "tds";
+          kind: "over90" | "over180";
           commitment: string | null;
           entered_on: string;
           review: string | null;
-          achieved: "yes" | "partly" | "no" | null;
           remark: string | null;
         }>(
           `select vertical_id, week_end::text, customer, kind, commitment, entered_on::text,
-                  review, achieved, remark
+                  review, remark
              from weekly_receivable_notes
-            where vertical_id = any($1::int[]) and week_end <= $2
+            where vertical_id = any($1::int[]) and week_end <= $2 and kind in ('over90', 'over180')
             order by week_end desc`,
           [scopedIds, weekEnd],
-        );
-
-  /* ---- invoices raised this financial year, and the TDS booked on each ---- */
-  const invoices =
-    scopedIds.length === 0
-      ? []
-      : await query<{
-          vertical_id: number;
-          customer: string;
-          invoice_number: string;
-          invoice_date: string | null;
-          amount: number;
-        }>(
-          `select i.vertical_id, btrim(i.customer_name) as customer, i.invoice_number,
-                  min(i.invoice_date)::text as invoice_date,
-                  sum(i.amount_base)::float8 as amount
-             from invoice_lines i
-            where i.entity_id = any($1::int[]) and i.invoice_date between $2 and $3
-              and i.vertical_id = any($4::int[]) and i.customer_name is not null
-            group by 1, 2, 3
-            order by min(i.invoice_date) desc, i.invoice_number`,
-          [ids, tdsFrom, weekEnd, scopedIds],
-        );
-
-  /*
-    The TDS receivable as Zoho books it, struck the way the TDS reconciliation
-    strikes it - every TDS posting of the stretch, to the customer and vertical of
-    the invoice it was raised on (the invoice's first line where it is split over
-    verticals, so a shared invoice's TDS is counted once), else the posting's own
-    vertical and the customer its ledger or description names. This is the figure
-    the reconciliation's "books" column shows; postings against earlier years'
-    invoices are in it, and so are credits.
-  */
-  const tdsBooks = await query<{
-    vertical_id: number | null;
-    customer: string | null;
-    invoice_number: string | null;
-    tds: number;
-  }>(
-    `select coalesce(inv.vertical_id, g.vertical_id) as vertical_id,
-            ${BOOKS_CUSTOMER} as customer,
-            g.txn_number as invoice_number,
-            sum(g.debit - g.credit)::float8 as tds
-       from gl_entries g
-       join accounts a on a.id = g.account_id
-       left join lateral (
-         select i.customer_name, i.vertical_id
-           from invoice_lines i
-          where i.entity_id = g.entity_id and i.invoice_number = g.txn_number
-          order by i.id limit 1
-       ) inv on true
-      where g.entity_id = any($1::int[]) and g.txn_date between $2 and $3 and ${TDS_ACCOUNTS}
-      group by 1, 2, 3`,
-    [ids, tdsFrom, weekEnd],
-  );
-  const zohoByPair = new Map<string, number>();
-  const zohoByInvoice = new Map<string, number>();
-  let tdsUnallocated = 0;
-  for (const t of tdsBooks) {
-    if (t.vertical_id === null) {
-      tdsUnallocated += Number(t.tds);
-      continue;
-    }
-    if (!scopedIds.includes(t.vertical_id)) continue;
-    const pair = `${t.vertical_id}|${norm(t.customer)}`;
-    zohoByPair.set(pair, (zohoByPair.get(pair) ?? 0) + Number(t.tds));
-    if (t.invoice_number) {
-      const k = `${t.vertical_id}|${t.invoice_number}`;
-      zohoByInvoice.set(k, (zohoByInvoice.get(k) ?? 0) + Number(t.tds));
-    }
-  }
-
-  /* ---- Form 26AS, by customer, over the same stretch ---- */
-  const form26as =
-    scopedIds.length === 0
-      ? []
-      : await query<{ vertical_id: number | null; customer: string; amount: number }>(
-          `select vertical_id, btrim(customer_name) as customer, sum(tax_deducted)::float8 as amount
-             from tds_entries
-            where entity_id = any($1::int[]) and transaction_date between $2 and $3
-              and customer_name is not null
-            group by 1, 2`,
-          [ids, tdsFrom, weekEnd],
         );
 
   /* ---- assemble ---- */
@@ -318,34 +189,7 @@ export async function buildWeeklyReceivables(opts: {
     return (rowCode ? ROWS.find((r) => r.code === rowCode)?.label : null) ?? v?.name ?? "Vertical";
   };
 
-  /*
-    The customers whose TDS is listed, by vertical: everyone who owes, plus anyone
-    with TDS booked in Zoho this year or tax deducted in Form 26AS, owing or not.
-  */
-  const tdsPairs = new Map<number, Map<string, string>>();
-  const addPair = (vid: number, customer: string) => {
-    const key = norm(customer);
-    if (!key) return;
-    const m = tdsPairs.get(vid) ?? new Map<string, string>();
-    if (!m.has(key)) m.set(key, customer.trim());
-    tdsPairs.set(vid, m);
-  };
-  for (const vid of verticalIds) for (const r of byVertical.get(vid) ?? []) addPair(vid, r.customer);
-  for (const t of tdsBooks) {
-    if (t.vertical_id === null || !t.customer || !scopedIds.includes(t.vertical_id)) continue;
-    if (Math.abs(zohoByPair.get(`${t.vertical_id}|${norm(t.customer)}`) ?? 0) >= TDS_TOLERANCE) {
-      addPair(t.vertical_id, t.customer);
-    }
-  }
-  for (const f of form26as) {
-    if (f.vertical_id !== null && scopedIds.includes(f.vertical_id) && Math.abs(Number(f.amount)) >= TDS_TOLERANCE) {
-      addPair(f.vertical_id, f.customer);
-    }
-  }
-
-  const renderIds = [...new Set([...verticalIds, ...tdsPairs.keys()])];
-
-  const verticals: VerticalReceivables[] = renderIds.map((vid) => {
+  const verticals: VerticalReceivables[] = verticalIds.map((vid) => {
     const rows = byVertical.get(vid) ?? [];
     const total = rows.reduce((s, r) => s + Number(r.balance), 0);
 
@@ -393,11 +237,25 @@ export async function buildWeeklyReceivables(opts: {
           (n) => n.vertical_id === vid && n.kind === bucket && norm(n.customer) === norm(customer),
         );
         const current = mine.find((n) => n.week_end === weekEnd) ?? null;
-        // An earlier week counts only if something was said in it - a commitment, a review or an
-        // outcome. A note left empty (typed, then cleared) is nothing committed earlier.
-        const said = (n: (typeof notes)[number]) =>
-          !!n.commitment?.trim() || !!n.review?.trim() || n.achieved !== null;
-        const earlier = mine.find((n) => n.week_end < weekEnd && said(n)) ?? null;
+        // An earlier week counts only if something was said in it - a commitment or a review. A
+        // note left empty (typed, then cleared) is nothing committed earlier.
+        const said = (n: (typeof notes)[number]) => !!n.commitment?.trim() || !!n.review?.trim();
+        // The customer's earlier commitments in either bucket, newest first (the notes arrive so).
+        const history: EarlierCommitment[] = notes
+          .filter(
+            (n) =>
+              n.vertical_id === vid &&
+              (n.kind === "over90" || n.kind === "over180") &&
+              norm(n.customer) === norm(customer) &&
+              n.week_end < weekEnd &&
+              said(n),
+          )
+          .map((n) => ({
+            weekEnd: n.week_end,
+            bucket: n.kind as AgeBucket,
+            commitment: n.commitment,
+            review: n.review,
+          }));
         target.push({
           customer,
           bucket,
@@ -406,14 +264,8 @@ export async function buildWeeklyReceivables(opts: {
           commitment: current?.commitment ?? null,
           enteredOn: current?.entered_on ?? null,
           locked: current ? isLocked(current.entered_on, null, today) : false,
-          previous: earlier
-            ? {
-                weekEnd: earlier.week_end,
-                commitment: earlier.commitment,
-                review: earlier.review,
-                achieved: earlier.achieved,
-              }
-            : null,
+          previous: history[0] ?? null,
+          history,
         });
       }
     }
@@ -425,57 +277,6 @@ export async function buildWeeklyReceivables(opts: {
       .slice(0, 10)
       .map((t, i) => ({ ...t, rank: i + 1 }));
 
-    // TDS: every customer who owes or has TDS, with the invoices raised on them this year
-    const tdsCustomers: TdsCustomer[] = [...(tdsPairs.get(vid)?.values() ?? [])].map((customer) => {
-      const mine = invoices
-        .filter((i) => i.vertical_id === vid && norm(i.customer) === norm(customer))
-        .map((i) => ({
-          invoiceNumber: i.invoice_number,
-          invoiceDate: i.invoice_date,
-          amount: Number(i.amount),
-          tdsZoho: zohoByInvoice.get(`${vid}|${i.invoice_number}`) ?? 0,
-        }));
-      // The customer's whole figure is the reconciliation's; the invoices listed
-      // explain what they can, and the rest is "other entries".
-      const tdsZoho = zohoByPair.get(`${vid}|${norm(customer)}`) ?? 0;
-      const tdsOther = tdsZoho - mine.reduce((s, i) => s + i.tdsZoho, 0);
-      // 26AS carries the vertical only where the deductor was matched to one; a
-      // customer matched to this vertical's name counts, whichever it was tagged to.
-      const tds26as = form26as
-        .filter((f) => norm(f.customer) === norm(customer) && (f.vertical_id === vid || f.vertical_id === null))
-        .reduce((s, f) => s + Number(f.amount), 0);
-      const hasZoho = Math.abs(tdsZoho) >= TDS_TOLERANCE;
-      const reflected: TdsReflected = !hasZoho
-        ? "na"
-        : tds26as >= tdsZoho - TDS_TOLERANCE
-          ? "yes"
-          : tds26as >= TDS_TOLERANCE
-            ? "partly"
-            : "no";
-      const note =
-        notes.find(
-          (n) => n.vertical_id === vid && n.kind === "tds" && norm(n.customer) === norm(customer),
-        ) ?? null;
-      return {
-        customer,
-        outstanding: rows
-          .filter((r) => norm(r.customer) === norm(customer))
-          .reduce((s, r) => s + Number(r.balance), 0),
-        invoices: mine,
-        tdsZoho,
-        tdsOther: Math.abs(tdsOther) >= TDS_TOLERANCE ? tdsOther : 0,
-        tds26as,
-        difference: tdsZoho - tds26as,
-        reflected,
-        remark: note?.remark ?? null,
-        remarkWeekEnd: note?.week_end ?? null,
-      };
-    });
-    // Who owes most first; among those who owe nothing, the largest TDS gap first.
-    tdsCustomers.sort(
-      (a, b) => b.outstanding - a.outstanding || Math.abs(b.difference) - Math.abs(a.difference),
-    );
-
     return {
       verticalId: vid,
       label: labelFor(vid),
@@ -486,8 +287,6 @@ export async function buildWeeklyReceivables(opts: {
       over180Total: over180.reduce((s, c) => s + c.amount, 0),
       over180,
       top,
-      tds: tdsCustomers,
-      tdsNoReceivable: tdsCustomers.filter((c) => c.outstanding < TDS_TOLERANCE).length,
     };
   });
 
@@ -505,9 +304,6 @@ export async function buildWeeklyReceivables(opts: {
     weekEnd,
     arAsOf,
     entityTotal,
-    tdsFrom,
-    // a vertical head's slice has no "unallocated" of its own to show
-    tdsUnallocated: entity.verticalIds === null ? tdsUnallocated : 0,
     verticals,
   };
 }

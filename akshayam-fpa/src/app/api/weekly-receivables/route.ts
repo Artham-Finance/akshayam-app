@@ -10,12 +10,12 @@ export const runtime = "nodejs";
 
 /**
  * Save a note on the MAK meeting's Receivables tab: what the head commits to on
- * a receivable over 180 days, how that went in a later week, or the follow-up on
- * a customer's TDS that Form 26AS does not yet show.
+ * a receivable over 90 or 180 days, or how that went in a later week. (TDS has its
+ * own tab and its own route.)
  *
  * A commitment's text can be changed until the end of the day it was first keyed,
- * as every commitment on the screen can; the review, whether it was achieved, and
- * the TDS remark are said afterwards and stay open. Who may write, and which
+ * as every commitment on the screen can; the review is said afterwards and stays
+ * open. Who may write, and which
  * verticals, are the same rules the revenue and collection commitments follow.
  */
 const Where = {
@@ -37,27 +37,20 @@ const Review = z.object({
   ...Where,
   bucket: Bucket,
   review: z.string().max(4000).nullable(),
-  achieved: z.enum(["yes", "partly", "no"]).nullable(),
 });
-const TdsRemark = z.object({
-  action: z.literal("tds"),
-  ...Where,
-  remark: z.string().max(4000),
-});
-const Body = z.discriminatedUnion("action", [Commitment, Review, TdsRemark]);
+const Body = z.discriminatedUnion("action", [Commitment, Review]);
 
 /**
  * A commitment that is typed and then cleared leaves a note with nothing in it, which would
- * read later as "committed earlier". Once a note says nothing - no commitment, review or
- * outcome - it is removed.
+ * read later as "committed earlier". Once a note says nothing - no commitment or review -
+ * it is removed.
  */
 async function dropEmptyNote(verticalId: number, weekEnd: string, customer: string, kind: string) {
   await query(
     `delete from weekly_receivable_notes
       where vertical_id = $1 and week_end = $2 and customer = $3 and kind = $4
         and kind in ('over90', 'over180')
-        and coalesce(btrim(commitment), '') = '' and coalesce(btrim(review), '') = ''
-        and achieved is null`,
+        and coalesce(btrim(commitment), '') = '' and coalesce(btrim(review), '') = ''`,
     [verticalId, weekEnd, customer, kind],
   );
 }
@@ -95,7 +88,7 @@ export async function POST(request: Request) {
 
     const today = todayIst();
     // the head commits against two ageing buckets - over 90 days (up to 180), and over 180 - kept apart
-    const kind = parsed.action === "tds" ? "tds" : parsed.bucket;
+    const kind = parsed.bucket;
     const existing = await queryOne<{ id: number; entered_on: string }>(
       `select id, entered_on::text from weekly_receivable_notes
         where vertical_id = $1 and week_end = $2 and customer = $3 and kind = $4`,
@@ -127,24 +120,15 @@ export async function POST(request: Request) {
       if (!existing) return fail("There is no commitment to review for that week.", 404);
       await query(
         `update weekly_receivable_notes
-            set review = $2, achieved = $3, updated_by = $4, updated_at = now()
+            set review = $2, updated_by = $3, updated_at = now()
           where id = $1`,
-        [existing.id, parsed.review?.trim() || null, parsed.achieved, user.id],
+        [existing.id, parsed.review?.trim() || null, user.id],
       );
       await dropEmptyNote(parsed.verticalId, parsed.weekEnd, parsed.customer, kind);
       return NextResponse.json({ ok: true });
     }
 
-    // the TDS remark: always open, one per customer per week
-    await query(
-      `insert into weekly_receivable_notes
-         (entity_id, vertical_id, week_end, customer, kind, remark, entered_on, updated_by)
-       values ($1, $2, $3, $4, 'tds', $5, $6, $7)
-       on conflict (vertical_id, week_end, customer, kind)
-       do update set remark = excluded.remark, updated_by = excluded.updated_by, updated_at = now()`,
-      [vertical.entity_id, parsed.verticalId, parsed.weekEnd, parsed.customer, parsed.remark.trim() || null, today, user.id],
-    );
-    return NextResponse.json({ ok: true });
+    return fail("Unknown action.");
   } catch (err) {
     const message = err instanceof Error ? err.message : "Could not save.";
     return NextResponse.json({ error: message }, { status: 500 });
