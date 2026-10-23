@@ -71,7 +71,7 @@ export interface WeeklyRow {
   lines: WeeklyLine[];
   actual: number;
   /** collection only: of `actual`, what came in on receivables shifted to this vertical from the discontinued CMRGA */
-  fromCmrga: number;
+  fromCmrga: number | null;
   /** revenue only: the entries that add up to `actual`, by customer then date */
   breakup: ActualEntry[];
   /** actual as a fraction of the commitment, or null where nothing was committed */
@@ -470,7 +470,8 @@ export async function buildWeeklyRatings(opts: {
         hasCommitment: commit !== null,
         lines,
         actual,
-        fromCmrga: cmrgaByVertical.get(v.id) ?? 0,
+        // null: nothing was shifted to this vertical, so no CMRGA note; zero is a note of Rs 0
+        fromCmrga: cmrgaByVertical.get(v.id) ?? null,
         breakup: breakupByVertical.get(v.id) ?? [],
         pctOfCommitment: committed > 0 ? actual / committed : null,
         commitmentRating: ratingVsBudget(committed, budget),

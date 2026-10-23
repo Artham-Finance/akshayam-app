@@ -130,7 +130,7 @@ export function WeeklyRatingsTable({
                   </td>
                   <td className={clsx(cell, "num text-right text-ink")}>
                     {money(row.actual)}
-                    {row.fromCmrga > 0 && (
+                    {row.fromCmrga !== null && (
                       <span className="block text-[10.5px] font-normal text-ink-muted">
                         Actuals include amount collected from CMRGA receivables of Rs {money(row.fromCmrga)}
                       </span>

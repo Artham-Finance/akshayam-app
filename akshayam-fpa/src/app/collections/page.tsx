@@ -380,7 +380,7 @@ export default async function CollectionsPage({
               note={
                 <>
                   Fee receipts, excluding reimbursement recoveries
-                  {fromCmrga > 0 && (
+                  {fromCmrga !== null && (
                     <span className="mt-1 block">
                       Actuals include amount collected from CMRGA receivables of Rs {money(fromCmrga)}
                     </span>
