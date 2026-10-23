@@ -227,45 +227,55 @@ export async function buildCmrgaReceivables(opts: {
 /**
  * What the verticals in view collected, between two dates, on the receivables shifted from
  * CMRGA - fee receipts, so the figure that is part of "actual collection" (reimbursement
- * recoveries are not). Zero where nothing has been shifted to the view, or nothing collected yet.
+ * recoveries are not). Null where nothing has been shifted to the view at all, so there is
+ * no CMRGA note to make; zero where something has but nothing has come in over the window.
  */
 export async function cmrgaCollected(
   entity: Entity,
   window: { start: string; end: string },
   verticalId: number | null = null,
-): Promise<number> {
-  const row = await queryOne<{ v: number }>(
-    `select coalesce(sum(a.amount_base), 0)::float8 as v
+): Promise<number | null> {
+  const row = await queryOne<{ n: number; v: number }>(
+    `select count(*)::int as n, coalesce(sum(r.amount), 0)::float8 as v
        from receivable_transfers t
-       join payment_allocations a
-         on a.entity_id = t.entity_id and a.invoice_number = t.invoice_number
-       join payments p on p.id = a.payment_id
+       left join lateral (
+         select sum(a.amount_base) as amount
+           from payment_allocations a
+           join payments p on p.id = a.payment_id
+          where a.entity_id = t.entity_id and a.invoice_number = t.invoice_number
+            and not a.is_reimbursement
+            and p.payment_date > t.as_of
+            and p.payment_date between $2 and $3
+       ) r on true
       where t.entity_id = any($1::int[])
-        and not a.is_reimbursement
-        and p.payment_date > t.as_of
-        and p.payment_date between $2 and $3
         and ($4::int is null or t.to_vertical_id = $4)
         ${verticalScope("$5", "t.to_vertical_id")}`,
     [entity.memberIds, window.start, window.end, verticalId, entity.verticalIds],
   );
-  return Number(row?.v ?? 0);
+  return (row?.n ?? 0) > 0 ? Number(row?.v ?? 0) : null;
 }
 
-/** The same, for each vertical - for the MAK meeting's table, one line under each actual. */
+/**
+ * The same, for each vertical a CMRGA receivable was shifted to - for the MAK meeting's table,
+ * one line under each such vertical's actual (zero included). A vertical none was shifted to has no entry.
+ */
 export async function cmrgaCollectedByVertical(
   entity: Entity,
   window: { start: string; end: string },
 ): Promise<Map<number, number>> {
   const rows = await query<{ vertical_id: number; v: number }>(
-    `select t.to_vertical_id as vertical_id, coalesce(sum(a.amount_base), 0)::float8 as v
+    `select t.to_vertical_id as vertical_id, coalesce(sum(r.amount), 0)::float8 as v
        from receivable_transfers t
-       join payment_allocations a
-         on a.entity_id = t.entity_id and a.invoice_number = t.invoice_number
-       join payments p on p.id = a.payment_id
+       left join lateral (
+         select sum(a.amount_base) as amount
+           from payment_allocations a
+           join payments p on p.id = a.payment_id
+          where a.entity_id = t.entity_id and a.invoice_number = t.invoice_number
+            and not a.is_reimbursement
+            and p.payment_date > t.as_of
+            and p.payment_date between $2 and $3
+       ) r on true
       where t.entity_id = any($1::int[])
-        and not a.is_reimbursement
-        and p.payment_date > t.as_of
-        and p.payment_date between $2 and $3
         ${verticalScope("$4", "t.to_vertical_id")}
       group by 1`,
     [entity.memberIds, window.start, window.end, entity.verticalIds],
