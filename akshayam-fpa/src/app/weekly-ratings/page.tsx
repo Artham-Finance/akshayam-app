@@ -5,6 +5,7 @@ import { WeeklyControls } from "@/components/WeeklyControls";
 import { WeeklyReceivables } from "@/components/WeeklyReceivables";
 import { WeeklyRatingsTable } from "@/components/WeeklyRatingsTable";
 import { TdsReceivablesTable } from "@/components/TdsReceivablesTable";
+import { CmrgaReceivablesTable } from "@/components/CmrgaReceivablesTable";
 import { Card, CardTitle, EmptyState, Notice, PageHeader } from "@/components/ui";
 import { getEntity } from "@/lib/entity";
 import { dateLabel } from "@/lib/format";
@@ -12,6 +13,7 @@ import { getCurrentUser, requireEntityAccess, requireReportAccess } from "@/lib/
 import { buildWeeklyRatings } from "@/lib/reports/weekly-ratings";
 import { buildWeeklyReceivables } from "@/lib/reports/weekly-receivables";
 import { buildTdsReceivables } from "@/lib/reports/tds-receivables";
+import { buildCmrgaReceivables } from "@/lib/reports/cmrga-receivables";
 import {
   WEEKLY_MEASURES,
   WEEKLY_MEASURE_LABEL,
@@ -65,12 +67,18 @@ export default async function WeeklyRatingsPage({
       ? (requestedMeasure as WeeklyMeasure)
       : "revenue";
 
-    // Receivables and TDS receivables are tabs of their own, not measures a commitment is rated on.
+    // Receivables, CMRGA receivables and TDS receivables are tabs of their own, not measures a commitment is rated on.
     const isReceivables = requestedMeasure === "receivables";
     const isTds = requestedMeasure === "tds";
-    const data = isReceivables || isTds ? null : await buildWeeklyRatings({ entity, measure, weekEnd });
+    const isCmrga = requestedMeasure === "cmrga";
+    const data =
+      isReceivables || isTds || isCmrga ? null : await buildWeeklyRatings({ entity, measure, weekEnd });
     const receivables = isReceivables ? await buildWeeklyReceivables({ entity, weekEnd }) : null;
     const tdsReceivables = isTds ? await buildTdsReceivables({ entity, weekEnd }) : null;
+    // CMRGA's receivables, shifted to other verticals: each vertical sees only what was shifted
+    // to it, so the tab is there only for a view that has some.
+    const cmrga = await buildCmrgaReceivables({ entity, weekEnd });
+    const cmrgaTab = isCmrga || cmrga.verticals.length > 0;
 
     // Whoever may commit: a role that carries the permission, or a team lead
     // signed in to their own vertical's slice.
@@ -95,9 +103,10 @@ export default async function WeeklyRatingsPage({
     const tabs: { key: string; label: string }[] = [
       ...WEEKLY_MEASURES.map((m) => ({ key: m, label: WEEKLY_MEASURE_LABEL[m] })),
       { key: "receivables", label: "Receivables" },
+      ...(cmrgaTab ? [{ key: "cmrga", label: "CMRGA receivables" }] : []),
       { key: "tds", label: "TDS receivables" },
     ];
-    const activeTab = isReceivables ? "receivables" : isTds ? "tds" : measure;
+    const activeTab = isReceivables ? "receivables" : isCmrga ? "cmrga" : isTds ? "tds" : measure;
 
     return (
       <>
@@ -112,7 +121,7 @@ export default async function WeeklyRatingsPage({
               weeks={weeks}
               weekEnd={weekEnd}
               meetingDate={meetingDate}
-              measure={isReceivables ? "receivables" : isTds ? "tds" : measure}
+              measure={isReceivables ? "receivables" : isCmrga ? "cmrga" : isTds ? "tds" : measure}
             />
           </Card>
 
@@ -133,7 +142,23 @@ export default async function WeeklyRatingsPage({
             ))}
           </div>
 
-          {tdsReceivables ? (
+          {isCmrga ? (
+            cmrga.verticals.length === 0 ? (
+              <EmptyState title="No CMRGA receivables for this view">
+                No receivable of Capital Markets Readiness &amp; Governance Assurance has been shifted to the
+                verticals in this view.
+              </EmptyState>
+            ) : (
+              <Card padded={false}>
+                <div className="px-4 pt-4 sm:px-5">
+                  <CardTitle hint={`shifted as at ${cmrga.asOf ? dateLabel(cmrga.asOf) : "—"}`}>
+                    CMRGA receivables — shifted to other verticals
+                  </CardTitle>
+                </div>
+                <CmrgaReceivablesTable data={cmrga} />
+              </Card>
+            )
+          ) : tdsReceivables ? (
             <Card padded={false}>
               <div className="px-4 pt-4 sm:px-5">
                 <CardTitle hint="position at 31 Mar 2026">TDS receivables — year wise</CardTitle>
@@ -173,7 +198,24 @@ export default async function WeeklyRatingsPage({
             </Card>
           ) : null}
 
-          {tdsReceivables ? (
+          {isCmrga ? (
+            <Notice tone="info" title="How to read this">
+              <ul className="ml-4 list-disc space-y-1">
+                <li>
+                  Capital Markets Readiness &amp; Governance Assurance (CMRGA) no longer continues, and its open
+                  receivables have been shifted to other verticals, invoice by invoice, as at{" "}
+                  {cmrga.asOf ? dateLabel(cmrga.asOf) : "the list date"}. A vertical sees only the invoices
+                  shifted to it.
+                </li>
+                <li>
+                  What is collected on these invoices after that date is the collection of the vertical they
+                  were shifted to: its actual collection is its own plus what it collects from CMRGA&rsquo;s
+                  receivables. The amount collected and the date of collection are read from the receipts, up
+                  to the week&rsquo;s end.
+                </li>
+              </ul>
+            </Notice>
+          ) : tdsReceivables ? (
             <Notice tone="info" title="How to read this">
               <ul className="ml-4 list-disc space-y-1">
                 <li>

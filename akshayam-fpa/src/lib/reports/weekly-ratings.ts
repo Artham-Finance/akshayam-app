@@ -2,6 +2,7 @@ import { query } from "@/lib/db";
 import { getVerticalsInScope, type Entity } from "@/lib/entity";
 import { ROWS, scorecardRowCodeFor } from "@/lib/reports/scorecard";
 import { revisedBudgetForVertical } from "@/lib/reports/scorecard-budget";
+import { cmrgaCollectedByVertical } from "@/lib/reports/cmrga-receivables";
 import { addDays, isLocked, ratingVsBudget, todayIst, type WeeklyMeasure } from "@/lib/weekly";
 
 /**
@@ -55,6 +56,8 @@ export interface ReceivableCustomer {
   outstanding: number;
   /** of which past its due date at the snapshot */
   overdue: number;
+  /** of which a CMRGA receivable shifted to this vertical */
+  cmrga: number;
 }
 
 export interface WeeklyRow {
@@ -67,6 +70,8 @@ export interface WeeklyRow {
   hasCommitment: boolean;
   lines: WeeklyLine[];
   actual: number;
+  /** collection only: of `actual`, what came in on receivables shifted to this vertical from the discontinued CMRGA */
+  fromCmrga: number;
   /** revenue only: the entries that add up to `actual`, by customer then date */
   breakup: ActualEntry[];
   /** actual as a fraction of the commitment, or null where nothing was committed */
@@ -89,6 +94,8 @@ export interface WeeklyRow {
   /** collection only: the vertical's total open receivable, and the overdue part of it */
   receivableTotal: number;
   receivableOverdue: number;
+  /** collection only: of the total, the part that is CMRGA's receivables shifted to this vertical */
+  receivableCmrga: number;
 }
 
 export interface WeeklyRatingsResult {
@@ -220,6 +227,12 @@ export async function buildWeeklyRatings(opts: {
       ),
     );
   }
+
+  // ---- collection: how much of the actual is from CMRGA's shifted receivables (already in it) ----
+  const cmrgaByVertical =
+    ids.length > 0 && measure === "collection"
+      ? await cmrgaCollectedByVertical(entity, { start: weekStart, end: weekEnd })
+      : new Map<number, number>();
 
   // ---- revenue actual, entry by entry: the same three sources as above, so it adds up to it ----
   const breakupByVertical = new Map<number, ActualEntry[]>();
@@ -361,8 +374,11 @@ export async function buildWeeklyRatings(opts: {
       customer: string;
       outstanding: number;
       overdue: number;
+      cmrga: number;
       as_of: string;
     }>(
+      // A receivable shifted from the discontinued CMRGA (076) is the vertical it was shifted to
+      // own from the shift date on, so it can be committed against there.
       `with snap as (
          select e.id as entity_id,
                 coalesce(
@@ -370,23 +386,41 @@ export async function buildWeeklyRatings(opts: {
                   (select min(as_of) from ar_open_items where entity_id = e.id)
                 ) as as_of
            from unnest($1::int[]) as e(id)
+       ),
+       lines as (
+         select coalesce(case when $2::date >= t.as_of then t.to_vertical_id end, a.vertical_id) as vertical_id,
+                btrim(a.customer_name) as customer,
+                a.balance_base as balance,
+                coalesce(a.due_date, a.invoice_date) as due,
+                (t.id is not null and $2::date >= t.as_of) as cmrga,
+                s.as_of
+           from ar_open_items a
+           join snap s on s.entity_id = a.entity_id and a.as_of = s.as_of
+           left join receivable_transfers t
+             on t.entity_id = a.entity_id and t.invoice_number = a.invoice_number
+          where a.customer_name is not null
        )
-       select a.vertical_id,
-              btrim(a.customer_name) as customer,
-              sum(a.balance_base)::float8 as outstanding,
-              coalesce(sum(a.balance_base) filter (where coalesce(a.due_date, a.invoice_date) < s.as_of), 0)::float8 as overdue,
-              max(s.as_of)::text as as_of
-         from ar_open_items a
-         join snap s on s.entity_id = a.entity_id and a.as_of = s.as_of
-        where a.vertical_id = any($3::int[]) and a.customer_name is not null
-        group by a.vertical_id, btrim(a.customer_name)
-       having sum(a.balance_base) > 0
+       select l.vertical_id,
+              l.customer,
+              sum(l.balance)::float8 as outstanding,
+              coalesce(sum(l.balance) filter (where l.due < l.as_of), 0)::float8 as overdue,
+              coalesce(sum(l.balance) filter (where l.cmrga), 0)::float8 as cmrga,
+              max(l.as_of)::text as as_of
+         from lines l
+        where l.vertical_id = any($3::int[])
+        group by l.vertical_id, l.customer
+       having sum(l.balance) > 0
         order by 3 desc`,
       [memberIds, weekEnd, ids],
     );
     for (const r of open) {
       const list = receivablesByVertical.get(r.vertical_id) ?? [];
-      list.push({ customer: r.customer, outstanding: Number(r.outstanding), overdue: Number(r.overdue) });
+      list.push({
+        customer: r.customer,
+        outstanding: Number(r.outstanding),
+        overdue: Number(r.overdue),
+        cmrga: Number(r.cmrga),
+      });
       receivablesByVertical.set(r.vertical_id, list);
       if (!arAsOf || r.as_of > arAsOf) arAsOf = r.as_of;
     }
@@ -436,6 +470,7 @@ export async function buildWeeklyRatings(opts: {
         hasCommitment: commit !== null,
         lines,
         actual,
+        fromCmrga: cmrgaByVertical.get(v.id) ?? 0,
         breakup: breakupByVertical.get(v.id) ?? [],
         pctOfCommitment: committed > 0 ? actual / committed : null,
         commitmentRating: ratingVsBudget(committed, budget),
@@ -450,6 +485,7 @@ export async function buildWeeklyRatings(opts: {
         receivableCustomers: receivables,
         receivableTotal: receivables.reduce((s, c) => s + c.outstanding, 0),
         receivableOverdue: receivables.reduce((s, c) => s + c.overdue, 0),
+        receivableCmrga: receivables.reduce((s, c) => s + c.cmrga, 0),
         budgeted,
       };
     })
