@@ -4,6 +4,8 @@ import { Bar, DataTable, drillColumns, renderDrillRow } from "@/components/DataT
 import { CustomerPicker } from "@/components/CustomerPicker";
 import { DscTokenCard } from "@/components/DscTokenCard";
 import { TdsRecoSection } from "@/components/TdsRecoSection";
+import { CmrgaReceivablesTable } from "@/components/CmrgaReceivablesTable";
+import { buildCmrgaReceivables } from "@/lib/reports/cmrga-receivables";
 import { PeriodControls } from "@/components/PeriodControls";
 import { SetupRequired } from "@/components/SetupRequired";
 import { UnadjustedCreditTable } from "@/components/UnadjustedCreditTable";
@@ -117,6 +119,8 @@ export default async function ReceivablesPage({
     const requestedVertical = Number(params.vertical);
     const verticalId = verticals.some((v) => v.id === requestedVertical) ? requestedVertical : null;
     const verticalName = verticals.find((v) => v.id === verticalId)?.name ?? null;
+    // CMRGA's receivables shifted to other verticals, as at the receivables date.
+    const cmrga = await buildCmrgaReceivables({ entity, weekEnd: asOf, verticalId });
 
     const customers = await listCustomers(entity, ["ar", "invoices", "payments"], verticalId);
     const pickedCustomer = typeof params.customer === "string" ? params.customer : null;
@@ -765,6 +769,24 @@ export default async function ReceivablesPage({
                 result={dscToken}
                 verticalId={verticalId!}
               />
+            </Card>
+          )}
+
+          {/* CMRGA's receivables, shifted to other verticals: a vertical sees only what was
+              shifted to it, and the card is there only for a view that has some. */}
+          {cmrga.verticals.length > 0 && (
+            <Card padded={false}>
+              <div className="px-4 pt-4 sm:px-5">
+                <CardTitle hint={`shifted as at ${cmrga.asOf ? dateLabel(cmrga.asOf) : "—"}`}>
+                  CMRGA receivables — shifted to other verticals
+                </CardTitle>
+                <p className="mt-1 text-[12px] text-ink-muted">
+                  Capital Markets Readiness &amp; Governance Assurance no longer continues. Its open invoices were
+                  given to the verticals below; collections on them after the shift count in that
+                  vertical&rsquo;s actual collection. The company&rsquo;s receivables above still include them.
+                </p>
+              </div>
+              <CmrgaReceivablesTable data={cmrga} />
             </Card>
           )}
 

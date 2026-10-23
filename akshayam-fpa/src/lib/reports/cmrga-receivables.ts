@@ -84,11 +84,14 @@ export interface CmrgaReceivablesResult {
 
 export async function buildCmrgaReceivables(opts: {
   entity: Entity;
+  /** the date the list is read up to: collections to this date, the receivables snapshot on or before it */
   weekEnd: string;
+  /** narrow to one vertical, where the page has picked one */
+  verticalId?: number | null;
 }): Promise<CmrgaReceivablesResult> {
-  const { entity, weekEnd } = opts;
+  const { entity, weekEnd, verticalId = null } = opts;
   const scoped = await getVerticalsInScope(entity);
-  const ids = scoped.map((v) => v.id);
+  const ids = scoped.map((v) => v.id).filter((id) => verticalId === null || id === verticalId);
   const rows =
     ids.length === 0
       ? []
