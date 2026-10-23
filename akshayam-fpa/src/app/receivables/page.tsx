@@ -121,6 +121,10 @@ export default async function ReceivablesPage({
     const verticalName = verticals.find((v) => v.id === verticalId)?.name ?? null;
     // CMRGA's receivables shifted to other verticals, as at the receivables date.
     const cmrga = await buildCmrgaReceivables({ entity, weekEnd: asOf, verticalId });
+    // The invoice list belongs to the vertical the receivables were shifted to: it shows in that
+    // vertical's own view (its team lead's login, or the vertical picked here). The company-level
+    // view carries the summary alone.
+    const showCmrgaInvoices = entity.verticalIds !== null || verticalId !== null;
 
     const customers = await listCustomers(entity, ["ar", "invoices", "payments"], verticalId);
     const pickedCustomer = typeof params.customer === "string" ? params.customer : null;
@@ -784,9 +788,10 @@ export default async function ReceivablesPage({
                   Capital Markets Readiness &amp; Governance Assurance no longer continues. Its open invoices were
                   given to the verticals below; collections on them after the shift count in that
                   vertical&rsquo;s actual collection. The company&rsquo;s receivables above still include them.
+                  {!showCmrgaInvoices && " The invoices are listed in each vertical’s own view."}
                 </p>
               </div>
-              <CmrgaReceivablesTable data={cmrga} />
+              <CmrgaReceivablesTable data={cmrga} showInvoices={showCmrgaInvoices} />
             </Card>
           )}
 

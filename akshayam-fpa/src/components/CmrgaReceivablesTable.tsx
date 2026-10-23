@@ -13,7 +13,14 @@ const th =
   "border-y border-line px-2 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-faint";
 const td = "border-b border-line px-2 py-2 align-top";
 
-export function CmrgaReceivablesTable({ data }: { data: CmrgaReceivablesResult }) {
+export function CmrgaReceivablesTable({
+  data,
+  showInvoices = true,
+}: {
+  data: CmrgaReceivablesResult;
+  /** the invoice-by-invoice list under the summary; the company-level view shows the summary alone */
+  showInvoices?: boolean;
+}) {
   const { check } = data;
   const agrees = !!check.booksAsOf && Math.abs(check.difference) < 1 && check.mismatches.length === 0;
   const withBooks = !!check.booksAsOf;
@@ -122,7 +129,7 @@ export function CmrgaReceivablesTable({ data }: { data: CmrgaReceivablesResult }
         </div>
       </section>
 
-      {data.verticals.map((v) => (
+      {showInvoices && data.verticals.map((v) => (
         <section key={v.verticalId}>
           <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 px-4 py-3 sm:px-5">
             <h3 className="text-[14px] font-semibold text-ink">{v.label}</h3>
