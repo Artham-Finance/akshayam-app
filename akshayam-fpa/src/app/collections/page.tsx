@@ -28,6 +28,7 @@ import {
 import { buildBudgetVsActual } from "@/lib/reports/budget";
 import { isDrill, runDrill, UNTRACEABLE_RECEIPT } from "@/lib/reports/drilldowns";
 import { listCustomers } from "@/lib/reports/customer-statement";
+import { cmrgaCollected } from "@/lib/reports/cmrga-receivables";
 import { requireEntityAccess, requireReportAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
@@ -308,6 +309,13 @@ export default async function CollectionsPage({
      * convention and the same rule the Revenue page follows.
      */
     const leadWindow = period.cumulative ?? period;
+    // Part of the Actual: what the vertical collected on the receivables shifted to it from the
+    // discontinued CMRGA (nothing, for a view that has none shifted to it).
+    const fromCmrga = await cmrgaCollected(
+      entity,
+      { start: leadWindow.start, end: leadWindow.end },
+      verticalId,
+    );
     const headline = {
       annual: budget.total.annual,
       ...(period.cumulative ? budget.total.cumulative! : budget.total.period),
@@ -369,7 +377,16 @@ export default async function CollectionsPage({
             <KpiTile
               label="Actual"
               value={compactINR(headline.actual)}
-              note="Fee receipts, excluding reimbursement recoveries"
+              note={
+                <>
+                  Fee receipts, excluding reimbursement recoveries
+                  {fromCmrga > 0 && (
+                    <span className="mt-1 block">
+                      Actuals include amount collected from CMRGA receivables of Rs {money(fromCmrga)}
+                    </span>
+                  )}
+                </>
+              }
               tone="positive"
               cumulative={
                 period.cumulative

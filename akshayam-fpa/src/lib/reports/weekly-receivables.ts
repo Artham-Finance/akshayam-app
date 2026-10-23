@@ -32,6 +32,8 @@ export interface ReceivableInvoice {
   dueDate: string | null;
   balance: number;
   ageDays: number;
+  /** a receivable shifted to this vertical from the discontinued CMRGA */
+  cmrga: boolean;
 }
 
 export interface Over180Customer {
@@ -40,6 +42,8 @@ export interface Over180Customer {
   bucket: AgeBucket;
   /** what is owed in the bucket */
   amount: number;
+  /** of which, CMRGA's receivables shifted to this vertical */
+  cmrgaAmount: number;
   invoices: ReceivableInvoice[];
   /** this week's commitment, as keyed */
   commitment: string | null;
@@ -70,6 +74,8 @@ export interface TopCustomer {
   rank: number;
   customer: string;
   outstanding: number;
+  /** of which, CMRGA's receivables shifted to this vertical */
+  cmrgaAmount: number;
   pctOfVertical: number;
   pctOfEntity: number;
   /** owed over 90 days, up to 180 */
@@ -89,6 +95,8 @@ export interface VerticalReceivables {
   over180Total: number;
   over180: Over180Customer[];
   top: TopCustomer[];
+  /** every invoice shifted to this vertical from the discontinued CMRGA, of any age, the largest first */
+  cmrga: (ReceivableInvoice & { customer: string })[];
 }
 
 export interface WeeklyReceivablesResult {
@@ -121,6 +129,8 @@ export async function buildWeeklyReceivables(opts: {
     balance: number;
     age: number;
     as_of: string;
+    /** the receivable was shifted to this vertical from the discontinued CMRGA */
+    cmrga: boolean;
   }>(
     `with snap as (
        select e.id as entity_id,
@@ -130,16 +140,21 @@ export async function buildWeeklyReceivables(opts: {
               ) as as_of
          from unnest($1::int[]) as e(id)
      )
-     select a.vertical_id,
+     -- A receivable shifted from the discontinued CMRGA (076) belongs to the vertical it was
+     -- shifted to from the shift date on; it stays in the entity's receivables either way.
+     select coalesce(case when $2::date >= t.as_of then t.to_vertical_id end, a.vertical_id) as vertical_id,
             btrim(a.customer_name) as customer,
             a.invoice_number,
             a.invoice_date::text as invoice_date,
             a.due_date::text as due_date,
             a.balance_base::float8 as balance,
             (s.as_of - coalesce(a.due_date, a.invoice_date))::int as age,
-            s.as_of::text as as_of
+            s.as_of::text as as_of,
+            (t.id is not null and $2::date >= t.as_of) as cmrga
        from ar_open_items a
        join snap s on s.entity_id = a.entity_id and a.as_of = s.as_of
+       left join receivable_transfers t
+         on t.entity_id = a.entity_id and t.invoice_number = a.invoice_number
       where a.customer_name is not null
         -- a balance under a rupee is a rounding residue, not a receivable
         and a.balance_base >= 1`,
@@ -209,16 +224,19 @@ export async function buildWeeklyReceivables(opts: {
       dueDate: r.due_date,
       balance: Number(r.balance),
       ageDays: Number(r.age),
+      cmrga: r.cmrga,
     });
     for (const [customer, list] of byCustomer) {
       const outstanding = list.reduce((s, r) => s + Number(r.balance), 0);
       const sumOf = (rs: typeof list) => rs.reduce((s, r) => s + Number(r.balance), 0);
+      const cmrgaOf = (rs: typeof list) => sumOf(rs.filter((r) => r.cmrga));
       const mid = list.filter((r) => Number(r.age) > MID_DAYS && Number(r.age) <= OVER_DAYS);
       const old = list.filter((r) => Number(r.age) > OVER_DAYS);
       topAll.push({
         rank: 0,
         customer,
         outstanding,
+        cmrgaAmount: cmrgaOf(list),
         pctOfVertical: total > 0 ? outstanding / total : 0,
         pctOfEntity: entityTotal > 0 ? outstanding / entityTotal : 0,
         over90: sumOf(mid),
@@ -260,6 +278,7 @@ export async function buildWeeklyReceivables(opts: {
           customer,
           bucket,
           amount,
+          cmrgaAmount: cmrgaOf(invoices),
           invoices: invoices.map(lineOf).sort((a, b) => b.ageDays - a.ageDays),
           commitment: current?.commitment ?? null,
           enteredOn: current?.entered_on ?? null,
@@ -287,6 +306,10 @@ export async function buildWeeklyReceivables(opts: {
       over180Total: over180.reduce((s, c) => s + c.amount, 0),
       over180,
       top,
+      cmrga: rows
+        .filter((r) => r.cmrga)
+        .map((r) => ({ customer: r.customer, ...lineOf(r) }))
+        .sort((a, b) => b.balance - a.balance || a.invoiceNumber.localeCompare(b.invoiceNumber)),
     };
   });
 

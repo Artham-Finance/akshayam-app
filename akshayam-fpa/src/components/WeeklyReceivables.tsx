@@ -28,6 +28,28 @@ const td = "border-b border-line px-3 py-2";
 const field =
   "w-full rounded-md border border-line bg-surface px-2 py-1 text-[12px] text-ink placeholder:text-ink-faint";
 
+/**
+ * Marks a receivable that was CMRGA's and has been shifted to this vertical: the whole line
+ * ("CMRGA receivable"), or the part of it ("incl. CMRGA receivable 12,000"), or - with no
+ * amounts - a single invoice.
+ */
+function CmrgaTag({ amount, of }: { amount?: number; of?: number }) {
+  if (amount === undefined) {
+    return (
+      <span className="ml-2 rounded-sm bg-caution-tint px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-caution">
+        CMRGA receivable
+      </span>
+    );
+  }
+  if (amount <= 0) return null;
+  const whole = of !== undefined && amount >= of - 0.5;
+  return (
+    <span className="ml-2 rounded-sm bg-caution-tint px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-caution">
+      {whole ? "CMRGA receivable" : `incl. CMRGA receivable ${money(amount)}`}
+    </span>
+  );
+}
+
 async function save(body: Record<string, unknown>): Promise<string | null> {
   try {
     const response = await fetch("/api/weekly-receivables", {
@@ -226,6 +248,61 @@ function VerticalBlock({
         </div>
       </div>
 
+      {/* 3. CMRGA's receivables shifted to this vertical - all of them, whatever their age */}
+      {v.cmrga.length > 0 && (
+        <div>
+          <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-muted">
+            CMRGA receivables shifted to this vertical
+          </h3>
+          <p className="mb-2 text-[11.5px] text-ink-muted">
+            Receivables of Capital Markets Readiness &amp; Governance Assurance, which no longer continues, shifted
+            to this vertical. They are part of this vertical&rsquo;s receivables above; those over 90 days are in the
+            ageing lists too, where they can be committed against.
+          </p>
+          <div className="table-frame">
+            <table className="w-full border-collapse text-[12.5px]">
+              <thead>
+                <tr>
+                  <th className={clsx(th, "text-left")}>Customer</th>
+                  <th className={clsx(th, "text-left")}>Invoice</th>
+                  <th className={clsx(th, "text-left")}>Date</th>
+                  <th className={clsx(th, "text-left")}>Due</th>
+                  <th className={clsx(th, "text-right")}>Days overdue</th>
+                  <th className={clsx(th, "text-right")}>Balance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {v.cmrga.map((i) => (
+                  <tr key={i.invoiceNumber + i.balance} className="hover:bg-surface-sunk/40">
+                    <td className={clsx(td, "text-ink")}>{i.customer}</td>
+                    <td className={clsx(td, "whitespace-nowrap text-ink")}>{i.invoiceNumber}</td>
+                    <td className={clsx(td, "whitespace-nowrap text-ink-muted")}>
+                      {i.invoiceDate ? dateLabel(i.invoiceDate) : "—"}
+                    </td>
+                    <td className={clsx(td, "whitespace-nowrap text-ink-muted")}>
+                      {i.dueDate ? dateLabel(i.dueDate) : "—"}
+                    </td>
+                    <td className={clsx(td, "num text-right", i.ageDays > 180 ? "text-caution" : "text-ink-muted")}>
+                      {i.ageDays > 0 ? i.ageDays : "not due"}
+                    </td>
+                    <td className={clsx(td, "num text-right text-ink")}>{money(i.balance, 2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="font-semibold text-ink">
+                  <td className="border-t border-line-strong px-3 py-2" colSpan={5}>
+                    Total CMRGA receivables · {v.cmrga.length} invoice{v.cmrga.length === 1 ? "" : "s"}
+                  </td>
+                  <td className="num border-t border-line-strong px-3 py-2 text-right">
+                    {money(v.cmrga.reduce((s, i) => s + i.balance, 0), 2)}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -291,6 +368,7 @@ function Over180Row({
               <span className="ml-2 text-[11px] text-ink-faint">
                 {c.invoices.length} invoice{c.invoices.length === 1 ? "" : "s"}
               </span>
+              <CmrgaTag amount={c.cmrgaAmount} of={c.amount} />
             </span>
           </button>
         </td>
@@ -393,7 +471,10 @@ function Over180Row({
               <tbody>
                 {c.invoices.map((i) => (
                   <tr key={i.invoiceNumber + (i.invoiceDate ?? "")}>
-                    <td className="border-t border-line px-1 py-1.5 text-ink">{i.invoiceNumber}</td>
+                    <td className="border-t border-line px-1 py-1.5 text-ink">
+                      {i.invoiceNumber}
+                      {i.cmrga && <CmrgaTag />}
+                    </td>
                     <td className="border-t border-line px-1 py-1.5 text-ink-muted">{i.invoiceDate ? dateLabel(i.invoiceDate) : "—"}</td>
                     <td className="border-t border-line px-1 py-1.5 text-ink-muted">{i.dueDate ? dateLabel(i.dueDate) : "—"}</td>
                     <td className="num border-t border-line px-1 py-1.5 text-right">{money(i.balance)}</td>
@@ -428,6 +509,7 @@ function TopRow({ t }: { t: TopCustomer }) {
             <span className="text-[11px] text-ink-faint">
               {t.invoices.length} invoice{t.invoices.length === 1 ? "" : "s"}
             </span>
+            <CmrgaTag amount={t.cmrgaAmount} of={t.outstanding} />
           </button>
         </td>
         <td className={clsx(td, "num text-right text-ink")}>{money(t.outstanding)}</td>
@@ -456,7 +538,10 @@ function TopRow({ t }: { t: TopCustomer }) {
               <tbody>
                 {t.invoices.map((i) => (
                   <tr key={i.invoiceNumber + (i.invoiceDate ?? "") + i.balance}>
-                    <td className="border-t border-line px-1 py-1.5 text-ink">{i.invoiceNumber}</td>
+                    <td className="border-t border-line px-1 py-1.5 text-ink">
+                      {i.invoiceNumber}
+                      {i.cmrga && <CmrgaTag />}
+                    </td>
                     <td className="border-t border-line px-1 py-1.5 text-ink-muted">{i.invoiceDate ? dateLabel(i.invoiceDate) : "—"}</td>
                     <td className="border-t border-line px-1 py-1.5 text-ink-muted">{i.dueDate ? dateLabel(i.dueDate) : "—"}</td>
                     <td className="num border-t border-line px-1 py-1.5 text-right">{money(i.balance)}</td>

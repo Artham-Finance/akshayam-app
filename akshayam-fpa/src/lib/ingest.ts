@@ -1428,6 +1428,9 @@ export async function linkByInvoice(client: PoolClient, entityId: number): Promi
  *
  * The reimbursement flag is evaluated per invoice number, so a receipt covering
  * both a fee invoice and an RI invoice splits correctly across the two.
+ *
+ * Last, receipts on a receivable that has been shifted to another vertical are
+ * credited to the vertical it was shifted to.
  */
 async function rebuildPaymentAllocations(client: PoolClient, entityId: number): Promise<void> {
   await client.query("delete from payment_allocations where entity_id = $1", [entityId]);
@@ -1539,6 +1542,21 @@ async function rebuildPaymentAllocations(client: PoolClient, entityId: number): 
                  else 'equal' end
        from weighted`,
     [entityId, `${REIMBURSEMENT_PREFIX}`],
+  );
+
+  // A receivable shifted from one vertical to another (CMRGA's, see 076) takes its receipts
+  // with it: a receipt after the shift date is the new vertical's collection. Receipts up to
+  // that date stay where they were collected.
+  await client.query(
+    `update payment_allocations a
+        set vertical_id = t.to_vertical_id
+       from receivable_transfers t, payments p
+      where a.entity_id = $1
+        and t.entity_id = a.entity_id
+        and t.invoice_number = a.invoice_number
+        and p.id = a.payment_id
+        and p.payment_date > t.as_of`,
+    [entityId],
   );
 }
 

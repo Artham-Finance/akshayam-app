@@ -115,6 +115,11 @@ export function WeeklyRatingsTable({
                           {money(row.receivableOverdue)} overdue
                         </span>
                       )}
+                      {row.receivableCmrga > 0 && (
+                        <span className="block text-[10.5px] text-caution">
+                          incl. {money(row.receivableCmrga)} CMRGA receivable
+                        </span>
+                      )}
                     </td>
                   )}
                   <td className={clsx(cell, "num text-right text-ink")}>
@@ -123,7 +128,14 @@ export function WeeklyRatingsTable({
                   <td className={clsx(cell, "text-center")}>
                     <Rating value={row.commitmentRating} />
                   </td>
-                  <td className={clsx(cell, "num text-right text-ink")}>{money(row.actual)}</td>
+                  <td className={clsx(cell, "num text-right text-ink")}>
+                    {money(row.actual)}
+                    {row.fromCmrga > 0 && (
+                      <span className="block text-[10.5px] font-normal text-ink-muted">
+                        Actuals include amount collected from CMRGA receivables of Rs {money(row.fromCmrga)}
+                      </span>
+                    )}
+                  </td>
                   <td className={clsx(cell, "num text-right text-ink-muted")}>
                     {row.pctOfCommitment === null ? "—" : percent(row.pctOfCommitment * 100, 0)}
                   </td>
@@ -352,6 +364,12 @@ function CommitmentPanel({
                   overdue
                 </>
               )}
+              {row.receivableCmrga > 0 && (
+                <>
+                  ; <span className="num font-medium text-caution">{money(row.receivableCmrga)}</span> of it is CMRGA
+                  receivables shifted to this vertical (marked CMRGA receivable below)
+                </>
+              )}
               {arAsOf ? ` (receivables as at ${arAsOf})` : ""}.
             </>
           ) : (
@@ -402,6 +420,11 @@ function CommitmentPanel({
                           <option key={c.customer} value={c.customer}>
                             {c.customer} — owes {money(c.outstanding)}
                             {c.overdue > 0 ? ` (${money(c.overdue)} overdue)` : ""}
+                            {c.cmrga > 0
+                              ? c.cmrga >= c.outstanding - 0.5
+                                ? " — CMRGA receivable"
+                                : ` — incl. CMRGA receivable ${money(c.cmrga)}`
+                              : ""}
                           </option>
                         ))}
                       </select>
