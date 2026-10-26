@@ -306,6 +306,23 @@ export interface FileMeta {
   uploadedBy?: number | null;
 }
 
+/**
+ * One ingest of a company at a time.
+ *
+ * Every upload replaces what it covers and rebuilds what is derived from it - the receipt
+ * allocations are deleted and written again from every receipt. Two uploads of the same
+ * company overlapping (two files loaded close together, or one dropped twice) each delete
+ * what the other had not yet written and then both write, and the company's allocations -
+ * every receipt - are stored twice: Collections read exactly double the file. A transaction
+ * advisory lock, held to the end of the transaction, makes the second wait for the first to
+ * commit, so its own delete then sees (and replaces) what the first wrote.
+ */
+const INGEST_LOCK = 7001;
+
+async function lockIngest(client: PoolClient, entityId: number): Promise<void> {
+  await client.query("select pg_advisory_xact_lock($1, $2)", [INGEST_LOCK, entityId]);
+}
+
 export async function createUpload(
   client: PoolClient,
   entityId: number,
@@ -316,6 +333,8 @@ export async function createUpload(
   rowCount: number,
   notes: unknown,
 ): Promise<number> {
+  // First thing in every ingest transaction, before it deletes or writes anything.
+  await lockIngest(client, entityId);
   const result = await client.query<{ id: number }>(
     `insert into uploads
        (entity_id, kind, original_name, stored_path, byte_size, sha256,
@@ -1433,6 +1452,9 @@ export async function linkByInvoice(client: PoolClient, entityId: number): Promi
  * credited to the vertical it was shifted to.
  */
 async function rebuildPaymentAllocations(client: PoolClient, entityId: number): Promise<void> {
+  // Already held by the upload's own transaction (see createUpload); taken again here so the
+  // delete-and-rewrite below can never overlap another one, whoever calls it.
+  await lockIngest(client, entityId);
   await client.query("delete from payment_allocations where entity_id = $1", [entityId]);
 
   await client.query(
