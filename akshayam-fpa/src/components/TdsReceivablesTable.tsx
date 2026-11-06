@@ -544,7 +544,12 @@ function TdsRow({ row, canCommit }: { row: TdsReceivableRow; canCommit: boolean 
   return (
     <tr className="hover:bg-surface-sunk/40">
       <td className={clsx(td, "text-ink-muted")}>{row.fy}</td>
-      <td className={clsx(td, "text-ink")}>{row.vertical}</td>
+      <td className={clsx(td, "text-ink")}>
+        {row.vertical}
+        {row.movedFrom && (
+          <span className="block text-[10.5px] text-ink-faint">moved from {row.movedFrom}</span>
+        )}
+      </td>
       <td className={clsx(td, "min-w-[9rem] text-ink")}>{row.customer}</td>
       <td className={clsx(td, "num text-right text-ink")}>{money(row.tdsAmount, 2)}</td>
       <td className={clsx(td, "min-w-[12rem]")}>

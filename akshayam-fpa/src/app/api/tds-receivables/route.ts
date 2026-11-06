@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { query } from "@/lib/db";
-import { getEntity, getVerticalsInScope } from "@/lib/entity";
+import { getEntity } from "@/lib/entity";
 import { apiGuard } from "@/lib/auth/dal";
 import { roleCan } from "@/lib/auth/permissions";
+import { tdsRowIdsInScope } from "@/lib/reports/tds-receivables";
 
 export const runtime = "nodejs";
 
@@ -46,14 +47,17 @@ export async function POST(request: Request) {
     const canCommit = roleCan(user.role, "weekly.commit") || entity.verticalIds !== null;
     if (!canCommit) return fail("Your role does not allow recording a note.", 403);
 
-    const ids = (await getVerticalsInScope(entity)).map((v) => v.id);
+    // The rows of the verticals in view once the TDS corrections are applied: a customer moved
+    // to another vertical is that vertical's to write, and no longer the one it came from.
+    if (!(await tdsRowIdsInScope(entity)).includes(parsed.id)) {
+      return fail("That row is not part of this view.", 403);
+    }
     const text = (s: string) => s.trim() || null;
-    const updated = await query(
+    await query(
       `update tds_receivables
           set inv_number = $2, inv_date = $3, inv_value = $4, observation = $5, follow_up = $6,
               updated_by = $7, updated_at = now()
-        where id = $1 and vertical_id = any($8::int[])
-        returning id`,
+        where id = $1`,
       [
         parsed.id,
         text(parsed.invNumber),
@@ -62,10 +66,8 @@ export async function POST(request: Request) {
         text(parsed.observation),
         text(parsed.followUp),
         user.id,
-        ids,
       ],
     );
-    if (updated.length === 0) return fail("That row is not part of this view.", 403);
     return NextResponse.json({ ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Could not save.";

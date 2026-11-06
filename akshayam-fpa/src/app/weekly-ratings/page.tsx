@@ -221,7 +221,9 @@ export default async function WeeklyRatingsPage({
                 <li>
                   The TDS each customer has deducted that we hold as receivable, as at 31 March 2026,
                   arranged by financial year. The year, vertical, customer and TDS amount are as per the
-                  books and cannot be changed here. A vertical sees only its own customers.
+                  books and cannot be changed here. A vertical sees only its own customers. A customer the
+                  client has moved to another vertical (the TDS Corrections upload) is shown under the new
+                  vertical, marked &ldquo;moved from&rdquo;.
                 </li>
                 <li>
                   Against each, key the invoice it relates to &mdash; number, date and value, as free text.

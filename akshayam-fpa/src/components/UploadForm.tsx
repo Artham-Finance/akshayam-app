@@ -22,6 +22,8 @@ export interface UploadKindInfo {
   cadence: string;
   needsAsOf: boolean;
   asOfLabel?: string;
+  /** company slugs this report is offered to; absent means every company */
+  companies?: string[];
   lastUpload?: {
     fileName: string;
     rowCount: number | null;
@@ -39,6 +41,8 @@ interface UploadResponse {
   newVerticals?: string[];
   needsReview?: string[];
   warnings?: string[];
+  /** plain statements of what the upload did, beyond "loaded N rows" */
+  notes?: string[];
   detected?: { sheetName?: string; columns?: string[]; verticalColumn?: string | null; layout?: string };
   summary?: Record<string, unknown>;
 }
@@ -218,6 +222,11 @@ function UploadCard({ info }: { info: UploadKindInfo }) {
                   before sharing the report.
                 </p>
               )}
+              {result.notes?.map((note) => (
+                <p key={note} className="opacity-90">
+                  {note}
+                </p>
+              ))}
               {result.warnings?.map((warning) => (
                 <p key={warning} className="text-caution">
                   {warning}

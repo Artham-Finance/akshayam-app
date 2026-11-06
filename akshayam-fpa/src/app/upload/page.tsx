@@ -39,7 +39,10 @@ export default async function UploadPage() {
 
     const lastByKind = new Map(recent.map((r) => [r.kind, r]));
 
-    const kinds: UploadKindInfo[] = UPLOAD_KINDS.map((info) => {
+    // A kind that is one company's own (the TDS corrections are RBJV's) is offered on its view only.
+    const kinds: UploadKindInfo[] = UPLOAD_KINDS.filter(
+      (info) => !info.companies || info.companies.includes(entity.slug),
+    ).map((info) => {
       const last = lastByKind.get(info.kind);
       return {
         ...info,
