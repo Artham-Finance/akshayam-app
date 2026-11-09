@@ -228,10 +228,12 @@ export async function buildTdsReceivables(opts: {
   entity: Entity;
   /** the week's end: the financial year it falls in is the one listed invoice by invoice */
   weekEnd: string;
+  /** narrow to one vertical, where the screen's picker has chosen one */
+  verticalId?: number | null;
 }): Promise<TdsReceivablesResult> {
-  const { entity, weekEnd } = opts;
+  const { entity, weekEnd, verticalId = null } = opts;
   const scoped = await getVerticalsInScope(entity);
-  const ids = new Set(scoped.map((v) => v.id));
+  const ids = new Set(scoped.filter((v) => verticalId === null || v.id === verticalId).map((v) => v.id));
   // The sheet's rows under the verticals in view, once the corrections are applied.
   const rows = (await loadTdsRows(entity)).filter((r) => ids.has(r.vertical_id));
 
@@ -275,7 +277,7 @@ export async function buildTdsReceivables(opts: {
   return {
     years,
     total: years.reduce((s, y) => s + y.total, 0),
-    invoices: await buildTdsInvoicesByQuarter(entity, weekEnd, labelFor),
+    invoices: await buildTdsInvoicesByQuarter(entity, weekEnd, labelFor, verticalId),
   };
 }
 
@@ -303,6 +305,7 @@ async function buildTdsInvoicesByQuarter(
   entity: Entity,
   weekEnd: string,
   labelFor: (id: number) => string,
+  verticalId: number | null,
 ): Promise<TdsInvoiceYear> {
   const fyStartYear = fyStartYearOf(new Date(`${weekEnd}T00:00:00`), entity.fy_start_month);
   const months = fyMonths(fyStartYear, entity.fy_start_month);
@@ -313,7 +316,7 @@ async function buildTdsInvoicesByQuarter(
     if (period.start > weekEnd) break;
 
     const [reco, rows, notes] = await Promise.all([
-      buildTdsReco({ entity, fyStartYear, quarter, verticalId: null, customer: null }),
+      buildTdsReco({ entity, fyStartYear, quarter, verticalId, customer: null }),
       query<InvoiceQueryRow>(
         `select g.entity_id,
                 ${BOOKS_CUSTOMER} as customer,
@@ -336,10 +339,11 @@ async function buildTdsInvoicesByQuarter(
             and g.txn_date between $2 and $3
             and ${TDS_ACCOUNTS}
             ${verticalScope("$4", "coalesce(inv.vertical_id, g.vertical_id)")}
+            and ($5::int is null or coalesce(inv.vertical_id, g.vertical_id) = $5)
           group by g.entity_id, 2, 3, g.txn_number, inv.invoice_date, inv.amount
          having abs(sum(g.debit - g.credit)) > 0.005
           order by 2, inv.invoice_date, g.txn_number`,
-        [entity.memberIds, period.start, period.end, entity.verticalIds],
+        [entity.memberIds, period.start, period.end, entity.verticalIds, verticalId],
       ),
       query<{
         entity_id: number;

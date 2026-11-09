@@ -112,11 +112,13 @@ const norm = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
 export async function buildWeeklyReceivables(opts: {
   entity: Entity;
   weekEnd: string;
+  /** narrow to one vertical, where the screen's picker has chosen one */
+  verticalId?: number | null;
 }): Promise<WeeklyReceivablesResult> {
-  const { entity, weekEnd } = opts;
+  const { entity, weekEnd, verticalId = null } = opts;
   const today = todayIst();
   const ids = entity.memberIds;
-  const scoped = await getVerticalsInScope(entity);
+  const scoped = (await getVerticalsInScope(entity)).filter((v) => verticalId === null || v.id === verticalId);
   const scopedIds = scoped.map((v) => v.id);
 
   /* ---- the receivables snapshot, invoice by invoice ---- */

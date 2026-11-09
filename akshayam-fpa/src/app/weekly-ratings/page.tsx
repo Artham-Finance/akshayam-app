@@ -7,7 +7,8 @@ import { WeeklyRatingsTable } from "@/components/WeeklyRatingsTable";
 import { TdsReceivablesTable } from "@/components/TdsReceivablesTable";
 import { CmrgaReceivablesTable } from "@/components/CmrgaReceivablesTable";
 import { Card, CardTitle, EmptyState, Notice, PageHeader } from "@/components/ui";
-import { getEntity } from "@/lib/entity";
+import { getEntity, getVerticalsInScope } from "@/lib/entity";
+import { ROWS, scorecardRowCodeFor } from "@/lib/reports/scorecard";
 import { dateLabel } from "@/lib/format";
 import { getCurrentUser, requireEntityAccess, requireReportAccess } from "@/lib/auth/dal";
 import { buildWeeklyRatings } from "@/lib/reports/weekly-ratings";
@@ -67,18 +68,45 @@ export default async function WeeklyRatingsPage({
       ? (requestedMeasure as WeeklyMeasure)
       : "revenue";
 
+    // The verticals the picker offers: those in view, named as the tables name them. One vertical
+    // picked narrows every tab to it; a value that is not in view is ignored.
+    const inView = (await getVerticalsInScope(entity)).filter((v) => v.code !== "UNALLOCATED");
+    const bothRaja = inView.some((v) => v.code === "AIF") && inView.some((v) => v.code === "GIFT");
+    const nameOf = (v: (typeof inView)[number]) => {
+      // AIF and GIFT share one scorecard row (Raja's); with both in view the picker names them apart.
+      if (bothRaja && v.code === "AIF") return "Raja - AIF";
+      if (bothRaja && v.code === "GIFT") return "Raja - GIFT";
+      const code = scorecardRowCodeFor(v.code);
+      return (code ? ROWS.find((r) => r.code === code)?.label : null) ?? v.name;
+    };
+    const orderOf = (v: (typeof inView)[number]) => {
+      const code = scorecardRowCodeFor(v.code);
+      const i = code ? ROWS.findIndex((r) => r.code === code) : -1;
+      return i === -1 ? 999 : i;
+    };
+    const verticalOptions = inView
+      .map((v) => ({ id: v.id, name: nameOf(v), order: orderOf(v) }))
+      .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
+      .map(({ id, name }) => ({ id, name }));
+    const requestedVertical = Number(pick(params.vertical));
+    const verticalId = verticalOptions.some((v) => v.id === requestedVertical) ? requestedVertical : null;
+
     // Receivables, CMRGA receivables and TDS receivables are tabs of their own, not measures a commitment is rated on.
     const isReceivables = requestedMeasure === "receivables";
     const isTds = requestedMeasure === "tds";
     const isCmrga = requestedMeasure === "cmrga";
     const data =
-      isReceivables || isTds || isCmrga ? null : await buildWeeklyRatings({ entity, measure, weekEnd });
-    const receivables = isReceivables ? await buildWeeklyReceivables({ entity, weekEnd }) : null;
-    const tdsReceivables = isTds ? await buildTdsReceivables({ entity, weekEnd }) : null;
+      isReceivables || isTds || isCmrga
+        ? null
+        : await buildWeeklyRatings({ entity, measure, weekEnd, verticalId });
+    const receivables = isReceivables ? await buildWeeklyReceivables({ entity, weekEnd, verticalId }) : null;
+    const tdsReceivables = isTds ? await buildTdsReceivables({ entity, weekEnd, verticalId }) : null;
     // CMRGA's receivables, shifted to other verticals: each vertical sees only what was shifted
     // to it, so the tab is there only for a view that has some.
-    const cmrga = await buildCmrgaReceivables({ entity, weekEnd });
-    const cmrgaTab = isCmrga || cmrga.verticals.length > 0;
+    // The tab is there whenever the view has some, whichever vertical is picked.
+    const cmrgaAll = await buildCmrgaReceivables({ entity, weekEnd });
+    const cmrga = verticalId === null || !isCmrga ? cmrgaAll : await buildCmrgaReceivables({ entity, weekEnd, verticalId });
+    const cmrgaTab = isCmrga || cmrgaAll.verticals.length > 0;
 
     // Whoever may commit: a role that carries the permission, or a team lead
     // signed in to their own vertical's slice.
@@ -99,7 +127,7 @@ export default async function WeeklyRatingsPage({
     const week = weeks.find((w) => w.end === weekEnd)!;
 
     const tab = (m: string) =>
-      `/weekly-ratings?measure=${m}&week=${weekEnd}&meeting=${meetingDate}`;
+      `/weekly-ratings?measure=${m}&week=${weekEnd}&meeting=${meetingDate}${verticalId === null ? "" : `&vertical=${verticalId}`}`;
     const tabs: { key: string; label: string }[] = [
       ...WEEKLY_MEASURES.map((m) => ({ key: m, label: WEEKLY_MEASURE_LABEL[m] })),
       { key: "receivables", label: "Receivables" },
@@ -122,6 +150,8 @@ export default async function WeeklyRatingsPage({
               weekEnd={weekEnd}
               meetingDate={meetingDate}
               measure={isReceivables ? "receivables" : isCmrga ? "cmrga" : isTds ? "tds" : measure}
+              verticals={verticalOptions}
+              verticalId={verticalId}
             />
           </Card>
 

@@ -130,15 +130,18 @@ export async function buildWeeklyRatings(opts: {
   entity: Entity;
   measure: WeeklyMeasure;
   weekEnd: string;
+  /** narrow to one vertical, where the screen's picker has chosen one */
+  verticalId?: number | null;
 }): Promise<WeeklyRatingsResult> {
-  const { entity, measure, weekEnd } = opts;
+  const { entity, measure, weekEnd, verticalId = null } = opts;
   const weekStart = addDays(weekEnd, -6);
   const today = todayIst();
 
   const scoped = await getVerticalsInScope(entity);
-  const candidates = scoped
+  const everyCandidate = scoped
     .map((v) => ({ v, rowCode: scorecardRowCodeFor(v.code) }))
     .filter((c): c is { v: (typeof scoped)[number]; rowCode: string } => c.rowCode !== null);
+  const candidates = everyCandidate.filter((c) => verticalId === null || c.v.id === verticalId);
   const ids = candidates.map((c) => c.v.id);
 
   const verticalMeta =
@@ -426,8 +429,9 @@ export async function buildWeeklyRatings(opts: {
     }
   }
 
+  // Judged on every vertical in view, so a vertical keeps the same label whether or not it is the one picked.
   const duplicateRowCodes = new Set(
-    candidates
+    everyCandidate
       .map((c) => c.rowCode)
       .filter((code, i, all) => all.indexOf(code) !== i),
   );
