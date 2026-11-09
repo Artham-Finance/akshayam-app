@@ -15,6 +15,7 @@ import {
   commitReimbursementBills,
   commitReimbursementExpense,
   commitRetainers,
+  commitTdsCorrections,
   commitRevenueTransferEntries,
   commitTrialBalance,
   type CommitResult,
@@ -26,6 +27,8 @@ import { parseReimbursementBills } from "@/lib/parse/reimbursement-bills";
 import { parseReimbursementExpense } from "@/lib/parse/reimbursement-expense";
 import { parseRetainers } from "@/lib/parse/retainers";
 import { parseRevenueTransfer } from "@/lib/parse/revenue-transfer";
+import { parseTdsCorrections } from "@/lib/parse/tds-corrections";
+import { describeTdsCorrections } from "@/lib/reports/tds-receivables";
 import { parseArAging, parseCreditNotes, parseInvoices, parsePayments } from "@/lib/parse/sales";
 import { parseTrialBalance, type TbBasis } from "@/lib/parse/tb";
 import { parseForm26AS } from "@/lib/parse/tds26as";
@@ -38,7 +41,7 @@ export const maxDuration = 300;
 const KINDS = [
   "gl", "opening_tb", "invoices", "payments", "ar_aging", "credit_notes", "retainers",
   "budget", "tds_26as", "reimbursement_bills", "reimbursement_expense_txns", "osb_entries",
-  "osb_expenses",
+  "osb_expenses", "tds_corrections",
 ] as const;
 type Kind = (typeof KINDS)[number];
 
@@ -136,6 +139,7 @@ export async function POST(request: Request) {
     let warnings: string[] = [];
     let detected: unknown;
     let summary: Record<string, unknown> = {};
+    let notes: string[] = [];
 
     switch (kindRaw) {
       case "gl": {
@@ -311,6 +315,18 @@ export async function POST(request: Request) {
         };
         break;
       }
+      case "tds_corrections": {
+        const parsed = await parseTdsCorrections(bytes);
+        result = await commitTdsCorrections(entity.id, parsed, meta);
+        warnings = [...parsed.warnings];
+        detected = parsed.detected;
+        // Say what each correction did to the TDS sheet, and flag one that changed nothing.
+        const effect = await describeTdsCorrections(entity);
+        notes = effect.notes;
+        warnings.push(...effect.warnings);
+        summary = { corrections: parsed.rows.length };
+        break;
+      }
       default:
         return NextResponse.json({ error: "Unhandled report type." }, { status: 400 });
     }
@@ -324,6 +340,7 @@ export async function POST(request: Request) {
       newVerticals: result.newVerticals,
       needsReview: result.needsReview,
       warnings,
+      notes,
       detected,
       summary,
     });

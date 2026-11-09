@@ -19,6 +19,7 @@ import type { ReimbursementBillsParseResult } from "@/lib/parse/reimbursement-bi
 import type { ReimbursementExpenseParseResult } from "@/lib/parse/reimbursement-expense";
 import type { RevenueTransferParseResult } from "@/lib/parse/revenue-transfer";
 import type { OsbExpenseParseResult } from "@/lib/parse/osb-expenses";
+import type { TdsCorrectionParseResult, TdsCorrectionRow } from "@/lib/parse/tds-corrections";
 
 /**
  * Committing a parsed file into the database.
@@ -937,6 +938,75 @@ export async function commitRevenueTransferEntries(
       parsed.rows.map((row) => [
         entityId, uploadId, verticalId, row.invoiceNumber, row.invoiceDate,
         row.customerName, row.salesperson, row.amount, row.status,
+      ]),
+    );
+
+    return { uploadId, rowsInserted, newAccounts: [], newVerticals: [], needsReview: [] };
+  });
+}
+
+/* ============================================================
+   TDS corrections
+   ============================================================ */
+
+/**
+ * The vertical a sheet's text names ("Ekta - GADD", "Common", "Vasudharini-ECM"): the word in
+ * it that is one of the company's vertical codes, the last such word if there are several.
+ */
+function verticalFromText(
+  text: string,
+  verticals: { id: number; code: string }[],
+): number | null {
+  const words = text.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+  for (let i = words.length - 1; i >= 0; i--) {
+    const hit = verticals.find((v) => v.code.toUpperCase() === words[i]);
+    if (hit) return hit.id;
+  }
+  return null;
+}
+
+/**
+ * Replace the company's TDS corrections with the sheet's. A row that names a vertical the
+ * company does not have refuses the whole file: a correction quietly dropped would leave the
+ * client's change half made.
+ */
+export async function commitTdsCorrections(
+  entityId: number,
+  parsed: TdsCorrectionParseResult,
+  meta: FileMeta,
+): Promise<CommitResult> {
+  return transaction(async (client) => {
+    const uploadId = await createUpload(
+      client, entityId, "tds_corrections", meta, null, null,
+      parsed.rows.length, { detected: parsed.detected, warnings: parsed.warnings },
+    );
+
+    const { rows: verticals } = await client.query<{ id: number; code: string }>(
+      "select id, code from verticals where entity_id = $1",
+      [entityId],
+    );
+
+    const resolved: { row: TdsCorrectionRow; from: number; to: number }[] = [];
+    const problems: string[] = [];
+    for (const row of parsed.rows) {
+      const from = verticalFromText(row.from, verticals);
+      const to = verticalFromText(row.to, verticals);
+      if (from === null) problems.push(`row ${row.sheetRow}: "${row.from}" is not a vertical of this company`);
+      if (to === null) problems.push(`row ${row.sheetRow}: "${row.to}" is not a vertical of this company`);
+      if (from !== null && to !== null) resolved.push({ row, from, to });
+    }
+    if (problems.length > 0) {
+      throw new Error(`Some verticals in the sheet were not recognised - ${problems.join("; ")}. Nothing was changed.`);
+    }
+
+    // The whole list is the sheet's: a row removed from it stops having effect.
+    await client.query("delete from tds_corrections where entity_id = $1", [entityId]);
+    const rowsInserted = await bulkInsert(
+      client,
+      "tds_corrections",
+      ["entity_id", "upload_id", "customer", "from_vertical_id", "to_vertical_id", "fy", "instruction", "sheet_row"],
+      resolved.map(({ row, from, to }) => [
+        entityId, uploadId, row.customer, from, to, row.fy, row.instruction, row.sheetRow,
       ]),
     );
 

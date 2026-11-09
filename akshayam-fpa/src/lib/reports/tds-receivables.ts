@@ -1,4 +1,5 @@
 import { query } from "@/lib/db";
+import { applyCorrections, type TdsCorrection } from "@/lib/tds-corrections";
 import { getVerticalsInScope, verticalScope, type Entity } from "@/lib/entity";
 import { fyLabel, fyMonths, fyStartYearOf, quarterLabel, type QuarterNo } from "@/lib/period";
 import { ROWS, scorecardRowCodeFor } from "@/lib/reports/scorecard";
@@ -33,6 +34,8 @@ export interface TdsReceivableRow {
   invValue: string | null;
   observation: string | null;
   followUp: string | null;
+  /** the vertical the sheet had it under, when a TDS correction has moved it to `vertical` */
+  movedFrom: string | null;
 }
 
 export interface TdsReceivableYear {
@@ -113,6 +116,114 @@ interface Row {
   follow_up: string | null;
 }
 
+interface CorrectionRow {
+  customer: string;
+  from_vertical_id: number;
+  to_vertical_id: number;
+  fy: string | null;
+}
+
+/**
+ * The sheet's TDS rows with the corrections applied (see the "TDS Corrections" upload): a
+ * customer moved from one vertical to another is on the new vertical's rows, so it is that
+ * vertical's head who sees and keys it. `verticalId` is the vertical it is under now;
+ * `movedFrom` the one it was in the sheet, when it has been moved.
+ */
+async function loadTdsRows(entity: Entity): Promise<(Row & { moved_from: number | null })[]> {
+  const [all, corrections] = await Promise.all([
+    query<Row>(
+      `select id, fy, vertical_id, customer, tds_amount::float8 as tds_amount,
+              inv_number, inv_date, inv_value, observation, follow_up
+         from tds_receivables
+        where entity_id = any($1::int[])
+        order by fy, sort_order, id`,
+      [entity.memberIds],
+    ),
+    query<CorrectionRow>(
+      `select customer, from_vertical_id, to_vertical_id, fy
+         from tds_corrections
+        where entity_id = any($1::int[])
+        order by id`,
+      [entity.memberIds],
+    ),
+  ]);
+  const list: TdsCorrection[] = corrections.map((c) => ({
+    customer: c.customer,
+    fromVerticalId: c.from_vertical_id,
+    toVerticalId: c.to_vertical_id,
+    fy: c.fy,
+  }));
+  return all.map((r) => {
+    const { verticalId, movedFrom } = applyCorrections(
+      { customer: r.customer, verticalId: r.vertical_id, fy: r.fy },
+      list,
+    );
+    return { ...r, vertical_id: verticalId, moved_from: movedFrom };
+  });
+}
+
+/** The ids of the sheet rows the signed-in entity may see and write - those of its verticals, once corrected. */
+export async function tdsRowIdsInScope(entity: Entity): Promise<number[]> {
+  const scoped = new Set((await getVerticalsInScope(entity)).map((v) => v.id));
+  return (await loadTdsRows(entity)).filter((r) => scoped.has(r.vertical_id)).map((r) => r.id);
+}
+
+/**
+ * What the company's corrections do to the sheet's rows, one line each - for the upload to say
+ * what it changed, and to flag a correction that matched nothing (a customer's name that is not
+ * the one in the sheet, or one that is not held under the vertical it is moved from).
+ */
+export async function describeTdsCorrections(entity: Entity): Promise<{ notes: string[]; warnings: string[] }> {
+  const [rows, corrections, verticals] = await Promise.all([
+    query<Row>(
+      `select id, fy, vertical_id, customer, tds_amount::float8 as tds_amount,
+              inv_number, inv_date, inv_value, observation, follow_up
+         from tds_receivables where entity_id = any($1::int[]) order by fy, sort_order, id`,
+      [entity.memberIds],
+    ),
+    query<CorrectionRow & { sheet_row: number | null }>(
+      `select customer, from_vertical_id, to_vertical_id, fy, sheet_row
+         from tds_corrections where entity_id = any($1::int[]) order by id`,
+      [entity.memberIds],
+    ),
+    query<{ id: number; code: string }>(`select id, code from verticals where entity_id = any($1::int[])`, [
+      entity.memberIds,
+    ]),
+  ]);
+  const code = (id: number) => verticals.find((v) => v.id === id)?.code ?? String(id);
+  const notes: string[] = [];
+  const warnings: string[] = [];
+  // Each correction on its own, from the sheet as it stood before it, in the order written.
+  const state = rows.map((r) => ({ ...r }));
+  for (const c of corrections) {
+    const one: TdsCorrection = {
+      customer: c.customer,
+      fromVerticalId: c.from_vertical_id,
+      toVerticalId: c.to_vertical_id,
+      fy: c.fy,
+    };
+    const hit = state.filter(
+      (r) => applyCorrections({ customer: r.customer, verticalId: r.vertical_id, fy: r.fy }, [one]).movedFrom !== null,
+    );
+    const label = `${c.customer}: ${code(c.from_vertical_id)} to ${code(c.to_vertical_id)}${c.fy ? ` (${c.fy})` : ""}`;
+    if (hit.length === 0) {
+      warnings.push(
+        `${label} matched no row of the TDS sheet - no customer of that name is held under ${code(c.from_vertical_id)}` +
+          `${c.fy ? ` in ${c.fy}` : ""}, so it changes nothing.`,
+      );
+      continue;
+    }
+    for (const r of hit) r.vertical_id = c.to_vertical_id;
+    const total = hit.reduce((s, r) => s + Number(r.tds_amount), 0);
+    notes.push(
+      `${label} - moved ${hit.length} row${hit.length === 1 ? "" : "s"} (${hit
+        .map((r) => `${r.customer}, ${r.fy}, ${Math.round(Number(r.tds_amount)).toLocaleString("en-IN")}`)
+        .join("; ")}), ${Math.round(total).toLocaleString("en-IN")} in all.`,
+    );
+  }
+  return { notes, warnings };
+}
+
 export async function buildTdsReceivables(opts: {
   entity: Entity;
   /** the week's end: the financial year it falls in is the one listed invoice by invoice */
@@ -120,21 +231,17 @@ export async function buildTdsReceivables(opts: {
 }): Promise<TdsReceivablesResult> {
   const { entity, weekEnd } = opts;
   const scoped = await getVerticalsInScope(entity);
-  const ids = scoped.map((v) => v.id);
-  const rows =
-    ids.length === 0
-      ? []
-      : await query<Row>(
-          `select id, fy, vertical_id, customer, tds_amount::float8 as tds_amount,
-                  inv_number, inv_date, inv_value, observation, follow_up
-             from tds_receivables
-            where vertical_id = any($1::int[])
-            order by fy, sort_order, id`,
-          [ids],
-        );
+  const ids = new Set(scoped.map((v) => v.id));
+  // The sheet's rows under the verticals in view, once the corrections are applied.
+  const rows = (await loadTdsRows(entity)).filter((r) => ids.has(r.vertical_id));
 
+  // A moved row names the vertical it came from, which may not be one in view.
+  const everyVertical = await query<{ id: number; code: string; name: string }>(
+    "select id, code, name from verticals where entity_id = any($1::int[])",
+    [entity.memberIds],
+  );
   const labelFor = (id: number) => {
-    const v = scoped.find((x) => x.id === id);
+    const v = scoped.find((x) => x.id === id) ?? everyVertical.find((x) => x.id === id);
     // The scorecard's row for AIF is Raja's AIF and GIFT together; the TDS here is AIF's alone.
     if (v?.code === "AIF") return "Raja - AIF";
     const rowCode = v ? scorecardRowCodeFor(v.code) : null;
@@ -156,6 +263,7 @@ export async function buildTdsReceivables(opts: {
       invValue: r.inv_value,
       observation: r.observation,
       followUp: r.follow_up,
+      movedFrom: r.moved_from === null ? null : labelFor(r.moved_from),
     });
     byYear.set(r.fy, list);
   }

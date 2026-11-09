@@ -140,6 +140,22 @@ export const UPLOAD_KINDS: Omit<UploadKindInfo, "lastUpload">[] = [
     needsAsOf: false,
   },
   {
+    kind: "tds_corrections",
+    title: "TDS Corrections",
+    zohoPath: "Not a Zoho report — a hand-kept sheet of the corrections the client asks for",
+    blurb:
+      "For RBJV: one-off corrections to the TDS receivables on the MAK meeting, kept in one sheet that " +
+      "grows. Each is an instruction line and a table under it - Customer, the vertical it is moved from " +
+      "(Tfd from) and the vertical it is moved to (Tfd to), and optionally a Year column to limit a row to " +
+      "one financial year. A customer moved from one vertical to another shows on the new vertical's TDS " +
+      "rows, and only that vertical's head sees it. Add each new correction to the same sheet and upload " +
+      "it again: the upload replaces the whole list, so a row removed from the sheet stops having effect, " +
+      "and says what each row changed.",
+    cadence: "As needed",
+    needsAsOf: false,
+    companies: ["rbjv"],
+  },
+  {
     kind: "reimbursement_bills",
     title: "Bills — item-wise (for RE / RI reconciliation)",
     zohoPath: "Purchases → Bills → Export (item-wise), or Settings → Import/Export → Export Data",
