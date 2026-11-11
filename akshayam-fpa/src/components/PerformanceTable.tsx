@@ -22,11 +22,11 @@ type Row = {
 export function PerformanceTable({
   columns,
   selectedFy,
-  taxRate,
+  taxLabel,
 }: {
   columns: PerformanceColumn[];
   selectedFy: number;
-  taxRate: number;
+  taxLabel: string;
 }) {
   const rows: Row[] = [
     { key: "revenue", label: "Revenue", good: "up", emphasis: true },
@@ -39,7 +39,7 @@ export function PerformanceTable({
       note: "Interest and other income, reimbursements recovered net of what was spent, and non-operating items",
     },
     { key: "pbt", label: "Profit before tax", good: "up", emphasis: true },
-    { key: "tax", label: `Tax @ ${taxRate}%`, good: "down" },
+    { key: "tax", label: taxLabel, good: "down" },
     { key: "pat", label: "Profit after tax", good: "up", emphasis: true },
   ];
 
@@ -62,6 +62,7 @@ export function PerformanceTable({
                     : c.monthsWithData === c.monthLabels.length
                       ? `${c.monthsWithData} of ${c.monthLabels.length} month${c.monthLabels.length === 1 ? "" : "s"}`
                       : `${c.monthsWithData} of ${c.monthLabels.length} months only`}
+                  {c.lacking.length > 0 && <div className="text-caution">{c.lacking.join(" + ")}: not loaded</div>}
                   {c.sources.length > 0 && (
                     <span> · {c.sources.map((s) => (s === "uploaded" ? "uploaded P&L" : "ledger")).join(" + ")}</span>
                   )}
