@@ -332,8 +332,9 @@ export async function POST(request: Request) {
       case "historical_pl": {
         const parsed = await parseHistoricalPl(bytes);
         // The heading names the company; a P&L of another company must not land in this one's history.
-        const squash = (t: string) => t.toLowerCase().replace(/[^a-z0-9]/g, "");
-        if (parsed.companyName && !squash(entity.name).includes(squash(parsed.companyName)) && !squash(parsed.companyName).includes(squash(entity.name))) {
+        // Compared by the company's first word, so "Akshayam Corporate Advisors Pvt Ltd" and "... Private Limited" agree.
+        const firstWord = (t: string) => (t.toLowerCase().match(/[a-z0-9]+/) ?? [""])[0];
+        if (parsed.companyName && firstWord(parsed.companyName) !== firstWord(entity.name)) {
           throw new Error(
             `This Profit and Loss is headed "${parsed.companyName}", but this view is ${entity.name}. Switch to the right company and upload it again.`,
           );

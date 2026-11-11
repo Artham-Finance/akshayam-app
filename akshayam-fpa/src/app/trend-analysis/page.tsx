@@ -106,7 +106,6 @@ async function PerformanceTab({
   if (entity.verticalIds) {
     return <CompanyOnly what="The performance comparison" slice companies={entity.memberIds.length} />;
   }
-  if (entity.isGroup) return <CompanyOnly what="The performance comparison" />;
 
   const requestedFy = fy && /^\d{4}$/.test(fy) ? Number(fy) : null;
   const trend = await buildPerformanceTrend({
@@ -146,7 +145,7 @@ async function PerformanceTab({
             {periodLabel(trend.period)}, {chosen.label} against earlier years
           </CardTitle>
         </div>
-        <PerformanceTable columns={trend.columns} selectedFy={trend.fyStartYear} taxRate={trend.taxRate} />
+        <PerformanceTable columns={trend.columns} selectedFy={trend.fyStartYear} taxLabel={trend.taxLabel} />
       </Card>
 
       {trend.partialMonth && (
@@ -171,7 +170,9 @@ async function PerformanceTab({
         Revenue is fee income. Expenses are the costs of running the firm, depreciation and finance cost
         included. The line beneath them gathers what is neither: interest and other income, reimbursements recovered
         (net of what was spent) and non-operating items. Profit before tax = Revenue − Expenses + that line; tax is
-        {" "}{trend.taxRate}% of the period&apos;s profit before tax (nothing on a loss), and profit after tax is what is left.
+        {" "}charged at the company&apos;s rate on the period&apos;s profit before tax (nothing on a loss), and profit after tax is what is left.
+        {entity.isGroup &&
+          " The group is its two companies added together, each taxed at its own rate; a month counts only where both companies have figures. "}
         Any income-tax provision the accountant booked inside expenses is taken out, so every year is struck the
         same way. A month uploaded from the accountant&apos;s monthly Profit and Loss is read from it; any other month
         comes from the General Ledger.

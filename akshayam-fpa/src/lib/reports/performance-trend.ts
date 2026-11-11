@@ -1,9 +1,9 @@
 import { query } from "@/lib/db";
-import type { Entity } from "@/lib/entity";
+import { listAllEntities, type Entity } from "@/lib/entity";
 import { profitBeforeTax } from "@/lib/historical-pl";
 import { fyLabel, fyMonths, fyStartYearOf } from "@/lib/period";
 import { buildProfitAndLoss } from "@/lib/reports/statements";
-import { PRESENTATIONAL_TAX_RATE } from "@/lib/reports/presentational-tax";
+import { PRESENTATIONAL_TAX_LABEL, PRESENTATIONAL_TAX_RATE } from "@/lib/reports/presentational-tax";
 
 /**
  * Trend Analysis → Performance: Revenue, Expenses, Profit before tax and Profit after tax for a
@@ -25,6 +25,12 @@ import { PRESENTATIONAL_TAX_RATE } from "@/lib/reports/presentational-tax";
  *
  * Tax is struck on the period's own profit, not read from the books: the accountant's sheets
  * book none in most months, and where one was booked it is taken out.
+ *
+ * The group is its two companies added together, month by month, each with its own figures from
+ * whichever source it has and its own tax rate (the group files no return of its own). A month
+ * counts only where every company has figures for it: half a group is not the group. Neither
+ * company posts to an intercompany account in the profit and loss, so adding them is the same
+ * as consolidating them.
  */
 
 export type PeriodKind = "month" | "quarter" | "half" | "year";
@@ -119,6 +125,8 @@ export interface PerformanceColumn {
   /** the months with no figures, as labels */
   missing: string[];
   sources: MonthSource[];
+  /** the group only: the companies that lack figures for some month of the period */
+  lacking: string[];
   /** null when no month of the period has figures */
   figures: PerformanceFigures | null;
 }
@@ -127,7 +135,8 @@ export interface PerformanceTrend {
   period: PeriodChoice;
   fyStartYear: number;
   columns: PerformanceColumn[];
-  taxRate: number;
+  /** "Tax @ 35%", or for the group each company's own rate */
+  taxLabel: string;
   /** FYs the picker offers, newest first */
   financialYears: number[];
   /** the ledger's last posting date, or null where no ledger is held */
@@ -146,6 +155,12 @@ interface MonthFigures {
   expenses: number;
   other: number;
   source: MonthSource;
+}
+
+/** The companies a view is made of: itself if it is a company, its members if it is the group. */
+async function companiesOf(entity: Entity): Promise<Entity[]> {
+  if (!entity.isGroup) return [entity];
+  return (await listAllEntities()).filter((e) => !e.isGroup && entity.memberIds.includes(e.id));
 }
 
 function tax(f: { revenue: number; expenses: number; other: number }, rate = 35) {
@@ -246,10 +261,21 @@ export async function buildPerformanceTrend(opts: {
   const wanted: number[] = [];
   for (let y = Math.max(earliest, fyStart - 3); y <= fyStart; y++) wanted.push(y);
 
-  const { months, ledgerThrough } = await loadMonths(entity, wanted);
+  const companies = await companiesOf(entity);
+  const loaded: { company: Entity; months: Map<string, MonthFigures>; ledgerThrough: string | null }[] = [];
+  for (const company of companies) loaded.push({ company, ...(await loadMonths(company, wanted)) });
+
+  // A month is the group's only where every company has it.
+  const monthKeys = new Set<string>();
+  for (const key of loaded[0]?.months.keys() ?? []) {
+    if (loaded.every((l) => l.months.has(key))) monthKeys.add(key);
+  }
+  const sourcesOf = (key: string) => loaded.map((l) => l.months.get(key)!.source);
+  const ledgerThroughs = loaded.map((l) => l.ledgerThrough).filter((d): d is string => d !== null);
+  const ledgerThrough = ledgerThroughs.length > 0 ? ledgerThroughs.reduce((a, b) => (a < b ? a : b)) : null;
 
   // The latest month that has figures at all, for the picker's default.
-  const latestMonth = [...months.keys()].sort().pop() ?? null;
+  const latestMonth = [...monthKeys].sort().pop() ?? null;
 
   // A period was picked, or default to the latest month with figures.
   let period = opts.period;
@@ -258,27 +284,43 @@ export async function buildPerformanceTrend(opts: {
     period = { kind: "month", n: idx > 0 ? idx : 1 };
   }
   const indexes = periodMonthIndexes(period);
-  const rate = PRESENTATIONAL_TAX_RATE[entity.slug] ?? 35;
+  const rateOf = (company: Entity) => PRESENTATIONAL_TAX_RATE[company.slug] ?? 35;
+  const taxLabel =
+    companies.length === 1
+      ? `Tax @ ${rateOf(companies[0])}%`
+      : `Tax (${companies.map((c) => `${PRESENTATIONAL_TAX_LABEL[c.slug] ?? c.name} @ ${rateOf(c)}%`).join(" + ")})`;
 
   const columns: PerformanceColumn[] = wanted.map((fy) => {
     const all = fyMonths(fy);
     const span = indexes.map((i) => all[i - 1]);
-    const have = span.filter((m) => months.has(m.key));
-    const sum = have.reduce(
-      (t, m) => {
-        const f = months.get(m.key)!;
-        return { revenue: t.revenue + f.revenue, expenses: t.expenses + f.expenses, other: t.other + f.other };
-      },
-      { revenue: 0, expenses: 0, other: 0 },
-    );
+    const have = span.filter((m) => monthKeys.has(m.key));
+
+    // Each company's own period, taxed at its own rate, then added up.
+    const total: PerformanceFigures = { revenue: 0, expenses: 0, other: 0, pbt: 0, tax: 0, pat: 0 };
+    for (const l of loaded) {
+      const sum = have.reduce(
+        (t, m) => {
+          const f = l.months.get(m.key)!;
+          return { revenue: t.revenue + f.revenue, expenses: t.expenses + f.expenses, other: t.other + f.other };
+        },
+        { revenue: 0, expenses: 0, other: 0 },
+      );
+      const struck = { ...sum, ...tax(sum, rateOf(l.company)) };
+      for (const k of Object.keys(total) as (keyof PerformanceFigures)[]) total[k] += struck[k];
+    }
+
     return {
       fyStartYear: fy,
       label: fyLabel(fy),
       monthLabels: span.map((m) => m.label),
       monthsWithData: have.length,
-      missing: span.filter((m) => !months.has(m.key)).map((m) => m.label),
-      sources: [...new Set(have.map((m) => months.get(m.key)!.source))],
-      figures: have.length === 0 ? null : { ...sum, ...tax(sum, rate) },
+      missing: span.filter((m) => !monthKeys.has(m.key)).map((m) => m.label),
+      sources: [...new Set(have.flatMap((m) => sourcesOf(m.key)))],
+      lacking:
+        companies.length > 1
+          ? loaded.filter((l) => span.some((m) => !l.months.has(m.key))).map((l) => PRESENTATIONAL_TAX_LABEL[l.company.slug] ?? l.company.name)
+          : [],
+      figures: have.length === 0 ? null : total,
     };
   });
 
@@ -286,12 +328,12 @@ export async function buildPerformanceTrend(opts: {
   if (ledgerThrough) {
     const selected = fyMonths(fyStart);
     const inPeriod = indexes.map((i) => selected[i - 1]).find((m) => m.key === ledgerThrough.slice(0, 7));
-    if (inPeriod && months.get(inPeriod.key)?.source === "ledger" && ledgerThrough < inPeriod.end) {
+    if (inPeriod && monthKeys.has(inPeriod.key) && sourcesOf(inPeriod.key).includes("ledger") && ledgerThrough < inPeriod.end) {
       partialMonth = { label: inPeriod.label, through: ledgerThrough };
     }
   }
 
-  return { period, fyStartYear: fyStart, columns, taxRate: rate, financialYears, ledgerThrough, latestMonth, partialMonth };
+  return { period, fyStartYear: fyStart, columns, taxLabel, financialYears, ledgerThrough, latestMonth, partialMonth };
 }
 
 /** The financial year a "YYYY-MM" month falls in. */
