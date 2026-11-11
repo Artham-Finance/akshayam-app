@@ -20,6 +20,7 @@ import type { ReimbursementExpenseParseResult } from "@/lib/parse/reimbursement-
 import type { RevenueTransferParseResult } from "@/lib/parse/revenue-transfer";
 import type { OsbExpenseParseResult } from "@/lib/parse/osb-expenses";
 import type { TdsCorrectionParseResult, TdsCorrectionRow } from "@/lib/parse/tds-corrections";
+import type { HistoricalPlParseResult } from "@/lib/parse/historical-pl";
 
 /**
  * Committing a parsed file into the database.
@@ -1007,6 +1008,42 @@ export async function commitTdsCorrections(
       ["entity_id", "upload_id", "customer", "from_vertical_id", "to_vertical_id", "fy", "instruction", "sheet_row"],
       resolved.map(({ row, from, to }) => [
         entityId, uploadId, row.customer, from, to, row.fy, row.instruction, row.sheetRow,
+      ]),
+    );
+
+    return { uploadId, rowsInserted, newAccounts: [], newVerticals: [], needsReview: [] };
+  });
+}
+
+/**
+ * Load the months of a historical P&L. A month already held for the company is replaced by the
+ * file's; every other month is left alone, so a year's file can be sent on its own and the three
+ * years built up one after another.
+ */
+export async function commitHistoricalPl(
+  entityId: number,
+  parsed: HistoricalPlParseResult,
+  meta: FileMeta,
+): Promise<CommitResult> {
+  return transaction(async (client) => {
+    const first = `${parsed.detected.firstMonth}-01`;
+    const last = `${parsed.detected.lastMonth}-01`;
+    const uploadId = await createUpload(
+      client, entityId, "historical_pl", meta, first, last,
+      parsed.months.length, { detected: parsed.detected, warnings: parsed.warnings },
+    );
+
+    await client.query(
+      "delete from historical_pl_months where entity_id = $1 and month = any($2::date[])",
+      [entityId, parsed.months.map((m) => `${m.month}-01`)],
+    );
+    const rowsInserted = await bulkInsert(
+      client,
+      "historical_pl_months",
+      ["entity_id", "month", "upload_id", "sheet_name", "revenue", "expenses", "other_net", "tax_booked", "reported_net", "lines"],
+      parsed.months.map((m) => [
+        entityId, `${m.month}-01`, uploadId, m.sheetName, m.revenue, m.expenses, m.otherNet,
+        m.taxBooked, m.reportedNet, JSON.stringify(m.lines),
       ]),
     );
 
