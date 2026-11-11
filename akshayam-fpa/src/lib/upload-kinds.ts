@@ -156,6 +156,22 @@ export const UPLOAD_KINDS: Omit<UploadKindInfo, "lastUpload">[] = [
     companies: ["rbjv"],
   },
   {
+    kind: "historical_pl",
+    title: "Past years' monthly Profit and Loss",
+    zohoPath: "Reports → Accountant → Profit and Loss (accrual basis), one sheet per month",
+    blurb:
+      "For RBJV: the accountant's monthly Profit and Loss for earlier years, one sheet per month - the three " +
+      "financial years' files can be sent one at a time or together. They feed Trend Analysis → Performance, " +
+      "which compares any month, quarter or half year with the same period of the years before on Revenue, " +
+      "Expenses, Profit before tax and Profit after tax (35% tax). A month in these files is read from them; " +
+      "a month not in them is read from the General Ledger, so the current year needs nothing here. An " +
+      "income-tax provision booked inside expenses is taken out, so profit is shown before tax. Re-uploading " +
+      "a month replaces it; other months are left alone.",
+    cadence: "Once, for past years",
+    needsAsOf: false,
+    companies: ["rbjv"],
+  },
+  {
     kind: "reimbursement_bills",
     title: "Bills — item-wise (for RE / RI reconciliation)",
     zohoPath: "Purchases → Bills → Export (item-wise), or Settings → Import/Export → Export Data",

@@ -9,6 +9,7 @@ import {
   commitBudget,
   commitCreditNotes,
   commitGeneralLedger,
+  commitHistoricalPl,
   commitInvoices,
   commitOsbExpenses,
   commitPayments,
@@ -22,6 +23,7 @@ import {
 } from "@/lib/ingest";
 import { parseBudgetWorkbook } from "@/lib/parse/budget";
 import { parseGeneralLedger } from "@/lib/parse/gl";
+import { parseHistoricalPl } from "@/lib/parse/historical-pl";
 import { parseOsbExpenses } from "@/lib/parse/osb-expenses";
 import { parseReimbursementBills } from "@/lib/parse/reimbursement-bills";
 import { parseReimbursementExpense } from "@/lib/parse/reimbursement-expense";
@@ -41,7 +43,7 @@ export const maxDuration = 300;
 const KINDS = [
   "gl", "opening_tb", "invoices", "payments", "ar_aging", "credit_notes", "retainers",
   "budget", "tds_26as", "reimbursement_bills", "reimbursement_expense_txns", "osb_entries",
-  "osb_expenses", "tds_corrections",
+  "osb_expenses", "tds_corrections", "historical_pl",
 ] as const;
 type Kind = (typeof KINDS)[number];
 
@@ -325,6 +327,30 @@ export async function POST(request: Request) {
         notes = effect.notes;
         warnings.push(...effect.warnings);
         summary = { corrections: parsed.rows.length };
+        break;
+      }
+      case "historical_pl": {
+        const parsed = await parseHistoricalPl(bytes);
+        // The heading names the company; a P&L of another company must not land in this one's history.
+        const squash = (t: string) => t.toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (parsed.companyName && !squash(entity.name).includes(squash(parsed.companyName)) && !squash(parsed.companyName).includes(squash(entity.name))) {
+          throw new Error(
+            `This Profit and Loss is headed "${parsed.companyName}", but this view is ${entity.name}. Switch to the right company and upload it again.`,
+          );
+        }
+        result = await commitHistoricalPl(entity.id, parsed, meta);
+        warnings = parsed.warnings;
+        detected = parsed.detected;
+        summary = { firstMonth: parsed.detected.firstMonth, lastMonth: parsed.detected.lastMonth, months: parsed.months.length };
+        notes = [
+          `Loaded ${parsed.months.length} month(s), ${parsed.detected.firstMonth} to ${parsed.detected.lastMonth}. They now show on Trend Analysis → Performance in place of the ledger for those months.`,
+        ];
+        const taxed = parsed.months.filter((m) => m.taxBooked !== 0);
+        if (taxed.length > 0) {
+          notes.push(
+            `Income-tax provision booked inside expenses was taken out (${taxed.map((m) => m.month).join(", ")}): profit is shown before tax, and tax is applied at the company's rate.`,
+          );
+        }
         break;
       }
       default:
