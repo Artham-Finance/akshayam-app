@@ -11,12 +11,11 @@ import { hasRevisedBudget, revisedRevenueByMonth } from "@/lib/reports/scorecard
  * Budget versus actual, down the P&L.
  *
  * The layout is the firm's own, and shorter than the statement pages: revenue,
- * three cost lines, EBITDA, what sits below it, and the drawings that take
- * profit out to the partners. It stops where the partners' question stops -
- * what was left, and what is left after they took theirs.
+ * three cost lines, EBITDA, and what sits below it. It stops at Profit after
+ * tax: partners' drawings and reserves and surplus are not shown.
  *
  * Budget and actual are the same definition on both sides. Neither column
- * stores its subtotals: EBITDA, PBT, PAT and retained profit are computed here
+ * stores its subtotals: EBITDA, PBT and PAT are computed here
  * from the lines, so a budget total can never be struck differently from the
  * actual beside it.
  */
@@ -37,9 +36,7 @@ export type BvaCode =
   | "finance_cost"
   | "pbt"
   | "tax"
-  | "pat"
-  | "partner_drawings"
-  | "retained";
+  | "pat";
 
 export interface BvaLine {
   code: BvaCode;
@@ -114,9 +111,8 @@ const LAYOUT: {
   { code: "finance_cost", name: "Interest expenses", sign: -1 },
   { code: "pbt", name: "Profit before tax", sign: 1, subtotalOf: ["ebitda", "depreciation", "finance_cost"] },
   { code: "tax", name: "Tax", sign: -1 },
+  // The statement ends at Profit after tax: partners' drawings and reserves and surplus are not shown.
   { code: "pat", name: "Profit after tax", sign: 1, subtotalOf: ["pbt", "tax"] },
-  { code: "partner_drawings", name: "Partners' drawings", sign: -1 },
-  { code: "retained", name: "Reserves and surplus", sign: 1, subtotalOf: ["pat", "partner_drawings"] },
 ];
 
 /**
@@ -138,7 +134,6 @@ const GROUP_TO_LINE: Record<string, BvaCode> = {
   depreciation: "depreciation",
   finance_cost: "finance_cost",
   tax: "tax",
-  partner_drawings: "partner_drawings",
 };
 
 const empty = (months: FyMonth[]) => Object.fromEntries(months.map((m) => [m.key, 0]));
@@ -320,16 +315,6 @@ export async function buildBudgetVsActualPnl(opts: {
     if (revisedRevenue) byCode.get("revenue")!.budget = revisedRevenue;
   }
 
-  /**
-   * Partners take their budgeted draw every month. It is a balance-sheet
-   * movement, not a P&L cost, so the ledger's P&L never carries it and the
-   * actual would otherwise read nil against a real budget - a variance that is
-   * only ever "not booked here". The firm's convention is that the draw is
-   * taken as planned, so the actual follows the budget, month by month.
-   */
-  const drawings = byCode.get("partner_drawings")!;
-  for (const m of months) drawings.actual[m.key] = drawings.budget[m.key];
-
   const commonCostApportionment = byCode.get("common_cost_apportionment")!;
   for (const row of commonCostActualRows) {
     if (!valid.has(row.month_key)) continue;
@@ -337,7 +322,7 @@ export async function buildBudgetVsActualPnl(opts: {
   }
 
   // Recomputes one subtotal from the lines under it. Pulled out so the tax
-  // line below can be filled in after the fact and PAT/retained struck again
+  // line below can be filled in after the fact and PAT struck again
   // from it, without repeating this loop by hand.
   const recompute = (code: BvaCode) => {
     const spec = LAYOUT.find((l) => l.code === code)!;
@@ -392,7 +377,6 @@ export async function buildBudgetVsActualPnl(opts: {
       }
     }
     recompute("pat");
-    recompute("retained");
   }
 
   // Nothing transferred in the window: the two lines would be a row of dashes.

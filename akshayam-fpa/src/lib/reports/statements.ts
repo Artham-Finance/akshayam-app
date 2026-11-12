@@ -50,9 +50,11 @@ export {
 
 async function loadGroups(entityId: number, statement: "pnl" | "bs" | "cf"): Promise<GroupRow[]> {
   return query<GroupRow>(
+    // The P&L ends at Profit After Tax: the Retained Profit line below it is not shown.
     `select code, name, sort_order, is_subtotal, subtotal_of, sign
        from report_groups
       where entity_id = $1 and statement = $2
+        and not (statement = 'pnl' and code = 'retained_profit')
       order by sort_order`,
     [entityId, statement],
   );
