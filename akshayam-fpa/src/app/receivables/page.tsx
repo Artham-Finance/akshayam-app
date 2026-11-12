@@ -41,6 +41,8 @@ import {
 import { buildCustomerStatement, listCustomers } from "@/lib/reports/customer-statement";
 import { buildDscToken } from "@/lib/reports/dsc-token";
 import { buildUnadjustedCreditDetail } from "@/lib/reports/unadjusted-credit";
+import { buildBadDebts } from "@/lib/reports/bad-debts";
+import { BadDebtsTable, rupees } from "@/components/BadDebtsTable";
 import { fyBounds, fyLabel, fyMonths, fyStartYearOf, type QuarterNo } from "@/lib/period";
 import { requireEntityAccess, requireReportAccess } from "@/lib/auth/dal";
 
@@ -231,6 +233,14 @@ export default async function ReceivablesPage({
      */
     const statementFy = fyStartYearOf(new Date(`${asOf}T00:00:00`));
 
+    // What was written off as bad debt in that year, up to the snapshot - gone from the open book, so
+    // it is shown beside it rather than in it.
+    const badDebts = await buildBadDebts({
+      entity,
+      window: { start: fyBounds(statementFy).start, end: asOf },
+      verticalId,
+    });
+
     /**
      * The TDS reconciliation's own quarter - Form 26AS is downloaded once a
      * quarter, so the reconciliation is struck one at a time rather than
@@ -307,7 +317,7 @@ export default async function ReceivablesPage({
     // Unadjusted credit gets its own expand-per-party table below instead of
     // this generic panel, so it is excluded here.
     const drill = typeof params.drill === "string" ? params.drill : null;
-    const chosen = isDrill("receivables", drill) && drill !== "unadjustedCredit"
+    const chosen = isDrill("receivables", drill) && drill !== "unadjustedCredit" && drill !== "badDebts"
       ? await runDrill({
           kind: "receivables",
           drill,
@@ -584,6 +594,46 @@ export default async function ReceivablesPage({
               These are amounts received from customers that have not been adjusted against any
               invoice, spread across {unadjustedCredit.parties.length} customer ledger(s). They
               are not included in the outstanding totals above.
+            </Notice>
+          )}
+
+          {drill === "badDebts" && (
+            <DrillPanel
+              title="Bad debts written off"
+              subtitle={
+                <>
+                  {fyLabel(statementFy)}, up to {dateLabel(asOf)}
+                  {verticalName ? ` · ${verticalName}` : ""}
+                </>
+              }
+              closeHref={withParams("/receivables", params, { drill: null })}
+              shown={badDebts.rows.length}
+              total={badDebts.rows.length}
+            >
+              <BadDebtsTable data={badDebts} />
+            </DrillPanel>
+          )}
+
+          {badDebts.count > 0 && (
+            <Notice
+              tone="info"
+              title={`Rs ${rupees(badDebts.total)} bad debts written off`}
+              action={
+                <Link
+                  href={withParams("/receivables", params, {
+                    vertical: null,
+                    drill: drill === "badDebts" ? null : "badDebts",
+                    customer: null,
+                  })}
+                  scroll={false}
+                  className="whitespace-nowrap rounded-md border border-navy/25 px-2.5 py-1.5 text-[12px] font-medium hover:bg-navy/5"
+                >
+                  {drill === "badDebts" ? "Close" : "Show them"}
+                </Link>
+              }
+            >
+              {badDebts.count} invoice(s) of {badDebts.customers} customer(s) were written off as bad debts in{" "}
+              {fyLabel(statementFy)}, up to {dateLabel(asOf)}. They are not in the outstanding totals above.
             </Notice>
           )}
 

@@ -29,6 +29,8 @@ import { buildBudgetVsActual } from "@/lib/reports/budget";
 import { isDrill, runDrill, UNTRACEABLE_RECEIPT } from "@/lib/reports/drilldowns";
 import { listCustomers } from "@/lib/reports/customer-statement";
 import { cmrgaCollected } from "@/lib/reports/cmrga-receivables";
+import { badDebtsWrittenOff } from "@/lib/reports/bad-debts";
+import { rupees } from "@/components/BadDebtsTable";
 import { requireEntityAccess, requireReportAccess } from "@/lib/auth/dal";
 
 export const dynamic = "force-dynamic";
@@ -316,6 +318,12 @@ export default async function CollectionsPage({
       { start: leadWindow.start, end: leadWindow.end },
       verticalId,
     );
+    // What was written off as bad debt over the same window, for the vertical (or the company).
+    const writtenOff = await badDebtsWrittenOff(
+      entity,
+      { start: leadWindow.start, end: leadWindow.end },
+      verticalId,
+    );
     const headline = {
       annual: budget.total.annual,
       ...(period.cumulative ? budget.total.cumulative! : budget.total.period),
@@ -384,6 +392,9 @@ export default async function CollectionsPage({
                     <span className="mt-1 block">
                       Actuals include amount collected from CMRGA receivables of Rs {money(fromCmrga)}
                     </span>
+                  )}
+                  {writtenOff !== null && (
+                    <span className="mt-1 block">Bad debts written off: Rs {rupees(writtenOff)}</span>
                   )}
                 </>
               }

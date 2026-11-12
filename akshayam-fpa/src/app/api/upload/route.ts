@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { getEntity } from "@/lib/entity";
 import {
   commitArAging,
+  commitBadDebts,
   commitTds26as,
   commitBudget,
   commitCreditNotes,
@@ -22,6 +23,7 @@ import {
   type CommitResult,
 } from "@/lib/ingest";
 import { parseBudgetWorkbook } from "@/lib/parse/budget";
+import { parseBadDebts } from "@/lib/parse/bad-debts";
 import { parseGeneralLedger } from "@/lib/parse/gl";
 import { parseHistoricalPl } from "@/lib/parse/historical-pl";
 import { parseOsbExpenses } from "@/lib/parse/osb-expenses";
@@ -43,7 +45,7 @@ export const maxDuration = 300;
 const KINDS = [
   "gl", "opening_tb", "invoices", "payments", "ar_aging", "credit_notes", "retainers",
   "budget", "tds_26as", "reimbursement_bills", "reimbursement_expense_txns", "osb_entries",
-  "osb_expenses", "tds_corrections", "historical_pl",
+  "osb_expenses", "tds_corrections", "historical_pl", "bad_debts",
 ] as const;
 type Kind = (typeof KINDS)[number];
 
@@ -327,6 +329,21 @@ export async function POST(request: Request) {
         notes = effect.notes;
         warnings.push(...effect.warnings);
         summary = { corrections: parsed.rows.length };
+        break;
+      }
+      case "bad_debts": {
+        const parsed = await parseBadDebts(bytes);
+        result = await commitBadDebts(entity.id, parsed, meta);
+        warnings = parsed.warnings;
+        detected = parsed.detected;
+        const total = parsed.rows.reduce((s, r) => s + r.amount, 0);
+        summary = { period: [parsed.periodStart, parsed.periodEnd], rows: parsed.rows.length, total };
+        notes = [
+          `Loaded ${parsed.rows.length} write-off(s), ${parsed.periodStart} to ${parsed.periodEnd}. They show on Receivables, and as a note on the Collections Actual card.`,
+        ];
+        if (!parsed.detected.verticalColumn) {
+          notes.push("The sheet has no Vertical column, so these belong to the company as a whole.");
+        }
         break;
       }
       case "historical_pl": {
