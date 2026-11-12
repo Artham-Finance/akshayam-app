@@ -21,6 +21,7 @@ import type { RevenueTransferParseResult } from "@/lib/parse/revenue-transfer";
 import type { OsbExpenseParseResult } from "@/lib/parse/osb-expenses";
 import type { TdsCorrectionParseResult, TdsCorrectionRow } from "@/lib/parse/tds-corrections";
 import type { HistoricalPlParseResult } from "@/lib/parse/historical-pl";
+import type { BadDebtParseResult } from "@/lib/parse/bad-debts";
 
 /**
  * Committing a parsed file into the database.
@@ -1044,6 +1045,64 @@ export async function commitHistoricalPl(
       parsed.months.map((m) => [
         entityId, `${m.month}-01`, uploadId, m.sheetName, m.revenue, m.expenses, m.otherNet,
         m.taxBooked, m.reportedNet, JSON.stringify(m.lines),
+      ]),
+    );
+
+    return { uploadId, rowsInserted, newAccounts: [], newVerticals: [], needsReview: [] };
+  });
+}
+
+/**
+ * Load the bad debts written off. A file replaces exactly the dates it covers and leaves every other
+ * date alone. A row that names a vertical the company does not have refuses the whole file: a
+ * write-off quietly left off a vertical's figure would be wrong where it is read. A row with no
+ * vertical (Akshayam's sheet has none) belongs to the company as a whole.
+ */
+export async function commitBadDebts(
+  entityId: number,
+  parsed: BadDebtParseResult,
+  meta: FileMeta,
+): Promise<CommitResult> {
+  return transaction(async (client) => {
+    const uploadId = await createUpload(
+      client, entityId, "bad_debts", meta, parsed.periodStart, parsed.periodEnd,
+      parsed.rows.length, { detected: parsed.detected, warnings: parsed.warnings },
+    );
+
+    const { rows: verticals } = await client.query<{ id: number; code: string }>(
+      "select id, code from verticals where entity_id = $1",
+      [entityId],
+    );
+    const resolveVertical = (text: string): number | null => {
+      const byCode = verticalFromText(text, verticals);
+      if (byCode !== null) return byCode;
+      // "Bhuvana Partner Contribution": a partner's contribution is booked to Common.
+      if (/partner/i.test(text)) return verticals.find((v) => v.code.toUpperCase() === "COMMON")?.id ?? null;
+      return null;
+    };
+
+    const unknown = new Set<string>();
+    const resolved = parsed.rows.map((row) => {
+      const vertical = row.vertical === null ? null : resolveVertical(row.vertical);
+      if (row.vertical !== null && vertical === null) unknown.add(row.vertical);
+      return { row, vertical };
+    });
+    if (unknown.size > 0) {
+      throw new Error(
+        `Some verticals in the sheet were not recognised: ${[...unknown].map((u) => `"${u}"`).join(", ")}. Nothing was changed.`,
+      );
+    }
+
+    await client.query(
+      "delete from bad_debts where entity_id = $1 and written_off_on between $2 and $3",
+      [entityId, parsed.periodStart, parsed.periodEnd],
+    );
+    const rowsInserted = await bulkInsert(
+      client,
+      "bad_debts",
+      ["entity_id", "upload_id", "written_off_on", "reference", "customer", "vertical_id", "amount", "sheet_row"],
+      resolved.map(({ row, vertical }) => [
+        entityId, uploadId, row.writtenOffOn, row.reference, row.customer, vertical, row.amount, row.sheetRow,
       ]),
     );
 

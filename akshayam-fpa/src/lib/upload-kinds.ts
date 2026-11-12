@@ -172,6 +172,22 @@ export const UPLOAD_KINDS: Omit<UploadKindInfo, "lastUpload">[] = [
     companies: ["rbjv", "akshayam"],
   },
   {
+    kind: "bad_debts",
+    title: "Bad debts written off",
+    zohoPath: "Reports → Accountant → Account Transactions, for the Bad Debts account",
+    blurb:
+      "For RBJV and Akshayam, each on its own view: the invoices written off as bad debts - date, " +
+      "reference (invoice number), amount (debit), customer and, for RBJV, the vertical. They show as a card " +
+      "on Receivables, between unadjusted credit and the items without a vertical, with the list behind it, " +
+      "and as a note under the Actual figure on Collections (\"Bad debts written off\") for the vertical " +
+      "they belong to. Akshayam's sheet has no vertical, so its write-offs belong to the company. A file " +
+      "replaces exactly the dates it covers and leaves every other date alone, so a cumulative sheet can be " +
+      "sent again and a month's sheet can be sent on its own.",
+    cadence: "As written off",
+    needsAsOf: false,
+    companies: ["rbjv", "akshayam"],
+  },
+  {
     kind: "reimbursement_bills",
     title: "Bills — item-wise (for RE / RI reconciliation)",
     zohoPath: "Purchases → Bills → Export (item-wise), or Settings → Import/Export → Export Data",
