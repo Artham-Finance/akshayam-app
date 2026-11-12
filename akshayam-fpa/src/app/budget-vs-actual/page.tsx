@@ -375,12 +375,11 @@ export default async function BudgetVsActualPage({
 
     // Lines the budget carries but the ledger has not yet posted - only the
     // ones where that is expected and explained by audit timing: depreciation
-    // and tax land once a year at audit, and drawings may be booked to the
-    // balance sheet instead of the P&L. A real operating line (team cost,
+    // and tax land once a year at audit. A real operating line (team cost,
     // establishment cost, other expenses) reading nil for the period is a
     // ledger question worth asking, not timing, so it is left off this notice
     // rather than explained away by a line that does not apply to it.
-    const AUDIT_TIMING_CODES = new Set(["depreciation", "tax", "partner_drawings"]);
+    const AUDIT_TIMING_CODES = new Set(["depreciation", "tax"]);
     const notYetPosted = (statement?.lines ?? [])
       .filter(
         (l) =>
