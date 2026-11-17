@@ -6,7 +6,7 @@ import { WeeklyReceivables } from "@/components/WeeklyReceivables";
 import { WeeklyRatingsTable } from "@/components/WeeklyRatingsTable";
 import { TdsReceivablesTable } from "@/components/TdsReceivablesTable";
 import { CmrgaReceivablesTable } from "@/components/CmrgaReceivablesTable";
-import { Card, CardTitle, EmptyState, Notice, PageHeader } from "@/components/ui";
+import { Card, CardTitle, DownloadExcel, EmptyState, Notice, PageHeader } from "@/components/ui";
 import { getEntity, getVerticalsInScope } from "@/lib/entity";
 import { ROWS, scorecardRowCodeFor } from "@/lib/reports/scorecard";
 import { dateLabel } from "@/lib/format";
@@ -211,10 +211,15 @@ export default async function WeeklyRatingsPage({
             </EmptyState>
           ) : data ? (
             <Card padded={false}>
-              <div className="px-4 pt-4 sm:px-5">
+              <div className="flex flex-wrap items-center justify-between gap-3 px-4 pt-4 sm:px-5">
                 <CardTitle hint={`${dateLabel(data.weekStart)} - ${dateLabel(data.weekEnd)}`}>
                   {WEEKLY_MEASURE_LABEL[measure]} — week ended {dateLabel(weekEnd)}
                 </CardTitle>
+                {/* One workbook for the management review: revenue and collection, for the week and vertical in view. */}
+                <DownloadExcel
+                  href={`/api/export/weekly-ratings?week=${weekEnd}&meeting=${meetingDate}${verticalId === null ? "" : `&vertical=${verticalId}`}`}
+                  label="Download Excel — revenue & collection"
+                />
               </div>
               <WeeklyRatingsTable
                 rows={data.rows}
