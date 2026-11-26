@@ -158,6 +158,33 @@ free -m
 App environment lives in `/app/akshayam-fpa/.env.local` (mode 0600). It is read
 both by `next start` and by `npm run db:migrate`.
 
+## Monday and Friday evening email update
+
+Each user flagged `users.receives_update` (migration 083 flags Bhuvana alone, for the trial; add
+others with `update users set receives_update = true where email = '...'`) is emailed at 7 pm India
+time on Mondays and Fridays: revenue and collection
+(week / month / year to date against budget) and receivables by age, for the companies, group or
+partner slices they have access to, and only the reports their access allows. The app's own timer
+sends it (see `src/instrumentation.ts`); each day is claimed in `digest_runs`, so a restart cannot
+send it twice. Nothing is sent until it is switched on in `/app/akshayam-fpa/.env.local`:
+
+```
+DIGEST_ENABLED=true
+SMTP_HOST=email-smtp.ap-south-1.amazonaws.com   # Amazon SES, or any SMTP provider
+SMTP_PORT=587                                   # 465 with SMTP_SECURE=true
+SMTP_USER=...
+SMTP_PASS=...
+SMTP_FROM="Akshayam Group Reporting <reports@your-domain>"   # must be a verified sender
+APP_URL=https://akshayam.artham.app             # optional: the "Open the dashboard" link
+DIGEST_HOUR=19                                  # optional: hour, India time (default 19)
+DIGEST_TEST_TO=you@your-domain                  # optional: send everything to this one address
+```
+
+Then `pm2 restart akshayam --update-env`. Rehearse first with `DIGEST_TEST_TO` set: signed in as an
+admin, open `/api/digest/run` to see your own update in the browser, and POST
+`/api/digest/run?to=me` to have it emailed to yourself. `?to=all` sends to everyone now. Remove
+`DIGEST_TEST_TO` to go live. A run's outcome is in the `digest_runs` table and the PM2 log.
+
 ## Teardown
 
 ```bash

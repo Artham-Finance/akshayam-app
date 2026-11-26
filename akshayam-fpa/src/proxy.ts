@@ -25,8 +25,11 @@ const SESSION_COOKIE = "fpa_session";
  * `/api/version` is here so the deploy's smoke test can ask the running app
  * which commit it was built from before it has any way to sign in. It answers
  * with a commit SHA of a public repository and nothing else.
+ *
+ * `/api/digest/run` is here because the app's own timer calls it without a session; the route
+ * itself accepts only that timer's secret or a signed-in admin.
  */
-const PUBLIC_PATHS = ["/login", "/api/version"];
+const PUBLIC_PATHS = ["/login", "/api/version", "/api/digest/run"];
 
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
