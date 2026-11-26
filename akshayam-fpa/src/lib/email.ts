@@ -31,6 +31,8 @@ function transporter(): Transporter {
 
 export async function sendEmail(message: {
   to: string;
+  /** blind copies, comma separated */
+  bcc?: string;
   subject: string;
   html: string;
   text: string;

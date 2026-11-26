@@ -26,7 +26,7 @@ export interface DigestOutcome {
   skipped: number;
   errors: { email: string; error: string }[];
   /** the rendered mails, for a dry run (nothing is sent) */
-  previews: { to: string; subject: string; html: string }[];
+  previews: { to: string; bcc: string | null; subject: string; html: string }[];
 }
 
 export interface Recipient {
@@ -35,6 +35,8 @@ export interface Recipient {
   name: string | null;
   entityIds: number[];
   reports: string[];
+  /** addresses blind-copied on this person's update */
+  copyTo: string | null;
 }
 
 export function digestEnabled(): boolean {
@@ -59,8 +61,9 @@ export async function recipients(): Promise<Recipient[]> {
     name: string | null;
     entity_ids: number[] | null;
     report_codes: string[] | null;
+    update_copy_to: string | null;
   }>(
-    `select u.id, u.email, u.name,
+    `select u.id, u.email, u.name, u.update_copy_to,
             array_remove(array_agg(distinct ue.entity_id), null) as entity_ids,
             array_remove(array_agg(distinct ura.report_code), null) as report_codes
        from users u
@@ -76,17 +79,19 @@ export async function recipients(): Promise<Recipient[]> {
     name: r.name,
     entityIds: r.entity_ids ?? [],
     reports: r.report_codes ?? [],
+    copyTo: r.update_copy_to?.trim() || null,
   }));
 }
 
 /** Who is signed up and what each would be sent - for an admin to check before anything goes out. */
 export async function describeRecipients(): Promise<
-  { email: string; name: string | null; entities: string[]; sections: string[] }[]
+  { email: string; name: string | null; copyTo: string | null; entities: string[]; sections: string[] }[]
 > {
   const byId = new Map((await listAllEntities()).map((e) => [e.id, e]));
   return (await recipients()).map((r) => ({
     email: r.email,
     name: r.name,
+    copyTo: r.copyTo,
     entities: dedupe(r.entityIds.map((id) => byId.get(id)).filter((e): e is Entity => !!e)).map((e) => e.name),
     sections: [
       ...(r.reports.includes("revenue") ? ["revenue"] : []),
@@ -198,10 +203,12 @@ export async function runDigest(opts: {
         const mail = renderDigestEmail({ recipientName: person.name, contents, show, asOf, appUrl });
         const to = testTo ?? person.email;
         const subject = testTo ? `[Test, for ${person.email}] ${mail.subject}` : mail.subject;
+        // A rehearsal goes to one address only; the copies are for the real send.
+        const bcc = testTo ? null : person.copyTo;
         if (opts.dryRun) {
-          outcome.previews.push({ to, subject, html: mail.html });
+          outcome.previews.push({ to, bcc, subject, html: mail.html });
         } else {
-          await sendEmail({ to, subject, html: mail.html, text: mail.text });
+          await sendEmail({ to, ...(bcc ? { bcc } : {}), subject, html: mail.html, text: mail.text });
           outcome.sent++;
         }
       } catch (err) {
