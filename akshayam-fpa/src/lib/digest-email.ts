@@ -1,6 +1,7 @@
 import { dateLabel, money, moneySigned, percent } from "@/lib/format";
 import type { DigestAgeRow, DigestContent, DigestPeriod } from "@/lib/reports/digest";
 import type { BudgetRow } from "@/lib/reports/budget";
+import { ROWS, scorecardRowCodeFor } from "@/lib/reports/scorecard";
 
 /**
  * The update, as an email: one block per company or slice the reader may see, and in it, only
@@ -121,14 +122,115 @@ function entityBlock(c: DigestContent, show: DigestSections): string {
   return parts.join("");
 }
 
+/* ---------- the same figures, a card to each vertical ---------- */
+
+const ZERO_CELLS: BudgetRow["period"] = {
+  periodBudget: 0,
+  actual: 0,
+  variance: 0,
+  achievement: null,
+  retainership: null,
+  professional: null,
+};
+
+/** A vertical's head, as the scorecard names the row ("Vijay - DLR"), or null where it has none. */
+function headOf(code: string | null): string | null {
+  const row = code ? ROWS.find((r) => r.code === scorecardRowCodeFor(code)) : undefined;
+  return row?.label.includes(" - ") ? row.label.split(" - ")[0] : null;
+}
+
+function cellsRow(label: string, c: BudgetRow["period"]): string {
+  const tone = c.periodBudget === 0 && c.actual === 0 ? "m" : c.variance >= 0 ? "g" : "x";
+  return `<tr>${td(esc(label), { align: "left", bold: true })}${td(money(c.periodBudget))}${td(money(c.actual))}${td(moneySigned(c.variance), { tone })}${td(c.achievement === null ? "-" : percent(c.achievement), { tone })}</tr>`;
+}
+
+function verticalCards(c: DigestContent, show: DigestSections): string {
+  interface Card {
+    key: string;
+    code: string | null;
+    name: string;
+    order: number;
+  }
+  const cards = new Map<string, Card>();
+  const note = (code: string | null, name: string) => {
+    const key = code ?? name;
+    if (cards.has(key)) return;
+    const rowCode = code ? scorecardRowCodeFor(code) : null;
+    const order = rowCode ? ROWS.findIndex((r) => r.code === rowCode) : 999;
+    cards.set(key, { key, code, name, order });
+  };
+  for (const p of [...c.revenue, ...c.collection]) for (const r of p.rows) note(r.code, r.name);
+  for (const r of c.receivables?.rows ?? []) note(r.code, r.name);
+  const verticals = [...cards.values()].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+
+  const cell = (periods: DigestPeriod[], i: number, v: Card) =>
+    periods[i]?.rows.find((r) => (r.code ?? r.name) === v.key)?.period ?? ZERO_CELLS;
+  const titles = (c.revenue.length ? c.revenue : c.collection).map((p) => ({ title: p.title, range: p.range }));
+
+  const facts = [
+    c.glThrough ? `GL updated till ${dateLabel(c.glThrough)}` : "No GL posted this year",
+    ...(show.collection && c.receiptsThrough ? [`Receipts through ${dateLabel(c.receiptsThrough)}`] : []),
+  ];
+  const out = [
+    `<h2 style="margin:30px 0 2px;font-size:19px;color:${NAVY}">${esc(c.entity.name)}</h2>`,
+    `<p style="margin:0;font-size:12px;color:${MUTED}">${esc(facts.join("  ·  "))}</p>`,
+  ];
+  if (!c.glThisWeek) {
+    out.push(
+      `<p style="margin:8px 0 0;padding:8px 10px;background:#fff6e0;border:1px solid #f0d9a0;border-radius:4px;font-size:12px;color:#7a5a00">The general ledger has not been updated this week, so the revenue figures may be incomplete.</p>`,
+    );
+  }
+
+  for (const v of verticals) {
+    const head = headOf(v.code);
+    const name = head && v.name.startsWith(`${head} - `) ? v.name.slice(head.length + 3) : v.name;
+    const age = c.receivables?.rows.find((r) => (r.code ?? r.name) === v.key);
+
+    const periodBlocks = titles
+      .map(
+        (t, i) => `
+      <p style="margin:14px 0 4px;font-size:13px;font-weight:700;color:${INK}">${esc(t.title)} <span style="font-weight:400;color:${MUTED}">&middot; ${esc(t.range)}</span></p>
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+        <tr>${th("", "left")}${th("Budget")}${th("Actual")}${th("Variance")}${th("Achieved")}</tr>
+        ${show.collection ? cellsRow("Collection", cell(c.collection, i, v)) : ""}
+        ${show.revenue ? cellsRow("Revenue", cell(c.revenue, i, v)) : ""}
+      </table>`,
+      )
+      .join("");
+
+    const receivables =
+      show.receivables && c.receivables
+        ? `
+      <p style="margin:18px 0 4px;font-size:13px;font-weight:700;color:${INK}">Receivables as on ${esc(dateLabel(c.glThrough ?? c.receivablesAsOf))}${c.receivablesAsOf && c.receivablesAsOf !== c.glThrough ? ` <span style="font-weight:400;color:${MUTED}">&middot; latest receivables snapshot ${esc(dateLabel(c.receivablesAsOf))}</span>` : ""}</p>
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+        <tr>${c.receivables.bands.map((b) => th(b)).join("")}${th("Total")}</tr>
+        <tr>${(age?.buckets ?? c.receivables.bands.map(() => 0)).map((n) => td(n ? money(n) : "-")).join("")}${td(money(age?.total ?? 0), { bold: true })}</tr>
+      </table>`
+        : "";
+
+    out.push(`
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:22px;border:1px solid ${RULE};border-radius:6px"><tr><td style="padding:0 16px 16px">
+      <div style="margin:0 -16px;padding:12px 16px;background:#eef2f7;border-radius:6px 6px 0 0;border-bottom:2px solid ${NAVY}">
+        <div style="font-size:16px;font-weight:700;color:${NAVY}">${esc(name)}</div>
+        <div style="margin-top:2px;font-size:12.5px;color:${MUTED}">Vertical head: <strong style="color:${INK}">${esc(head ?? "-")}</strong></div>
+      </div>
+      ${periodBlocks}${receivables}
+    </td></tr></table>`);
+  }
+  return out.join("");
+}
+
 export function renderDigestEmail(opts: {
   recipientName: string | null;
   contents: DigestContent[];
   show: DigestSections;
   asOf: string;
   appUrl: string | null;
+  /** "byVertical" (the default): a card to each vertical; "summary": a table per measure and period */
+  layout?: "summary" | "byVertical";
 }): { subject: string; html: string; text: string } {
   const { recipientName, contents, show, asOf, appUrl } = opts;
+  const block = opts.layout === "summary" ? entityBlock : verticalCards;
   const heading =
     contents.length === 1 ? contents[0].entity.name : "Akshayam Group";
   const subject = `${heading} — update for ${dateLabel(asOf)}`;
@@ -144,7 +246,7 @@ export function renderDigestEmail(opts: {
     <tr><td style="padding:6px 24px 26px;font-family:Arial,Helvetica,sans-serif;color:${INK}">
       <p style="margin:18px 0 0;font-size:14px">${recipientName ? `Hello ${esc(recipientName)},` : "Hello,"}</p>
       <p style="margin:6px 0 0;font-size:14px">Here is where revenue, collection and receivables stand.</p>
-      ${contents.map((c) => entityBlock(c, show)).join("")}
+      ${contents.map((c) => block(c, show)).join("")}
       <p style="margin:30px 0 0;padding-top:12px;border-top:1px solid ${RULE};font-size:11.5px;line-height:1.5;color:${MUTED}">
         These are the figures of the Revenue, Collections and Receivables pages, from the general ledger, the receipts and the receivables snapshot as last loaded.
         The week runs Sunday to today; a month's and the year's budget is struck on whole months, as on those pages. Variance is actual less budget.

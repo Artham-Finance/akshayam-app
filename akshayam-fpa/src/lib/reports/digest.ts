@@ -28,6 +28,8 @@ export interface DigestPeriod {
 }
 
 export interface DigestAgeRow {
+  /** the vertical's code, or null for the total and for what has no vertical */
+  code: string | null;
   name: string;
   /** by ageing band, in AR_BUCKETS order */
   buckets: number[];
@@ -148,7 +150,7 @@ async function buildAgeing(
   if (!snap?.as_of) return null;
 
   const rows = await query<Record<string, string | number | null>>(
-    `select v.name, ${arBucketSelect("a.")},
+    `select v.code, v.name, ${arBucketSelect("a.")},
             coalesce(sum(a.balance_base), 0)::numeric as total
        from ar_open_items a
        left join verticals v on v.id = a.vertical_id
@@ -156,18 +158,20 @@ async function buildAgeing(
               select entity_id, max(as_of) from ar_open_items
                where entity_id = any($1::int[]) group by entity_id)
         ${verticalScope("$2", "a.vertical_id")}
-      group by v.id, v.name
+      group by v.id, v.code, v.name
       order by total desc`,
     [entity.memberIds, entity.verticalIds],
   );
 
   const toRow = (r: Record<string, string | number | null>): DigestAgeRow => ({
+    code: (r.code as string | null) ?? null,
     name: (r.name as string | null) ?? "Not attributed to a vertical",
     buckets: AR_BUCKETS.map((b) => Number(r[b.key] ?? 0)),
     total: Number(r.total ?? 0),
   });
   const list = rows.map(toRow).filter((r) => r.total !== 0 || r.buckets.some((n) => n !== 0));
   const total: DigestAgeRow = {
+    code: null,
     name: "Total",
     buckets: AR_BUCKETS.map((_, i) => list.reduce((s, r) => s + r.buckets[i], 0)),
     total: list.reduce((s, r) => s + r.total, 0),
