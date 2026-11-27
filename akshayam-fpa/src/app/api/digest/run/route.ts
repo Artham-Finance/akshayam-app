@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { apiGuard } from "@/lib/auth/dal";
+import { queryOne } from "@/lib/db";
 import { claimScheduledRun, describeRecipients, digestEnabled, runDigest } from "@/lib/digest-run";
 import { digestSecret } from "@/lib/digest-secret";
 import { todayIst } from "@/lib/weekly";
@@ -17,7 +18,8 @@ export const dynamic = "force-dynamic";
  *           ?to=me   only to the admin who asks - a test of the real thing
  *           ?to=all  to everyone signed up, now
  *   GET   from an admin: the update as the admin would receive it, drawn in the browser. Sends
- *         nothing. With ?recipients=1, the list of who is signed up and what each would see.
+ *         nothing. With ?user=<email>, that person's update; with ?recipients=1, the list of who is
+ *         signed up and what each would see.
  */
 
 function isScheduler(request: Request): boolean {
@@ -71,7 +73,15 @@ export async function GET(request: Request) {
     if (new URL(request.url).searchParams.get("recipients") === "1") {
       return NextResponse.json({ recipients: await describeRecipients() });
     }
-    const outcome = await runDigest({ trigger: "manual", onlyUserIds: [user.id], dryRun: true });
+    // ?user=someone@example.com: that person's update rather than the admin's own.
+    const wanted = new URL(request.url).searchParams.get("user");
+    let forId = user.id;
+    if (wanted) {
+      const row = await queryOne<{ id: number }>("select id from users where lower(email::text) = lower($1)", [wanted]);
+      if (!row) return NextResponse.json({ error: `No user ${wanted}.` }, { status: 404 });
+      forId = row.id;
+    }
+    const outcome = await runDigest({ trigger: "manual", onlyUserIds: [forId], dryRun: true });
     const preview = outcome.previews[0];
     if (!preview) {
       return new NextResponse(

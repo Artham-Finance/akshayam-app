@@ -54,7 +54,8 @@ function dedupe(list: Entity[]): Entity[] {
     .sort((a, b) => Number(b.isGroup) - Number(a.isGroup) || a.id - b.id);
 }
 
-export async function recipients(): Promise<Recipient[]> {
+/** The people signed up for the update. `anyone` ignores the sign-up, for an admin's own test. */
+export async function recipients(anyone = false): Promise<Recipient[]> {
   const rows = await query<{
     id: number;
     email: string;
@@ -69,9 +70,10 @@ export async function recipients(): Promise<Recipient[]> {
        from users u
        left join user_entities ue on ue.user_id = u.id
        left join user_report_access ura on ura.user_id = u.id
-      where u.is_active and u.receives_update and coalesce(u.email::text, '') <> ''
+      where u.is_active and (u.receives_update or $1::boolean) and coalesce(u.email::text, '') <> ''
       group by u.id
       order by u.id`,
+    [anyone],
   );
   return rows.map((r) => ({
     id: r.id,
@@ -181,7 +183,8 @@ export async function runDigest(opts: {
       return p;
     };
 
-    const everyone = (await recipients()).filter(
+    // Named people (an admin's test of their own, or of one person's) are sent whether or not they are signed up.
+    const everyone = (await recipients(!!opts.onlyUserIds)).filter(
       (r) => !opts.onlyUserIds || opts.onlyUserIds.includes(r.id),
     );
     outcome.recipients = everyone.length;
